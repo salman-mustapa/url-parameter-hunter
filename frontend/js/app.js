@@ -247,12 +247,31 @@ async function openHistoryScan(scanId) {
   subscribeStream(scanId);
 }
 
+function routeTo(path) {
+  if (path === "/history") {
+    el("historySection").classList.remove("hidden");
+  } else {
+    el("historySection").classList.add("hidden");
+  }
+  document.querySelectorAll(".nav-item, .nav-link").forEach((n) => {
+    n.classList.toggle("active", (n.dataset.route || n.getAttribute("href") || "") === path);
+  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function init() {
   el("startBtn").addEventListener("click", startScan);
+  if (el("startBtn2")) el("startBtn2").addEventListener("click", startScan);
   el("pauseBtn").addEventListener("click", togglePause);
   el("stopBtn").addEventListener("click", stopScan);
   el("refreshTreeBtn").addEventListener("click", loadTree);
   el("refreshHistoryBtn").addEventListener("click", loadHistory);
+  document.querySelectorAll(".nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => routeTo(btn.dataset.route));
+  });
+  document.querySelectorAll(".nav-link").forEach((a) => {
+    a.addEventListener("click", (e) => { e.preventDefault(); routeTo(a.dataset.route); });
+  });
   loadHistory();
 }
 
