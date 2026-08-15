@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingHTTPResponse
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 import json, asyncio, time, uuid, logging, re
 from datetime import datetime, timezone
@@ -583,7 +583,7 @@ async def scan_events(scan_id: str):
                 yield f"data: {item}\n\n"
         except asyncio.CancelledError:
             pass
-    return StreamingHTTPResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 # ================ Assets ================
 @app.get("/api/assets")
@@ -664,3 +664,32 @@ async def list_audit(scan_id: Optional[str] = Query(None)):
             stmt = stmt.where(AuditLogModel.scan_id == scan_id)
         logs = (await db.execute(stmt)).scalars().all()
         return [{"id": l.id, "scan_id": l.scan_id, "actor": l.actor, "action": l.action, "target": l.target, "details": l.details, "created_at": l.created_at.isoformat()} for l in logs]
+
+# Serve frontend static files at root
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+frontend_path = BASE_DIR / "frontend"
+if frontend_path.exists():
+    # Mount CSS/JS directly
+    for static_dir in ["css", "js"]:
+        p = frontend_path / static_dir
+        if p.exists():
+            app.mount(f"/{static_dir}", StaticFiles(directory=p), name=f"frontend-{static_dir}")
+    # Mount images if any
+    img_dir = frontend_path / "images"
+    if img_dir.exists():
+        app.mount("/images", StaticFiles(directory=img_dir), name="frontend-images")
+    
+    # SPA fallback: serve index.html for any non-API path
+    @app.get("/{full_path:path}")
+    async def serve_frontend(request, full_path: str):
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi") or full_path.startswith("health") or full_path.startswith("ready"):
+            return None
+        # Try static file first
+        file_path = frontend_path / full_path
+        if full_path and file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        # Fallback to SPA
+        return FileResponse(frontend_path / "index.html")
