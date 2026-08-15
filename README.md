@@ -9,7 +9,7 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Open http://localhost:8000
+Open http://localhost:9001
 
 ## Docker
 

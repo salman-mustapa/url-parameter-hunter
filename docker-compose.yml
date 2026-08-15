@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: bug-hunter-api
     ports:
-      - "8000:8000"
+      - "9001:9001"
     environment:
       - DATABASE_URL=postgresql+psycopg2://bug hunter:bug hunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
