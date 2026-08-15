@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bug Hunter — Attack Surface Intelligence</title>
+<meta name="description" content="Web-based Bug Hunting / Attack Surface Discovery platform" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-icon" aria-hidden="true">🐢</span>
+    <span class="brand-name">Bug Hunter</span>
+    <span class="brand-badge">MVP</span>
+  </div>
+  <div class="scan-bar">
+    <div class="input-wrap">
+      <input id="target" type="text" placeholder="example.com" autocomplete="off" />
+      <button id="startBtn" class="btn btn-primary">START SCAN</button>
+      <button id="pauseBtn" class="btn btn-secondary" disabled>PAUSE</button>
+      <button id="stopBtn" class="btn btn-danger" disabled>STOP</button>
+      <button id="refreshTreeBtn" class="btn btn-ghost">Refresh Tree</button>
+    </div>
+    <div class="status-pills">
+      <span id="scanStatus" class="pill pill-neutral">IDLE</span>
+      <span id="scanProfile" class="pill pill-neutral">standard</span>
+    </div>
+  </div>
+</header>
+
+<main class="app-main">
+  <section class="live-section">
+    <div class="section-header">
+      <h2>Live Scan Stream</h2>
+      <span id="eventCounter" class="counter">0</span>
+    </div>
+    <div id="eventStream" class="event-stream">
+      <div class="event-item event-empty">Belum ada event. Mulai scan untuk melihat stream.</div>
+    </div>
+  </section>
+
+  <section class="panels">
+    <div class="panel panel-tree">
+      <div class="section-header">
+        <h3>Asset Tree</h3>
+        <button id="refreshTreeBtn" class="btn btn-ghost">Refresh</button>
+      </div>
+      <div id="assetTree" class="tree">
+        <div class="empty">Belum ada asset.</div>
+      </div>
+    </div>
+    <div class="panel panel-details">
+      <div class="section-header">
+        <h3>Findings</h3>
+        <span id="findingsSummary" class="counter">—</span>
+      </div>
+      <div id="findingsPanel" class="findings">
+        <div class="empty">Belum ada finding.</div>
+      </div>
+
+      <div class="section-header" style="margin-top:16px">
+        <h3>Scan History</h3>
+        <button id="refreshHistoryBtn" class="btn btn-ghost">Refresh</button>
+      </div>
+      <div id="historyPanel" class="history">
+        <div class="empty">Belum ada history.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav class="app-nav">
+  <button class="nav-item active" data-route="/">Scan</button>
+  <button class="nav-item" data-route="/history">History</button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
