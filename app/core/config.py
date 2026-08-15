@@ -5,7 +5,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", str(BASE_DIR / ".env")), extra="ignore")
-    database_url: str = "postgresql+psycopg2://bug hunter:bug hunter@postgres:5432/bughunter"
+    database_url: str = "postgresql+asyncpg://bug hunter:bug hunter@postgres:5432/bughunter"
     redis_url: str = "redis://redis:6379/0"
     secret_key: str = "change-me-in-production"
     cors_origins: str = "*"
