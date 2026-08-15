@@ -9,7 +9,7 @@ services:
     ports:
       - "9001:9001"
     environment:
-      - DATABASE_URL=postgresql+psycopg2://bug hunter:bug hunter@postgres:5432/bughunter
+      - DATABASE_URL=postgresql+asyncpg://bug hunter:bug hunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=change-me-in-production
       - CORS_ORIGINS=*
@@ -30,7 +30,7 @@ services:
     container_name: bug-hunter-worker
     command: ["python", "-m", "app.workers.scheduler"]
     environment:
-      - DATABASE_URL=postgresql+psycopg2://bug hunter:bug hunter@postgres:5432/bughunter
+      - DATABASE_URL=postgresql+asyncpg://bug hunter:bug hunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       postgres:
