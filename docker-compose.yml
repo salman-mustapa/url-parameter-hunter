@@ -9,7 +9,7 @@ services:
     ports:
       - "9001:9001"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://bug hunter:bug hunter@postgres:5432/bughunter
+      - DATABASE_URL=postgresql+asyncpg://bughunter:bughunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=change-me-in-production
       - CORS_ORIGINS=*
@@ -30,7 +30,7 @@ services:
     container_name: bug-hunter-worker
     command: ["python", "-m", "app.workers.scheduler"]
     environment:
-      - DATABASE_URL=postgresql+asyncpg://bug hunter:bug hunter@postgres:5432/bughunter
+      - DATABASE_URL=postgresql+asyncpg://bughunter:bughunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       postgres:
@@ -43,13 +43,13 @@ services:
     image: postgres:16-alpine
     container_name: bug-hunter-postgres
     environment:
-      - POSTGRES_USER=bug hunter
-      - POSTGRES_PASSWORD=bug hunter
+      - POSTGRES_USER=bughunter
+      - POSTGRES_PASSWORD=bughunter
       - POSTGRES_DB=bughunter
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bug hunter"]
+      test: ["CMD-SHELL", "pg_isready -U bughunter"]
       interval: 2s
       timeout: 5s
       retries: 5
