@@ -520,7 +520,6 @@ def root():
     # Fallback if frontend not built yet
     return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
 
-    return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
 
 @app.get("/health")
 def health():

@@ -1,0 +1,201 @@
+:root {
+  --bg: #FFF8F0;
+  --surface: #ffffff;
+  --muted: #6B5E4F;
+  --text: #3E3224;
+  --accent: #2DB87F;
+  --accent-2: #FFB547;
+  --danger: #E57373;
+  --warn: #FFD54F;
+  --info: #81D4FA;
+  --critical: #FF7043;
+  --high: #EF6C00;
+  --medium: #FFA000;
+  --low: #7CB342;
+  --border: #E6DCC8;
+  --shadow: rgba(60, 45, 20, 0.15);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "Space Grotesk", system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif;
+  min-height: 100vh;
+  background-image: radial-gradient(#d6cbb5 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: #fff;
+  border-bottom: 3px solid var(--border);
+  padding: 18px 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.brand-icon {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  background: #c8f7dc; border-radius: 14px; font-size: 24px;
+  border: 3px solid var(--text);
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+.brand-name {
+  font-family: "Kalam", "Comic Sans", cursive;
+  font-size: 30px; font-weight: 700;
+}
+.brand-badge {
+  background: var(--accent-2);
+  padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  border: 3px solid var(--text);
+}
+
+.scan-bar { display: flex; flex-direction: column; gap: 10px; }
+.input-wrap { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.input-wrap input[type="text"] {
+  flex: 1 1 280px;
+  padding: 12px 14px; border-radius: 14px; border: 3px solid var(--text);
+  background: #fff; font-family: inherit;
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+.btn {
+  padding: 12px 16px; border-radius: 14px; border: 3px solid var(--text);
+  background: #fff; color: var(--text); font-weight: 700; cursor: pointer;
+  box-shadow: 4px 4px 0 var(--shadow);
+  font-family: inherit;
+  font-size: 14px;
+}
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-secondary { background: var(--info); color: #123; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-ghost { background: transparent; box-shadow: none; border-color: var(--muted); color: var(--muted); }
+
+.status-pills { display: flex; gap: 10px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 12px; border-radius: 999px; border: 3px solid var(--text);
+  font-size: 13px; font-weight: 700; text-transform: uppercase;
+  background: #fff;
+}
+.pill-neutral { background: #f3ece0; color: var(--muted); }
+.pill-running { background: #c8f7dc; color: #124; }
+.pill-stopped { background: #fce4ec; color: #421; }
+.pill-success { background: #c8f7dc; color: #123; }
+
+.app-main { padding: 18px; display: grid; gap: 18px; }
+
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.section-header h2, .section-header h3 {
+  margin: 0;
+  font-family: "Kalam", "Comic Sans", cursive;
+  font-size: 22px;
+}
+.counter {
+  background: var(--accent-2); padding: 5px 10px; border-radius: 999px;
+  border: 3px solid var(--text); font-size: 13px; font-weight: 700;
+  box-shadow: 2px 2px 0 var(--shadow);
+}
+
+.event-stream {
+  background: #1d1410; color: #ffe9c4; border-radius: 14px;
+  border: 3px solid var(--text); padding: 12px; min-height: 220px;
+  max-height: 45vh; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+.event-item { padding: 7px 0; border-bottom: 1px dashed #5a4532; }
+.event-item:last-child { border-bottom: none; }
+.event-empty { color: #a1887f; font-style: italic; }
+.ts { color: #81d4fa; margin-right: 8px; }
+.icon { margin-right: 6px; }
+.cat { color: #ffcc80; margin-right: 6px; font-weight: 700; }
+.sev-info { color: #81d4fa; }
+.sev-warn { color: #ffd54f; }
+.sev-error { color: #ff7043; }
+
+.panels {
+  display: grid; grid-template-columns: 1fr; gap: 18px;
+}
+@media (min-width: 1024px) {
+  .panels { grid-template-columns: 340px 1fr; }
+}
+
+.tree, .findings, .history {
+  background: #fff; border: 3px solid var(--text); border-radius: 14px;
+  padding: 12px; min-height: 120px;
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+.empty { color: var(--muted); font-style: italic; padding: 10px 0; }
+.tree-node {
+  padding: 10px 12px; border-radius: 12px; border: 2px dashed var(--border); margin: 8px 0;
+  background: #fffdf8;
+}
+.tree-node .title { font-weight: 700; }
+.tree-node .meta { color: var(--muted); font-size: 12px; }
+.tree-children {
+  padding-left: 18px; border-left: 3px dashed var(--border); margin-top: 8px;
+}
+
+.finding {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px; border-radius: 12px;
+  border: 2px dashed var(--border); margin: 8px 0; background: #fffdf8;
+}
+.severity-badge {
+  text-transform: uppercase; font-weight: 700; font-size: 12px; padding: 3px 8px; border-radius: 999px;
+  border: 3px solid var(--text); font-family: "Kalam", "Comic Sans", cursive;
+}
+.severity-CRITICAL { background: #ff7043; color: #fff; }
+.severity-HIGH { background: #ef6c00; color: #fff; }
+.severity-MEDIUM { background: #ffa000; color: #421; }
+.severity-LOW { background: #7cb342; color: #fff; }
+.severity-INFO { background: #b0bec5; color: #123; }
+
+.history-item {
+  padding: 12px; border-radius: 12px; border: 2px dashed var(--border); margin: 8px 0;
+  background: #fffdf8;
+}
+.history-item .title { font-weight: 700; }
+.history-item .meta { color: var(--muted); font-size: 12px; }
+
+.app-nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  display: flex; gap: 10px; padding: 12px 16px;
+  background: #fff; border-top: 3px solid var(--border);
+  box-shadow: 0 -4px 0 var(--shadow);
+}
+.nav-item {
+  flex: 1; padding: 12px; border-radius: 14px; border: 3px solid var(--text);
+  background: #fff; font-weight: 700; font-family: inherit;
+  box-shadow: 3px 3px 0 var(--shadow);
+}
+.nav-item.active { background: var(--accent); color: #fff; }
+
+.hero {
+  background: #fff;
+  border: 3px solid var(--text);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 5px 5px 0 var(--shadow);
+}
+.hero h1 {
+  font-family: "Kalam", "Comic Sans", cursive;
+  font-size: 32px;
+  margin: 0 0 8px;
+}
+.hero p { margin: 0; color: var(--muted); }
+.highlight {
+  background: linear-gradient(180deg, transparent 55%, rgba(255,181,71,0.45) 55%);
+  padding: 0 4px;
+}
+
+.hidden { display: none !important; }
