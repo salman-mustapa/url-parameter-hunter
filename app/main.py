@@ -515,8 +515,11 @@ def root():
     frontend_path = BASE_DIR / "frontend"
     index = frontend_path / "index.html"
     if frontend_path.exists() and index.exists():
-        print(f"[BOOT] Serving frontend from {index}") or FileResponse(index)
-    # Fallback API info if frontend missing
+        print(f"[BOOT] Serving frontend from {index}")
+        return FileResponse(index)
+    # Fallback if frontend not built yet
+    return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
+
     return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
 
 @app.get("/health")
