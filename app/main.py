@@ -61,7 +61,7 @@ class AssetModel(Base):
     discovered_from: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
-    metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    asset_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
 class PortModel(Base):
     __tablename__ = "ports"
@@ -352,7 +352,7 @@ class ScanManager:
                         raise RuntimeError("Max assets limit reached")
 
             async with AsyncSessionLocal() as db:
-                root_asset = AssetModel(scan_id=scan_id, hostname=root_domain, asset_type="subdomain", depth=0, discovered_from=["user_input"], metadata={"root_domain": root_domain})
+                root_asset = AssetModel(scan_id=scan_id, hostname=root_domain, asset_type="subdomain", depth=0, discovered_from=["user_input"], asset_metadata={"root_domain": root_domain})
                 db.add(root_asset)
                 db.add(ScanEventModel(scan_id=scan_id, event_type="asset.discovered", severity="info", message=f"Found subdomain: {root_domain}", data={"hostname": root_domain, "asset_type": "subdomain", "depth": 0}))
                 await db.commit()
