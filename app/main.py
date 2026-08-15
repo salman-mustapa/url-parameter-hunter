@@ -19,7 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", str(BASE_DIR / ".env")), extra="ignore")
-    database_url: str = "postgresql+asyncpg://bug hunter:bug hunter@localhost:5432/bughunter"
+    database_url: str = "postgresql+asyncpg://bughunter:bughunter@postgres:5432/bughunter"
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: str = "*"
     rate_limit_rps: int = 5
