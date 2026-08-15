@@ -511,7 +511,13 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0"}
+    # Always serve frontend SPA at root
+    frontend_path = BASE_DIR / "frontend"
+    index = frontend_path / "index.html"
+    if frontend_path.exists() and index.exists():
+        print(f"[BOOT] Serving frontend from {index}") or FileResponse(index)
+    # Fallback API info if frontend missing
+    return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
 
 @app.get("/health")
 def health():
@@ -691,5 +697,5 @@ if frontend_path.exists():
         file_path = frontend_path / full_path
         if full_path and file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
-        # Fallback to SPA
+        # Fallback to SPA index.html for SPA routing
         return FileResponse(frontend_path / "index.html")
