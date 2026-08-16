@@ -66,12 +66,27 @@ async function loadAssetDetail(assetId) {
     const panel = el("assetDetail");
     panel.classList.remove("hidden");
     let html = `<div class="section-header"><h3>🔍 ${esc(a.hostname || a.id)}</h3><button class="btn btn-ghost" onclick="document.getElementById('assetDetail').classList.add('hidden')">✕</button></div>`;
-    html += `<div class="meta">${esc(a.type || "")} · depth ${a.depth} · ${esc(a.status || "")} · IP: ${esc(a.ip || "-")}</div>`;
+    html += `<div class="meta">${esc(a.type || "")} · depth ${a.depth} · ${esc(a.status || "")} · IP: ${esc(a.ip || "-")}${a.metadata_ && a.metadata_.cname ? ` · CNAME: ${esc(a.metadata_.cname)}` : ""}</div>`;
     if (a.ports && a.ports.length) {
       html += `<h4>Ports</h4><div class="chips">${a.ports.map(p => `<span class="chip">${p.port}/${p.protocol} ${esc(p.service || "")}</span>`).join("")}</div>`;
     }
     if (a.urls && a.urls.length) {
-      html += `<h4>URLs (${a.urls.length})</h4><ul class="url-list">${a.urls.slice(0, 50).map(u => `<li><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a> <span class="code">${u.status_code || "-"}</span></li>`).join("")}</ul>`;
+      html += `<h4>URLs (${a.urls.length})</h4><ul class="url-list">${a.urls.slice(0, 30).map(u => `<li><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a> <span class="code">${u.status_code || "-"}</span></li>`).join("")}</ul>`;
+    }
+    if (a.parameters && a.parameters.length) {
+      html += `<h4>Parameters (${a.parameters.length})</h4><div class="chips">${a.parameters.map(p => `<span class="chip">${esc(p.name)} <small>${esc(p.location)}</small></span>`).join("")}</div>`;
+    }
+    if (a.technologies && a.technologies.length) {
+      html += `<h4>Technologies</h4><div class="chips">${a.technologies.map(t => `<span class="chip">⚙️ ${esc(t.name)}${t.version ? " " + esc(t.version) : ""}</span>`).join("")}</div>`;
+    }
+    if (a.certificates && a.certificates.length) {
+      html += `<h4>Certificates</h4><ul class="url-list">${a.certificates.map(c => `<li>🔐 ${esc(c.subject_cn)}<br><small>issuer: ${esc(c.issuer_cn)} · exp: ${c.not_after ? new Date(c.not_after).toLocaleDateString("id-ID") : "-"}</small></li>`).join("")}</ul>`;
+    }
+    if (a.findings && a.findings.length) {
+      html += `<h4>Findings (${a.findings.length})</h4>` + a.findings.map(f => `<div class="finding"><span class="severity-badge severity-${esc(f.severity)}">${esc(f.severity)}</span><div style="font-weight:700">${esc(f.title)}</div><div style="color:var(--muted);font-size:12px">${esc(f.status)}</div></div>`).join("");
+    }
+    if (a.observations && a.observations.length) {
+      html += `<h4>Observations (${a.observations.length})</h4><div class="chips">${a.observations.map(o => `<span class="chip">👁 ${esc(o.title)}</span>`).join("")}</div>`;
     }
     panel.innerHTML = html;
   } catch (e) { /* silent */ }
@@ -158,18 +173,32 @@ function connectEvents(scanId) {
 }
 
 async function loadHistory() {
-  const res = await fetch(`${API_BASE}/scans`);
+  const [res, domainsRes] = await Promise.all([
+    fetch(`${API_BASE}/scans`),
+    fetch(`${API_BASE}/domains`),
+  ]);
   const scans = await res.json();
+  const domains = await domainsRes.json();
   const container = el("historyPanel");
   container.innerHTML = "";
   if (!scans.length) { setEmpty("historyPanel", "Belum ada history."); return; }
-  scans.forEach((scan) => {
-    const div = document.createElement("div");
-    div.className = "history-item";
-    div.innerHTML = `<div class="title">${esc(scan.root_domain)}</div>
-      <div class="meta"><span class="pill pill-${fmtStatus(scan.status)}">${esc(scan.status)}</span> · ${esc(scan.profile)} · ${scan.created_at ? new Date(scan.created_at).toLocaleString("id-ID") : "-"} · assets ${(scan.progress && scan.progress.assets) || 0} · findings ${(scan.progress && scan.progress.findings) || 0}</div>`;
-    div.addEventListener("click", () => openHistoryScan(scan.id, scan.root_domain));
-    container.appendChild(div);
+
+  // group scans by root domain (architecture §27)
+  domains.forEach((d) => {
+    const dScans = scans.filter((s) => s.root_domain === d.root_domain);
+    const dom = document.createElement("div");
+    dom.className = "history-domain";
+    let html = `<div class="history-domain-title">🌐 ${esc(d.root_domain)} <span class="pill pill-neutral">${d.scan_count} scan</span> <span class="pill pill-neutral">last ${d.last_scan ? new Date(d.last_scan).toLocaleDateString("id-ID") : "-"}</span></div>`;
+    html += dScans.map((scan) => `
+      <div class="history-item">
+        <div class="title">#${scan.id.replace(/^scan_\d+_/, "").slice(0, 8)} — ${esc(scan.status)}</div>
+        <div class="meta"><span class="pill pill-${fmtStatus(scan.status)}">${esc(scan.status)}</span> · ${esc(scan.profile)} · ${scan.created_at ? new Date(scan.created_at).toLocaleString("id-ID") : "-"} · assets ${(scan.progress && scan.progress.assets) || 0} · urls ${(scan.progress && scan.progress.urls) || 0} · ports ${(scan.progress && scan.progress.ports) || 0} · findings ${(scan.progress && scan.progress.findings) || 0}</div>
+      </div>`).join("");
+    dom.innerHTML = html;
+    dom.querySelectorAll(".history-item").forEach((item, i) => {
+      item.addEventListener("click", () => openHistoryScan(dScans[i].id, d.root_domain));
+    });
+    container.appendChild(dom);
   });
 }
 

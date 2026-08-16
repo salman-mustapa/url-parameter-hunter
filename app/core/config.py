@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     max_crawl_depth: int = 3
     max_runtime_minutes: int = 45
     port_timeout_seconds: float = 2.0
+    port_rps: int = 200
+    max_port_hosts: int = 30
+    max_web_hosts: int = 15
+    max_http_hosts: int = 20
     http_timeout_seconds: float = 10.0
     wordlist_path: str = str(BASE_DIR / "wordlists" / "subdomains.txt")
     security_mode: str = "SAFE"

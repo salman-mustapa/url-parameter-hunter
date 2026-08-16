@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import ssl
 from typing import Any
 from urllib.parse import urlparse
 
@@ -11,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.models import Asset, URL
+from app.models.models import Asset, Certificate, URL
 from app.scanners.base import ScanContext
 from app.services.results import result_service
 
@@ -30,11 +31,43 @@ TECH_PATTERNS = [
     ("spring", r"spring|Spring", {"Header/body"}),
 ]
 
+SSL_CTX = ssl.create_default_context()
+
+
+async def get_cert(host: str, port: int = 443) -> dict | None:
+    try:
+        conn = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, lambda: SSL_CTX.wrap_socket(
+                __import__("socket").create_connection((host, port), timeout=5), server_hostname=host)),
+            timeout=8,
+        )
+        der = conn.getpeercert(binary_form=True)
+        conn.close()
+        if not der:
+            return None
+        import hashlib
+
+        import cryptography.x509 as x509
+        from cryptography.hazmat.primitives import hashes
+        cert = x509.load_der_x509_certificate(der)
+        fp = hashlib.sha256(der).hexdigest()
+        return {
+            "fingerprint_sha256": fp,
+            "subject_cn": cert.subject.rfc4514_string(),
+            "issuer_cn": cert.issuer.rfc4514_string(),
+            "not_before": cert.not_valid_before_utc,
+            "not_after": cert.not_valid_after_utc,
+            "san_dns": [n.value for n in cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value if isinstance(n, x509.DNSName)],
+            "signature_algorithm": cert.signature_algorithm_oid._name,
+        }
+    except Exception:
+        return None
+
 
 async def fetch(url: str, timeout: float = 10.0, headers: dict | None = None) -> httpx.Response | None:
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, verify=False,
-                                     headers=headers or {"User-Agent": "Mozilla/5.0 (BugHunter/0.3)"}) as client:
+                                     headers=headers or {"User-Agent": "Mozilla/5.0 (BugHunter/0.4)"}) as client:
             resp = await client.get(url)
             return resp
     except Exception:
@@ -87,6 +120,37 @@ async def probe_host(ctx: ScanContext, db: AsyncSession, host: str, root_domain:
         await ctx.emit("http.available", f"{url} [{status}]", url=url, status_code=status,
                        host=host, asset_id=asset.id)
 
+        # TLS certificate capture (https only)
+        if scheme == "https":
+            cert_info = await get_cert(host, parsed.port or 443)
+            if cert_info:
+                existing_cert = (await db.execute(
+                    select(Certificate).where(
+                        Certificate.asset_id == asset.id,
+                        Certificate.fingerprint_sha256 == cert_info["fingerprint_sha256"],
+                    )
+                )).scalar_one_or_none()
+                if not existing_cert:
+                    db.add(Certificate(asset_id=asset.id, hostname=host, **cert_info))
+                    await ctx.emit("cert.captured", f"TLS cert captured for {host}",
+                                   hostname=host, subject=cert_info["subject_cn"],
+                                   issuer=cert_info["issuer_cn"], asset_id=asset.id)
+
+        # HTTP security header observations (non-finding)
+        missing_headers = []
+        for hdr in ("strict-transport-security", "x-frame-options", "x-content-type-options", "content-security-policy", "referrer-policy"):
+            if hdr not in {k.lower() for k in resp.headers.keys()}:
+                missing_headers.append(hdr)
+        if missing_headers:
+            await result_service.upsert_observation(
+                db, scan_id=ctx.scan_id, asset_id=asset.id, observation_type="http_headers",
+                title="Missing security headers",
+                evidence={"url": url, "missing": missing_headers}, confidence=0.8,
+            )
+            await ctx.emit("observation.recorded",
+                           f"Observation: missing security headers on {host}",
+                           hostname=host, missing=missing_headers, asset_id=asset.id)
+
         # technology detection from headers
         techs_detected: list[str] = []
         header_blob = " ".join(f"{k}: {v}" for k, v in resp.headers.items()).lower()
@@ -123,5 +187,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     assets = (await db.execute(
         select(Asset).where(Asset.scan_id == ctx.scan_id, Asset.asset_type.in_(["domain", "subdomain"]))
     )).scalars().all()
+    # cap probe hosts: prefer root + shallow depth
+    assets = sorted(assets, key=lambda a: a.depth)[: settings.max_http_hosts]
     hosts = [a.hostname for a in assets if a.hostname]
     await asyncio.gather(*[probe_host(ctx, db, h, root_domain) for h in hosts], return_exceptions=True)

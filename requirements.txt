@@ -8,4 +8,5 @@ asyncpg
 aiosqlite
 dnspython
 tldextract
+cryptography
 python-multipart

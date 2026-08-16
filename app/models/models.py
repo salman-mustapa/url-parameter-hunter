@@ -149,6 +149,22 @@ class Observation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Certificate(Base):
+    __tablename__ = "certificates"
+    __table_args__ = (UniqueConstraint("asset_id", "fingerprint_sha256", name="uq_cert_asset_fp"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    asset_id: Mapped[str] = mapped_column(String, ForeignKey("assets.id", ondelete="cascade"), index=True, nullable=False)
+    hostname: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    fingerprint_sha256: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    subject_cn: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    issuer_cn: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    not_before: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    not_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    san_dns: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    signature_algorithm: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 __all__ = [
-    "Scan", "Asset", "Port", "URL", "Parameter", "Technology", "Finding", "ScanEvent", "AuditLog", "Observation",
+    "Scan", "Asset", "Port", "URL", "Parameter", "Technology", "Finding", "ScanEvent", "AuditLog", "Observation", "Certificate",
 ]

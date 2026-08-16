@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import AsyncSessionLocal, get_db
 from app.core.events import event_bus
-from app.models.models import Asset, AuditLog, Finding, Scan, ScanEvent
+from app.models.models import Asset, AuditLog, Finding, Port, Scan, ScanEvent
 from app.services.assets import asset_detail, asset_tree
 from app.services.results import result_service
 from app.services.scan_manager import scan_manager
@@ -159,13 +159,93 @@ async def list_domains(db: AsyncSession = Depends(get_db)):
     return list(by_domain.values())
 
 
-@router.get("/scan-stats")
-async def scan_stats(db: AsyncSession = Depends(get_db)):
+@router.get("/domains/{domain}/history")
+async def domain_history(domain: str, db: AsyncSession = Depends(get_db)):
+    scans = (await db.execute(
+        select(Scan).where(Scan.root_domain == domain).order_by(desc(Scan.created_at))
+    )).scalars().all()
+    return [
+        {"id": s.id, "status": s.status, "profile": s.profile, "progress": s.progress or {},
+         "created_at": s.created_at.isoformat() if s.created_at else None,
+         "completed_at": s.completed_at.isoformat() if s.completed_at else None}
+        for s in scans
+    ]
+
+
+@router.get("/diff")
+async def diff_scans(current: str = Query(...), previous: str = Query(...), db: AsyncSession = Depends(get_db)):
+    """Differential scan: NEW/CHANGED/REMOVED across two scans on same domain."""
+    async def key_set(scan_id: str):
+        rows = (await db.execute(
+            select(Asset).where(Asset.scan_id == scan_id, Asset.asset_type.in_(["domain", "subdomain"]))
+        )).scalars().all()
+        return {r.hostname: r for r in rows if r.hostname}
+
+    cur = await key_set(current)
+    prev = await key_set(previous)
+    added = sorted(set(cur) - set(prev))
+    removed = sorted(set(prev) - set(cur))
+
+    async def port_set(scan_id: str):
+        ids = select(Asset.id).where(Asset.scan_id == scan_id)
+        rows = (await db.execute(select(Port).where(Port.asset_id.in_(ids)))).scalars().all()
+        return {(p.ip, p.port, p.protocol) for p in rows}
+
+    pc, pp = await port_set(current), await port_set(previous)
+    new_ports = sorted(f"{ip}:{port}/{proto}" for ip, port, proto in (pc - pp))
+
+    async def finding_set(scan_id: str):
+        rows = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+        return {(f.finding_type, f.title) for f in rows}
+
+    fc, fp = await finding_set(current), await finding_set(previous)
+    new_findings = sorted(f"{ft}: {t}" for ft, t in (fc - fp))
+    changed = [h for h in sorted(set(cur) & set(prev)) if (cur[h].ip or "") != (prev[h].ip or "")]
+
+    return {
+        "current": current, "previous": previous,
+        "new_subdomains": added, "removed_subdomains": removed,
+        "changed_ip": changed, "new_ports": new_ports, "new_findings": new_findings,
+    }
+
+
+@router.get("/scans/{scan_id}/events/{asset_id}/timeline")
+async def asset_timeline(scan_id: str, asset_id: str, db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(ScanEvent).where(ScanEvent.scan_id == scan_id, ScanEvent.asset_id == asset_id)
+        .order_by(ScanEvent.created_at.asc())
+    )).scalars().all()
+    return [
+        {"event_type": e.event_type, "severity": e.severity, "message": e.message,
+         "data": e.data or {}, "created_at": e.created_at.isoformat() if e.created_at else None}
+        for e in rows
+    ]
+
+
+@router.get("/metrics")
+async def metrics(db: AsyncSession = Depends(get_db)):
     total = (await db.execute(select(func.count()).select_from(Scan))).scalar() or 0
+    queued = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "queued"))).scalar() or 0
     running = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "running"))).scalar() or 0
-    assets_total = (await db.execute(select(func.count()).select_from(Asset))).scalar() or 0
-    findings_total = (await db.execute(select(func.count()).select_from(Finding))).scalar() or 0
-    return {"total_scans": total, "running": running, "assets": assets_total, "findings": findings_total}
+    completed = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "completed"))).scalar() or 0
+    failed = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "partial_failure"))).scalar() or 0
+    ended = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status.in_(["stopped", "cancelled"])))).scalar() or 0
+    domains = (await db.execute(select(func.count()).select_from(Asset).where(Asset.asset_type == "domain"))).scalar() or 0
+    subdomains = (await db.execute(select(func.count()).select_from(Asset).where(Asset.asset_type == "subdomain"))).scalar() or 0
+    ips = (await db.execute(select(func.count()).select_from(Asset).where(Asset.asset_type == "ip"))).scalar() or 0
+    return {
+        "scans": {"total": total, "queued": queued, "running": running, "completed": completed, "failed": failed, "stopped": ended},
+        "assets": {"domains": domains, "subdomains": subdomains, "ips": ips},
+        "queue_depth": queued,
+    }
+
+
+@router.get("/findings/severity")
+async def findings_by_severity(scan_id: str = Query(...), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(Finding.severity, func.count()).where(Finding.scan_id == scan_id).group_by(Finding.severity)
+    )).all()
+    return {"severities": {sev: count for sev, count in rows}, "total": sum(c for _, c in rows)}
 
 
 @router.get("/audit")

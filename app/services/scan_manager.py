@@ -119,34 +119,37 @@ class ScanManager:
             await event_bus.publish(result_service.make_event(
                 scan_id, "scan.running", f"Pipeline running for {root_domain}", severity="info"))
 
-            # ---- Phase: Discovery (subdomains) ----
+            # ---- Phase A: Discovery (subdomains) ----
             async with AsyncSessionLocal() as db:
                 await self._checkpoint(ctx, db, root_domain, start_time)
                 await subdomain.run(ctx, db, root_domain)
 
-            # ---- Phase: DNS resolution for all assets ----
+            # ---- Phase B: DNS resolution (all assets) ----
             async with AsyncSessionLocal() as db:
                 await self._checkpoint(ctx, db, root_domain, start_time)
                 await dns.run(ctx, db, root_domain)
 
-            # ---- Phase: Port scan (resolved assets) ----
-            if options.get("port_scan", True) and profile != "passive":
+            # ---- Phase C (parallel): Port scan || HTTP probe + cert + tech ----
+            async def run_port():
+                if options.get("port_scan", True) and profile != "passive":
+                    async with AsyncSessionLocal() as db:
+                        await self._checkpoint(ctx, db, root_domain, start_time)
+                        await port.run(ctx, db, root_domain)
+
+            async def run_http():
                 async with AsyncSessionLocal() as db:
                     await self._checkpoint(ctx, db, root_domain, start_time)
-                    await port.run(ctx, db, root_domain)
+                    await http.run(ctx, db, root_domain)
 
-            # ---- Phase: HTTP probe + tech detection ----
-            async with AsyncSessionLocal() as db:
-                await self._checkpoint(ctx, db, root_domain, start_time)
-                await http.run(ctx, db, root_domain)
+            await asyncio.gather(run_port(), run_http())
 
-            # ---- Phase: URL/endpoint discovery + params ----
+            # ---- Phase D: URL/endpoint discovery + params (web) ----
             if options.get("web_discovery", True) and profile != "passive":
                 async with AsyncSessionLocal() as db:
                     await self._checkpoint(ctx, db, root_domain, start_time)
                     await web.run(ctx, db, root_domain)
 
-            # ---- Phase: Security analysis ----
+            # ---- Phase E: Security analysis ----
             if options.get("security_checks", True) and profile != "passive":
                 async with AsyncSessionLocal() as db:
                     await self._checkpoint(ctx, db, root_domain, start_time)
@@ -208,20 +211,23 @@ class ScanManager:
             scan = await db.get(Scan, scan_id)
             if not scan:
                 return
-            assets = (await db.execute(
-                select(func.count()).select_from(Asset).where(Asset.scan_id == scan_id)
-            )).scalar() or 0
-            from app.models.models import Finding
-            findings = (await db.execute(
-                select(func.count()).select_from(Finding).where(Finding.scan_id == scan_id)
-            )).scalar() or 0
+            assets = (await db.execute(select(func.count()).select_from(Asset).where(Asset.scan_id == scan_id))).scalar() or 0
+            from app.models.models import Certificate, Finding, Parameter, Port, Technology, URL
+            asset_ids = select(Asset.id).where(Asset.scan_id == scan_id)
+            urls = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+            ports = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
+            params = (await db.execute(select(func.count()).select_from(Parameter).where(Parameter.url_id.in_(select(URL.id).where(URL.asset_id.in_(asset_ids)))))).scalar() or 0
+            techs = (await db.execute(select(func.count()).select_from(Technology).where(Technology.asset_id.in_(asset_ids)))).scalar() or 0
+            certs = (await db.execute(select(func.count()).select_from(Certificate).where(Certificate.asset_id.in_(asset_ids)))).scalar() or 0
+            findings = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == scan_id))).scalar() or 0
             scan.status = "completed"
             scan.completed_at = datetime.now(timezone.utc)
-            scan.progress = {"assets": assets, "findings": findings}
+            scan.progress = {"assets": assets, "urls": urls, "ports": ports, "parameters": params, "technologies": techs, "certificates": certs, "findings": findings}
             await db.commit()
         await event_bus.publish(result_service.make_event(
             scan_id, "scan.completed", f"Scan completed for {root_domain}",
-            assets=assets, findings=findings, severity="success"))
+            assets=assets, urls=urls, ports=ports, parameters=params, technologies=techs,
+            certificates=certs, findings=findings, severity="success"))
 
 
 class ScanContextPort:

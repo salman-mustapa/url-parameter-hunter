@@ -30,6 +30,8 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     assets = (await db.execute(
         select(Asset).where(Asset.scan_id == ctx.scan_id, Asset.asset_type.in_(["domain", "subdomain"]))
     )).scalars().all()
+    # cap discovery hosts: prefer root + shallow depth; keep runtime sane
+    assets = sorted(assets, key=lambda a: a.depth)[: settings.max_web_hosts]
 
     # map hostname -> asset ids for url creation
     for asset in assets:

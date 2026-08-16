@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.rate_limit import RateLimiter
 from app.models.models import Asset, Port
 from app.scanners.base import ScanContext
 from app.services.results import result_service
@@ -48,20 +49,26 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         )
     )).scalars().all()
 
+    # cap hosts scanned to keep runtime sane; prefer root + shallow depth first
+    assets = sorted(assets, key=lambda a: a.depth)[: settings.max_port_hosts]
+
     ports_to_scan = DEEP_PORTS if ctx.profile == "deep" else sorted(COMMON_PORTS.keys())
     timeout = settings.port_timeout_seconds
+    limiter = RateLimiter(port_rps(ctx))
 
     for asset in assets:
         if not asset.ip:
             continue
         open_ports: list[int] = []
 
-        async def probe(port: int):
-            await ctx.rate_limiter.wait()
-            if await _check_port(asset.ip, port, timeout):
-                open_ports.append(port)
+        def make_probe(port: int):
+            async def probe():
+                await limiter.wait()
+                if await _check_port(asset.ip, port, timeout):
+                    open_ports.append(port)
+            return probe
 
-        await asyncio.gather(*[probe(p) for p in ports_to_scan])
+        await asyncio.gather(*[make_probe(p)() for p in ports_to_scan])
 
         for port in sorted(open_ports):
             service = COMMON_PORTS.get(port, "unknown")
@@ -73,3 +80,8 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             await ctx.emit("port.open", f"{asset.hostname}:{port}/tcp OPEN",
                            hostname=asset.hostname, port=port, state="open", service=service, asset_id=asset.id)
         await db.commit()
+
+
+def port_rps(ctx: ScanContext) -> int:
+    base = getattr(settings, "port_rps", 200)
+    return base // (2 if ctx.profile == "deep" else 1)
