@@ -259,10 +259,13 @@ class ScanManager:
         if not is_valid_domain(root_domain):
             raise HTTPException(status_code=400, detail="Invalid domain format")
         scan_id = f"scan_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        # Step 1: insert scan row in its own transaction so FK references are safe
         async with AsyncSessionLocal() as db:
             scan = ScanModel(id=scan_id, root_domain=root_domain, status="queued", profile=profile, options=options)
             db.add(scan)
-            await db.flush()  # ensure parent scan exists before FK-dependent rows
+            await db.commit()
+        # Step 2: insert dependent event/audit rows
+        async with AsyncSessionLocal() as db:
             ev = ScanEventModel(scan_id=scan_id, event_type="scan.created", severity="info", message=f"Scan queued for {root_domain}", data={"profile": profile, "options": options})
             db.add(ev)
             log = AuditLogModel(scan_id=scan_id, actor="api", action="scan.created", target=root_domain, details={"profile": profile})
@@ -516,7 +519,6 @@ def root():
     frontend_path = BASE_DIR / "frontend"
     index = frontend_path / "index.html"
     if frontend_path.exists() and index.exists():
-        print(f"[BOOT] Serving frontend from {index}")
         return FileResponse(index)
     # Fallback if frontend not built yet
     return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
@@ -538,13 +540,19 @@ async def ready():
 # ================ Scans ================
 @app.post("/api/scans")
 async def create_scan(target: str = Query(...), profile: str = Query("standard"), include_subdomains: bool = Query(True)):
-    target = normalize_target(target)
-    if not is_valid_domain(target):
-        raise HTTPException(status_code=400, detail="Invalid domain. Use format like example.com")
-    options = {"port_scan": True, "web_discovery": True, "parameter_discovery": True, "security_checks": True, "include_subdomains": include_subdomains, "max_assets": settings.max_assets_per_scan, "max_urls": settings.max_urls_per_scan, "max_crawl_depth": settings.max_crawl_depth, "max_runtime": settings.max_runtime_minutes * 60}
-    result = await scan_manager.create_scan(target, profile, options)
-    await scan_manager.start(result["scan_id"])
-    return result
+    try:
+        target = normalize_target(target)
+        if not is_valid_domain(target):
+            raise HTTPException(status_code=400, detail="Invalid domain. Use format like example.com")
+        options = {"port_scan": True, "web_discovery": True, "parameter_discovery": True, "security_checks": True, "include_subdomains": include_subdomains, "max_assets": settings.max_assets_per_scan, "max_urls": settings.max_urls_per_scan, "max_crawl_depth": settings.max_crawl_depth, "max_runtime": settings.max_runtime_minutes * 60}
+        result = await scan_manager.create_scan(target, profile, options)
+        await scan_manager.start(result["scan_id"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to create scan")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {type(e).__name__}: {e}")
 
 @app.get("/api/scans")
 async def list_scans():
