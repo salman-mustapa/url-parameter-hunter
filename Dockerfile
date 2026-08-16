@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY frontend ./frontend
 COPY wordlists ./wordlists
-COPY configs ./configs 2>/dev/null || true
 
 RUN mkdir -p /app/storage /app/logs /app/data && chown -R appuser:appuser /app
 USER appuser
