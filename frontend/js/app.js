@@ -18,7 +18,10 @@ const state = {
   assetsTreeData: [],
   selectedAssetId: null,
   activeDetailTab: "overview",
+  collapsedNodeIds: new Set(),
+  currentAssetData: null,
   counters: {
+
     assets: 0,
     ports: 0,
     urls: 0,
@@ -414,6 +417,27 @@ async function refreshAssetTree() {
   }
 }
 
+function collectParentIds(nodes, set) {
+  if (!nodes || !nodes.length) return;
+  nodes.forEach((n) => {
+    if (n.children && n.children.length > 0) {
+      set.add(n.id);
+      collectParentIds(n.children, set);
+    }
+  });
+}
+
+function collapseAllNodes() {
+  if (!state.assetsTreeData || !state.assetsTreeData.length) return;
+  collectParentIds(state.assetsTreeData, state.collapsedNodeIds);
+  renderAssetTree(state.assetsTreeData);
+}
+
+function expandAllNodes() {
+  state.collapsedNodeIds.clear();
+  renderAssetTree(state.assetsTreeData);
+}
+
 function renderAssetTree(treeNodes) {
   const container = el("assetTreeContainer");
   const searchQuery = (el("treeSearchInput").value || "").trim().toLowerCase();
@@ -449,23 +473,34 @@ function createTreeNodeElement(node, depth = 0) {
 
   const isIp = node.type === "ip";
   const icon = isIp ? "🌐" : (node.depth === 0 ? "🎯" : "🌿");
-  const label = node.hostname || node.fqdn || node.ip || node.id;
+  const label = isIp ? (node.ip || node.hostname) : (node.hostname || node.fqdn || node.ip || node.id);
   const isSelected = state.selectedAssetId === node.id;
+  const hasChildren = node.children && node.children.length > 0;
+  const isCollapsed = state.collapsedNodeIds.has(node.id);
 
   const content = document.createElement("div");
   content.className = `tree-node-content ${isSelected ? "selected" : ""}`;
-  content.style.paddingLeft = `${Math.min(depth * 14 + 8, 80)}px`;
+  content.style.paddingLeft = `${Math.min(depth * 14 + 6, 80)}px`;
 
   let badgesHtml = "";
-  if (node.status === "resolved" || node.status === "active") {
-    badgesHtml += `<span class="node-badge badge-live">🟢 Active</span>`;
+  if (isIp) {
+    badgesHtml += `<span class="node-badge" style="background:#E0F2FE; color:#0369A1; font-weight:800;">Host IP</span>`;
+  } else {
+    if (node.status === "resolved" || node.status === "active") {
+      badgesHtml += `<span class="node-badge badge-live">🟢 Active</span>`;
+    }
+    if (node.ip) {
+      badgesHtml += `<span class="node-badge">IP: ${esc(node.ip)}</span>`;
+    }
   }
-  if (node.ip) {
-    badgesHtml += `<span class="node-badge">IP: ${esc(node.ip)}</span>`;
-  }
+
+  const toggleHtml = hasChildren
+    ? `<button class="tree-toggle-btn" title="${isCollapsed ? 'Buka cabang' : 'Tutup cabang'}">${isCollapsed ? '▶' : '▼'}</button>`
+    : `<span class="tree-toggle-spacer"></span>`;
 
   content.innerHTML = `
     <div class="node-title-group">
+      ${toggleHtml}
       <span class="node-icon">${icon}</span>
       <span>${esc(label)}</span>
     </div>
@@ -474,6 +509,23 @@ function createTreeNodeElement(node, depth = 0) {
     </div>
   `;
 
+  // Toggle button event
+  if (hasChildren) {
+    const toggleBtn = content.querySelector(".tree-toggle-btn");
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (state.collapsedNodeIds.has(node.id)) {
+          state.collapsedNodeIds.delete(node.id);
+        } else {
+          state.collapsedNodeIds.add(node.id);
+        }
+        renderAssetTree(state.assetsTreeData);
+      });
+    }
+  }
+
+  // Node selection event
   content.addEventListener("click", (e) => {
     e.stopPropagation();
     state.selectedAssetId = node.id;
@@ -484,9 +536,9 @@ function createTreeNodeElement(node, depth = 0) {
 
   wrap.appendChild(content);
 
-  if (node.children && node.children.length) {
+  if (hasChildren) {
     const childrenContainer = document.createElement("div");
-    childrenContainer.className = "tree-children";
+    childrenContainer.className = "tree-children" + (isCollapsed ? " collapsed" : "");
     node.children.forEach((c) => {
       childrenContainer.appendChild(createTreeNodeElement(c, depth + 1));
     });
@@ -505,12 +557,14 @@ async function loadAssetDetail(assetId) {
     const a = await res.json();
     if (!a || !a.id) return;
 
+    state.currentAssetData = a;
+
     const card = el("assetDetailCard");
     card.classList.remove("hidden");
 
     el("detailHostname").textContent = a.hostname || a.ip || a.id;
-    el("detailTypeIcon").textContent = a.type === "ip" ? "🌐" : "🌿";
-    el("detailSubMeta").textContent = `Depth: ${a.depth} · Status: ${a.status} · IP: ${a.ip || "N/A"}`;
+    el("detailTypeIcon").textContent = a.type === "ip" ? "🌐" : (a.depth === 0 ? "🎯" : "🌿");
+    el("detailSubMeta").textContent = `Depth: ${a.depth} · Status: ${a.status || "active"} · IP: ${a.ip || "N/A"}`;
 
     el("tabCountPorts").textContent = (a.ports || []).length;
     el("tabCountUrls").textContent = (a.urls || []).length;
@@ -518,17 +572,22 @@ async function loadAssetDetail(assetId) {
     el("tabCountTechs").textContent = (a.technologies || []).length;
     el("tabCountFindings").textContent = (a.findings || []).length;
 
-    renderDetailTabContent(a, state.activeDetailTab);
-
-    // Tab buttons listener
+    // Tab buttons listener and active state synchronization
     document.querySelectorAll(".detail-tab").forEach((btn) => {
+      if (btn.dataset.detailTab === state.activeDetailTab) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+      }
       btn.onclick = () => {
         document.querySelectorAll(".detail-tab").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         state.activeDetailTab = btn.dataset.detailTab;
-        renderDetailTabContent(a, state.activeDetailTab);
+        renderDetailTabContent(state.currentAssetData, state.activeDetailTab);
       };
     });
+
+    renderDetailTabContent(a, state.activeDetailTab);
 
     el("closeDetailBtn").onclick = () => {
       card.classList.add("hidden");
@@ -543,16 +602,23 @@ async function loadAssetDetail(assetId) {
 function renderDetailTabContent(asset, tabName) {
   const container = el("detailTabContent");
   container.innerHTML = "";
+  if (!asset) return;
 
   if (tabName === "overview") {
+    const portsSummary = (asset.ports || []).map((p) => `<span class="chip">🔌 ${p.port}/${p.protocol} (${esc(p.service || "unknown")})</span>`).join(" ");
+    const techsSummary = (asset.technologies || []).map((t) => `<span class="chip">⚙️ ${esc(t.name)} ${t.version ? `v${esc(t.version)}` : ""}</span>`).join(" ");
+
     container.innerHTML = `
       <table class="mini-table">
         <tr><th>ID Aset</th><td><code>${esc(asset.id)}</code></td></tr>
-        <tr><th>Tipe</th><td><strong>${esc(asset.type)}</strong></td></tr>
-        <tr><th>Hostname / FQDN</th><td>${esc(asset.hostname || asset.fqdn || "-")}</td></tr>
+        <tr><th>Tipe Aset</th><td><strong>${esc(asset.type.toUpperCase())}</strong></td></tr>
+        <tr><th>Hostname / FQDN</th><td><strong>${esc(asset.hostname || asset.fqdn || "-")}</strong></td></tr>
         <tr><th>Alamat IP</th><td><code>${esc(asset.ip || "-")}</code></td></tr>
-        <tr><th>Kedalaman Hierarki</th><td>Depth ${asset.depth}</td></tr>
-        <tr><th>Status</th><td><span class="pill pill-neutral">${esc(asset.status)}</span></td></tr>
+        <tr><th>Kedalaman Hierarki</th><td>Depth ${asset.depth} (${asset.depth === 0 ? "Root Target" : "Subdomain Level " + asset.depth})</td></tr>
+        <tr><th>Status Keaktifan</th><td><span class="pill pill-running">🟢 Active & Resolvable</span></td></tr>
+        <tr><th>Sumber Ditemukan</th><td><small>${esc((asset.discovered_from || ["Passive Discovery"]).join(", "))}</small></td></tr>
+        <tr><th>Port Terbuka (${(asset.ports || []).length})</th><td>${portsSummary || "<small>Belum ada port terdeteksi</small>"}</td></tr>
+        <tr><th>Teknologi (${(asset.technologies || []).length})</th><td>${techsSummary || "<small>Belum ada teknologi terfingerprint</small>"}</td></tr>
       </table>
     `;
   } else if (tabName === "ports") {
@@ -560,23 +626,35 @@ function renderDetailTabContent(asset, tabName) {
       container.innerHTML = `<div class="empty-msg">Tidak ada port terbuka yang terdeteksi pada host ini.</div>`;
       return;
     }
-    let html = `<div class="chips-wrap">`;
+    let html = `<div class="url-table-wrap"><table class="mini-table"><thead><tr><th>Port</th><th>Protokol</th><th>Service</th><th>Banner / Service Info</th><th>Aksi</th></tr></thead><tbody>`;
     asset.ports.forEach((p) => {
-      html += `<span class="chip">🔌 <strong>${p.port}/${p.protocol}</strong> (${esc(p.service || "unknown")}) ${p.banner ? `<small>“${esc(p.banner)}”</small>` : ""}</span>`;
+      const isWeb = [80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9000].includes(p.port);
+      const scheme = [443, 8443].includes(p.port) ? "https" : "http";
+      const targetHost = asset.hostname || asset.ip;
+      const testUrl = `${scheme}://${targetHost}:${p.port}/`;
+
+      html += `<tr>
+        <td><span class="node-badge badge-live"><strong>${p.port}</strong></span></td>
+        <td><code>${esc(p.protocol.toUpperCase())}</code></td>
+        <td><strong>${esc(p.service || "unknown")}</strong></td>
+        <td><small>${p.banner ? `“${esc(p.banner)}”` : "<em>(Tidak ada banner)</em>"}</small></td>
+        <td>${isWeb ? `<a href="${esc(testUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-xs">🌐 Buka</a>` : "-"}</td>
+      </tr>`;
     });
-    html += `</div>`;
+    html += `</tbody></table></div>`;
     container.innerHTML = html;
   } else if (tabName === "urls") {
     if (!asset.urls || !asset.urls.length) {
-      container.innerHTML = `<div class="empty-msg">Belum ada URL/endpoint yang dicrawl.</div>`;
+      container.innerHTML = `<div class="empty-msg">Belum ada URL/endpoint yang dicrawl pada host ini.</div>`;
       return;
     }
-    let html = `<div class="url-table-wrap"><table class="mini-table"><thead><tr><th>Status</th><th>URL Endpoint</th><th>Title</th></tr></thead><tbody>`;
+    let html = `<div class="url-table-wrap"><table class="mini-table"><thead><tr><th>Status</th><th>URL Endpoint</th><th>Content-Type</th><th>Title</th></tr></thead><tbody>`;
     asset.urls.forEach((u) => {
       const codeClass = u.status_code < 400 ? "badge-live" : "pill-stopped";
       html += `<tr>
         <td><span class="node-badge ${codeClass}">${u.status_code || "-"}</span></td>
         <td><a href="${esc(u.url)}" target="_blank" rel="noopener"><code>${esc(u.url)}</code></a></td>
+        <td><small>${esc(u.content_type || "-")}</small></td>
         <td><small>${esc(u.title || "-")}</small></td>
       </tr>`;
     });
@@ -584,62 +662,100 @@ function renderDetailTabContent(asset, tabName) {
     container.innerHTML = html;
   } else if (tabName === "params") {
     if (!asset.parameters || !asset.parameters.length) {
-      container.innerHTML = `<div class="empty-msg">Tidak ada parameter yang diekstrak.</div>`;
+      container.innerHTML = `<div class="empty-msg">Tidak ada parameter yang diekstrak pada host ini.</div>`;
       return;
     }
-    let html = `<div class="chips-wrap">`;
+    let html = `<div class="url-table-wrap"><table class="mini-table"><thead><tr><th>Nama Parameter</th><th>Lokasi</th><th>Tipe</th><th>Confidence</th></tr></thead><tbody>`;
     asset.parameters.forEach((p) => {
-      html += `<span class="chip">🧩 <strong>${esc(p.name)}</strong> <small>[${esc(p.location)}]</small></span>`;
+      html += `<tr>
+        <td><code><strong>${esc(p.name)}</strong></code></td>
+        <td><span class="node-badge" style="background:#FEF3C7; color:#92400E;">${esc((p.location || "query").toUpperCase())}</span></td>
+        <td><small>${esc(p.type || "string")}</small></td>
+        <td><small>${Math.round((p.confidence || 0.9) * 100)}%</small></td>
+      </tr>`;
     });
-    html += `</div>`;
+    html += `</tbody></table></div>`;
     container.innerHTML = html;
   } else if (tabName === "tech") {
     if (!asset.technologies || !asset.technologies.length) {
-      container.innerHTML = `<div class="empty-msg">Belum ada teknologi yang terfingerprint.</div>`;
+      container.innerHTML = `<div class="empty-msg">Belum ada teknologi yang terfingerprint pada host ini.</div>`;
       return;
     }
-    let html = `<div class="chips-wrap">`;
+    let html = `<div class="url-table-wrap"><table class="mini-table"><thead><tr><th>Teknologi</th><th>Versi</th><th>Kategori</th><th>Bukti (Evidence)</th></tr></thead><tbody>`;
     asset.technologies.forEach((t) => {
-      html += `<span class="chip">⚙️ <strong>${esc(t.name)}</strong> ${t.version ? `<small>v${esc(t.version)}</small>` : ""}</span>`;
+      html += `<tr>
+        <td>⚙️ <strong>${esc(t.name)}</strong></td>
+        <td>${t.version ? `<code>v${esc(t.version)}</code>` : "<small>N/A</small>"}</td>
+        <td><span class="node-badge" style="background:#E0E7FF; color:#3730A3;">${esc(t.category || "General")}</span></td>
+        <td><small>${esc(t.evidence || "-")}</small></td>
+      </tr>`;
     });
-    html += `</div>`;
+    html += `</tbody></table></div>`;
     container.innerHTML = html;
   } else if (tabName === "certs") {
     if (!asset.certificates || !asset.certificates.length) {
-      container.innerHTML = `<div class="empty-msg">Tidak ada sertifikat TLS yang tercatat.</div>`;
+      container.innerHTML = `<div class="empty-msg">Tidak ada sertifikat TLS yang tercatat pada host ini.</div>`;
       return;
     }
     let html = `<table class="mini-table">`;
     asset.certificates.forEach((c) => {
+      const sans = (c.san_dns || []).map((s) => `<span class="chip"><small>${esc(s)}</small></span>`).join(" ");
       html += `
-        <tr><th>Subject</th><td>${esc(c.subject_cn)}</td></tr>
-        <tr><th>Issuer</th><td>${esc(c.issuer_cn)}</td></tr>
-        <tr><th>Valid Until</th><td>${c.not_after ? new Date(c.not_after).toLocaleString("id-ID") : "-"}</td></tr>
-        <tr><th>SANs</th><td><small>${esc((c.san_dns || []).join(", "))}</small></td></tr>
+        <tr><th>Subject CN</th><td><strong>${esc(c.subject_cn || "-")}</strong></td></tr>
+        <tr><th>Issuer CN</th><td>${esc(c.issuer_cn || "-")}</td></tr>
+        <tr><th>Masa Berlaku</th><td>${c.not_before ? new Date(c.not_before).toLocaleDateString("id-ID") : "-"} s/d <strong>${c.not_after ? new Date(c.not_after).toLocaleDateString("id-ID") : "-"}</strong></td></tr>
+        <tr><th>Subject Alternative Names (SANs)</th><td><div class="chips-wrap">${sans || "<small>-</small>"}</div></td></tr>
+        <tr><th>Fingerprint SHA-256</th><td><small><code>${esc(c.fingerprint_sha256 || "-")}</code></small></td></tr>
       `;
     });
     html += `</table>`;
     container.innerHTML = html;
   } else if (tabName === "findings") {
     if (!asset.findings || !asset.findings.length) {
-      container.innerHTML = `<div class="empty-msg">Aman — tidak ada temuan pada asset ini.</div>`;
+      container.innerHTML = `<div class="empty-msg">🛡️ Aman — tidak ada temuan kerentanan pada aset ini.</div>`;
       return;
     }
     let html = `<div class="findings-list">`;
     asset.findings.forEach((f) => {
+      const sevClass = (f.severity || "INFO").toLowerCase();
       html += `
         <div class="finding-item-card">
           <div class="finding-top-row">
-            <span class="finding-badge sev-${(f.severity || 'INFO').toLowerCase()}">${esc(f.severity)}</span>
-            <strong>${esc(f.title)}</strong>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="finding-badge sev-${sevClass}">${esc(f.severity)}</span>
+              <strong>${esc(f.title)}</strong>
+            </div>
+            <select class="custom-select" style="width:auto; padding:3px 8px; font-size:11px;" onchange="updateFindingStatus('${f.id}', this.value)">
+              <option value="OPEN" ${f.status === "OPEN" ? "selected" : ""}>OPEN</option>
+              <option value="CONFIRMED" ${f.status === "CONFIRMED" ? "selected" : ""}>CONFIRMED</option>
+              <option value="FALSE_POSITIVE" ${f.status === "FALSE_POSITIVE" ? "selected" : ""}>FALSE POSITIVE</option>
+              <option value="FIXED" ${f.status === "FIXED" ? "selected" : ""}>FIXED</option>
+            </select>
           </div>
           <p class="finding-desc">${esc(f.description || "")}</p>
+          ${f.evidence && Object.keys(f.evidence).length ? `<div style="margin-top:6px;"><pre style="background:#191410; color:#FEEBC8; padding:6px; border-radius:6px; font-size:11px; overflow-x:auto;">${esc(JSON.stringify(f.evidence, null, 2))}</pre></div>` : ""}
         </div>
       `;
     });
     html += `</div>`;
     container.innerHTML = html;
   }
+}
+
+async function updateFindingStatus(findingId, newStatus) {
+  try {
+    await fetch(`${API_BASE}/findings/${encodeURIComponent(findingId)}?status=${encodeURIComponent(newStatus)}`, {
+      method: "PATCH",
+    });
+    if (state.selectedAssetId) {
+      loadAssetDetail(state.selectedAssetId);
+    }
+    loadFindings();
+  } catch (e) {
+    alert("Gagal memperbarui status temuan: " + e.message);
+  }
+}
+
 }
 
 // --------------------------------------------------------------------------
@@ -896,7 +1012,10 @@ document.addEventListener("DOMContentLoaded", () => {
   el("quickExportBtn").addEventListener("click", exportScanJSON);
 
   el("refreshTreeBtn").addEventListener("click", refreshAssetTree);
+  if (el("collapseAllBtn")) el("collapseAllBtn").addEventListener("click", collapseAllNodes);
+  if (el("expandAllBtn")) el("expandAllBtn").addEventListener("click", expandAllNodes);
   el("treeSearchInput").addEventListener("input", () => renderAssetTree(state.assetsTreeData));
+
   el("refreshHistoryBtn").addEventListener("click", loadHistory);
   el("runDiffBtn").addEventListener("click", runDiffAnalysis);
 

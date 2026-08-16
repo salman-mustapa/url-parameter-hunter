@@ -798,7 +798,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border-radius: 8px;
   cursor: pointer;
   border: 1.5px solid transparent;
@@ -827,14 +827,50 @@ html, body {
   word-break: break-all;
 }
 
+.tree-toggle-btn {
+  background: #FFF;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 900;
+  cursor: pointer;
+  padding: 0;
+  margin-right: 2px;
+  color: var(--text);
+  transition: all 0.12s ease;
+  user-select: none;
+  flex-shrink: 0;
+  box-shadow: 1px 1px 0 var(--shadow);
+}
+
+.tree-toggle-btn:hover {
+  background: var(--accent-yellow);
+  transform: translate(-1px, -1px);
+}
+
+.tree-toggle-spacer {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
 .node-icon {
   font-size: 14px;
+  flex-shrink: 0;
 }
 
 .node-badges {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .node-badge {
@@ -844,6 +880,7 @@ html, body {
   border-radius: 999px;
   border: 1.5px solid var(--border);
   background: #FFF;
+  white-space: nowrap;
 }
 
 .badge-live {
@@ -861,6 +898,11 @@ html, body {
   border-left: 2px dashed rgba(43, 33, 24, 0.3);
   margin-left: 10px;
 }
+
+.tree-children.collapsed {
+  display: none !important;
+}
+
 
 /* Asset Detail Inspector Card */
 .asset-detail-card {
