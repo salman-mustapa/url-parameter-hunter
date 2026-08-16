@@ -756,9 +756,8 @@ async function updateFindingStatus(findingId, newStatus) {
   }
 }
 
-}
-
 // --------------------------------------------------------------------------
+
 // Findings & Triaging
 // --------------------------------------------------------------------------
 async function loadFindings() {
