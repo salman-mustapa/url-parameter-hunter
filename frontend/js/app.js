@@ -18,7 +18,7 @@ function addEvent(ev) {
   const item = document.createElement("div");
   item.className = "event-item";
   const sev = ev.severity ? `sev-${ev.severity}` : "sev-info";
-  const cat = ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO";
+  const cat = ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO");
   const ts = ev.created_at ? ev.created_at.slice(11, 19) : new Date().toLocaleTimeString();
   item.innerHTML = `<span class="ts">${esc(ts)}</span><span class="icon">${ev.icon || "📋"}</span><span class="cat ${sev}">${esc(cat)}</span><span>${esc(ev.message)}</span>`;
   container.appendChild(item);
@@ -78,201 +78,92 @@ function addHistoryItem(scan) {
   container.appendChild(div);
 }
 
-async function api(path, opts = {}) {
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("text/event-stream")) return res;
-  return res.json();
-}
-
 async function startScan() {
   const target = el("target").value.trim();
-  if (!target) return alert("Masukkan target domain (contoh: example.com)");
+  if (!target) return alert("Masukkan target domain");
   try {
-    const data = await api(`/scans?target=${encodeURIComponent(target)}&profile=standard&include_subdomains=true`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/scans?target=${encodeURIComponent(target)}&profile=standard&include_subdomains=true`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
     activeScan = data.scan_id;
-    setStatus(data.status, data.target);
+    setText("scanStatus", "RUNNING");
+    el("startBtn").disabled = true;
     el("pauseBtn").disabled = false;
     el("stopBtn").disabled = false;
-    el("pauseBtn").textContent = "PAUSE";
-    subscribeStream(data.scan_id);
-    await loadHistory();
+    connectEvents(activeScan);
   } catch (e) {
-    alert("Gagal memulai scan: " + e.message);
+    alert("Gagal start scan: " + e.message);
   }
 }
 
-async function pauseScan() {
-  if (!activeScan) return;
-  await api(`/scans/${activeScan}/pause`, { method: "POST" });
-  el("pauseBtn").textContent = "RESUME";
-  setStatus("paused", activeScan);
-}
-
-async function resumeScan() {
-  if (!activeScan) return;
-  await api(`/scans/${activeScan}/resume`, { method: "POST" });
-  el("pauseBtn").textContent = "PAUSE";
-  setStatus("running", activeScan);
-}
-
-async function togglePause() {
-  if (!activeScan) return;
-  const current = el("pauseBtn").textContent;
-  if (current === "PAUSE") await pauseScan();
-  else await resumeScan();
-}
-
-async function stopScan() {
-  if (!activeScan) return;
-  await api(`/scans/${activeScan}/stop`, { method: "POST" });
-  setStatus("stopped", activeScan);
-  el("pauseBtn").disabled = true;
-  el("stopBtn").disabled = true;
-}
-
-function setStatus(status, target) {
-  const pill = el("scanStatus");
-  pill.textContent = (status || "IDLE").toUpperCase();
-  pill.className = "pill pill-" + fmtStatus(status);
-  if (target) setText("scanProfile", target);
-}
-
-async function subscribeStream(scanId) {
-  try {
-    const res = await api(`/scans/${scanId}/events`);
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop();
-      for (const chunk of parts) {
-        const line = chunk.replace(/^data:\s*/, "").trim();
-        if (!line) continue;
-        try { handleEvent(JSON.parse(line)); } catch (e) { console.warn("skip event", e); }
-      }
+function connectEvents(scanId) {
+  const es = new EventSource(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events`);
+  es.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.event_type === "asset.discovered") {
+      state.subdomains += 1;
+    } else if (data.event_type === "port.open") {
+      state.ports += 1;
+    } else if (data.event_type === "url.discovered") {
+      state.urls += 1;
+    } else if (data.event_type === "parameter.discovered") {
+      state.parameters += 1;
+    } else if (data.event_type === "finding.created") {
+      state.findings += 1;
+      addFinding({ title: data.message, severity: data.severity || "INFO", confidence: 0.7, status: "open" });
     }
-  } catch (e) {
-    console.warn("Stream ended:", e);
-  }
-}
-
-function handleEvent(ev) {
-  addEvent(ev);
-  const type = ev.event_type || "";
-  if (type === "asset.discovered") {
-    const asset = { id: ev.hostname || ev.asset_id, hostname: ev.hostname, type: ev.asset_type || "subdomain", depth: ev.depth || 0, ip: ev.ip || "", status: ev.status || "discovered", children: [] };
-    addAssetNode(asset);
-    state.subdomains += 1;
-  } else if (type === "dns.resolved") {
-    state.ips = (state.ips || 0) + 1;
-  } else if (type === "port.open") {
-    state.ports += 1;
-  } else if (type === "url.discovered") {
-    state.urls += 1;
-  } else if (type === "parameter.discovered") {
-    state.parameters += 1;
-  } else if (type === "finding.created" || type === "finding.updated") {
-    addFinding(ev);
-  } else if (type === "scan.completed") {
-    setStatus("completed", activeScan);
-    el("pauseBtn").disabled = true;
-    el("stopBtn").disabled = true;
-  } else if (type === "scan.stopped" || type === "scan.failed") {
-    setStatus(type.replace("scan.", ""), activeScan);
-    el("pauseBtn").disabled = true;
-    el("stopBtn").disabled = true;
-  }
-}
-
-async function loadTree() {
-  if (!activeScan) return alert("Pilih scan aktif terlebih dahulu");
-  try {
-    const data = await api(`/assets/tree?scan_id=${activeScan}`);
-    const container = el("assetTree");
-    container.innerHTML = "";
-    if (!data.length) { setEmpty("assetTree", "Belum ada asset."); return; }
-    data.forEach((node) => container.appendChild(buildTreeDOM(node)));
-  } catch (e) { console.warn(e); }
-}
-
-function buildTreeDOM(node) {
-  const div = document.createElement("div");
-  div.className = "tree-node";
-  const meta = [node.type, `depth ${node.depth}`, node.ip, node.status].filter(Boolean).join(" · ");
-  div.innerHTML = `<div class="title">🐢 ${esc(node.hostname || node.id)}</div><div class="meta">${esc(meta)}</div>`;
-  if (node.children && node.children.length) {
-    const wrap = document.createElement("div");
-    wrap.className = "tree-children";
-    node.children.forEach((c) => wrap.appendChild(buildTreeDOM(c)));
-    div.appendChild(wrap);
-  }
-  return div;
-}
-
-async function loadFindings() {
-  if (!activeScan) return alert("Pilih scan aktif terlebih dahulu");
-  try {
-    const data = await api(`/findings?scan_id=${activeScan}`);
-    const container = el("findingsPanel");
-    container.innerHTML = "";
-    if (!data.length) { setEmpty("findingsPanel", "Belum ada finding."); return; }
-    data.forEach((f) => addFinding(f));
-  } catch (e) { console.warn(e); }
+    addEvent(data);
+  };
+  es.onerror = () => {
+    setText("scanStatus", "ERROR");
+    es.close();
+  };
+  window._currentEs = es;
 }
 
 async function loadHistory() {
-  try {
-    const scans = await api(`/scans`);
-    const container = el("historyPanel");
-    container.innerHTML = "";
-    if (!scans.length) { setEmpty("historyPanel", "Belum ada history."); return; }
-    scans.forEach((s) => addHistoryItem(s));
-  } catch (e) { console.warn(e); }
-}
-
-async function openHistoryScan(scanId) {
-  activeScan = scanId;
-  const data = await api(`/scans/${scanId}`);
-  setStatus(data.status, data.root_domain);
-  el("pauseBtn").disabled = data.status === "completed" || data.status === "stopped";
-  el("stopBtn").disabled = data.status === "completed" || data.status === "stopped";
-  await loadTree();
-  await loadFindings();
-  subscribeStream(scanId);
-}
-
-function routeTo(path) {
-  if (path === "/history") {
-    el("historySection").classList.remove("hidden");
-  } else {
-    el("historySection").classList.add("hidden");
+  const res = await fetch(`${API_BASE}/scans`);
+  const scans = await res.json();
+  const container = el("historyPanel");
+  container.innerHTML = "";
+  if (!scans.length) {
+    setEmpty("historyPanel", "Belum ada history.");
+    return;
   }
-  document.querySelectorAll(".nav-item, .nav-link").forEach((n) => {
-    n.classList.toggle("active", (n.dataset.route || n.getAttribute("href") || "") === path);
-  });
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  scans.forEach((s) => addHistoryItem(s));
 }
 
-function init() {
+function openHistoryScan(scanId) {
+  // Placeholder: bisa kamu kembangkan jadi detail view
+  alert("History scan: " + scanId + "\nFitur detail history segera hadir.");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
   el("startBtn").addEventListener("click", startScan);
-  if (el("startBtn2")) el("startBtn2").addEventListener("click", startScan);
-  el("pauseBtn").addEventListener("click", togglePause);
-  el("stopBtn").addEventListener("click", stopScan);
-  el("refreshTreeBtn").addEventListener("click", loadTree);
+  el("pauseBtn").addEventListener("click", async () => {
+    if (!activeScan) return;
+    await fetch(`${API_BASE}/scans/${encodeURIComponent(activeScan)}/pause`, { method: "POST" });
+    setText("scanStatus", "PAUSED");
+  });
+  el("stopBtn").addEventListener("click", async () => {
+    if (!activeScan) return;
+    await fetch(`${API_BASE}/scans/${encodeURIComponent(activeScan)}/stop`, { method: "POST" });
+    setText("scanStatus", "STOPPED");
+    if (window._currentEs) window._currentEs.close();
+  });
+  el("refreshTreeBtn").addEventListener("click", async () => {
+    if (!activeScan) return;
+    const res = await fetch(`${API_BASE}/assets/tree?scan_id=${encodeURIComponent(activeScan)}`);
+    const tree = await res.json();
+    el("assetTree").innerHTML = "";
+    if (!tree.length) {
+      setEmpty("assetTree", "Belum ada asset.");
+      return;
+    }
+    tree.forEach((node) => addAssetNode(node));
+  });
   el("refreshHistoryBtn").addEventListener("click", loadHistory);
-  document.querySelectorAll(".nav-item").forEach((btn) => {
-    btn.addEventListener("click", () => routeTo(btn.dataset.route));
-  });
-  document.querySelectorAll(".nav-link").forEach((a) => {
-    a.addEventListener("click", (e) => { e.preventDefault(); routeTo(a.dataset.route); });
-  });
-  loadHistory();
-}
-
-init();
+});

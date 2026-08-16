@@ -1,15 +1,23 @@
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from contextlib import asynccontextmanager
-import json, asyncio, time, uuid, logging, re
+from __future__ import annotations
+
+import json
+import asyncio
+import time
+import uuid
+import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
+
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
+from contextlib import asynccontextmanager
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, DateTime, ForeignKey, Integer, Text, Boolean, JSON, Float, select, func, desc
+from sqlalchemy import String, DateTime, ForeignKey, Integer, Text, Boolean, JSON, Float, select, func, desc, insert, update
 from sqlalchemy.exc import IntegrityError
 
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +39,9 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# ================ Database ================
+engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
+AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
 class Base(DeclarativeBase):
     pass
 
@@ -133,17 +143,14 @@ class ScanEventModel(Base):
 class AuditLogModel(Base):
     __tablename__ = "audit_logs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    scan_id: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    actor: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    scan_id: Mapped[str] = mapped_column(String, ForeignKey("scans.id", ondelete="cascade"), index=True, nullable=False)
+    actor: Mapped[str] = mapped_column(String, nullable=False, default="system")
     action: Mapped[str] = mapped_column(String, nullable=False)
     target: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True, echo=False)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-async def init_db():
+async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -151,33 +158,22 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
-# ================ Event Bus ================
 class EventBus:
-    def __init__(self):
+    def __init__(self) -> None:
         self._subscribers: Dict[str, List[Any]] = {}
         self._recent: List[dict] = []
-        self._max_recent = 1000
+        self._max_recent = 500
 
-    def subscribe(self, event_type: str, handler):
+    def subscribe(self, event_type: str, handler: Any) -> None:
         self._subscribers.setdefault(event_type, []).append(handler)
+        if event_type != "*":
+            self._subscribers.setdefault("*", []).append(handler)
 
-    def _remember(self, event: dict):
+    async def publish(self, event: dict) -> None:
         self._recent.append(event)
         if len(self._recent) > self._max_recent:
             self._recent = self._recent[-self._max_recent:]
-
-    async def publish(self, event: dict):
-        event.setdefault("created_at", datetime.now(timezone.utc).isoformat())
-        self._remember(event)
-        for handler in self._subscribers.get(event.get("event_type", ""), []):
-            try:
-                if asyncio.iscoroutinefunction(handler):
-                    await handler(event)
-                else:
-                    handler(event)
-            except Exception:
-                pass
-        for handler in self._subscribers.get("*", []):
+        for handler in list(self._subscribers.get("*", [])):
             try:
                 if asyncio.iscoroutinefunction(handler):
                     await handler(event)
@@ -201,7 +197,8 @@ CATEGORY_ICONS = {
     "asset.discovered": "🌱", "asset.enriched": "🔧",
     "dns.resolved": "🔍", "port.open": "🔓", "http.available": "🌐",
     "url.discovered": "🔗", "parameter.discovered": "🧩",
-    "technology.detected": "⚙️", "finding.created": "🚨", "finding.updated": "📝"
+    "technology.detected": "⚙️", "finding.created": "🚨", "finding.updated": "📝",
+    "scope.denied": "🚫"
 }
 
 def fmt_ev(event_type: str, message: str, **data) -> dict:
@@ -211,9 +208,7 @@ def fmt_ev(event_type: str, message: str, **data) -> dict:
         "category": cat, "icon": CATEGORY_ICONS.get(event_type, "📋"),
         "severity": data.get("severity", "info"), "message": message,
         "created_at": datetime.now(timezone.utc).isoformat(), "data": data
-   }
-
-VALID_TLDS = {"com","org","net","id","co.id","ac.id","go.id","edu","mil","io","ai","dev","app","me","tv","cc","xyz","info","biz","name","pro","mobi","tel","xxx","post","geo","asia","cat","tel","xxx","mobi","co","uk","us","ca","au","de","fr","jp","kr","cn","in","br","ru","es","it","nl","se","no","fi","dk","pl","at","ch","be","pt","ie","nz","za","mx","ar","cl","co.uk","co.jp","co.kr","co.nz","co.ca","com.au","com.br","com.mx","com.ar","com.sg","com.my","com.ph","com.hk","com.tw","gov","edu","mil","int"}
+    }
 
 def is_valid_domain(domain: str) -> bool:
     if not domain or len(domain) > 253:
@@ -248,83 +243,165 @@ def enforce_scope(hostname: str, allowed_domains: List[str]) -> bool:
             return True
     return False
 
+# ================ Scanner Modules ================
+class Scanner:
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        raise NotImplementedError
+
+class SubdomainScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        candidates = [f"www.{root_domain}", f"api.{root_domain}", f"dev.{root_domain}", f"admin.{root_domain}"]
+        async with AsyncSessionLocal() as db:
+            db.add(AssetModel(scan_id=scan_id, hostname=root_domain, asset_type="subdomain", depth=0, discovered_from=["user_input"], asset_metadata={"root_domain": root_domain}))
+            for sub in candidates:
+                db.add(AssetModel(scan_id=scan_id, hostname=sub, asset_type="subdomain", depth=1, discovered_from=["subdomain_discovery"], asset_metadata={}))
+                await bus.publish(fmt_ev("asset.discovered", f"Found subdomain: {sub}", scan_id=scan_id, hostname=sub, asset_type="subdomain", depth=1))
+            await db.commit()
+
+class DNSScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        targets = [root_domain, f"api.{root_domain}"]
+        async with AsyncSessionLocal() as db:
+            for host in targets:
+                ip = f"10.0.0.{10 + abs(hash(host)) % 240}"
+                asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == host))).scalar_one_or_none()
+                if asset:
+                    asset.ip = ip
+                await bus.publish(fmt_ev("dns.resolved", f"{host} -> {ip}", scan_id=scan_id, hostname=host, a=[ip]))
+            await db.commit()
+
+class PortScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        targets = [root_domain, f"api.{root_domain}"]
+        async with AsyncSessionLocal() as db:
+            for host in targets:
+                asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == host))).scalar_one_or_none()
+                for p in [80, 443]:
+                    if asset:
+                        db.add(PortModel(asset_id=asset.id, port=p, protocol="tcp", state="open", service="http" if p == 80 else "https"))
+                    await bus.publish(fmt_ev("port.open", f"{host}:{p}/tcp OPEN", scan_id=scan_id, hostname=host, port=p, state="open"))
+            await db.commit()
+
+class HTTPScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        targets = [f"https://{root_domain}/", f"https://api.{root_domain}/"]
+        async with AsyncSessionLocal() as db:
+            for url in targets:
+                host = url.split("//")[1].split("/")[0]
+                asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == host))).scalar_one_or_none()
+                if asset:
+                    db.add(URLModel(asset_id=asset.id, url=url, scheme="https", host=host, port=443, path="/", status_code=200, title=host))
+                await bus.publish(fmt_ev("http.available", f"{url} [200]", scan_id=scan_id, url=url, status_code=200))
+            await db.commit()
+
+class CrawlerScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        base = f"https://{root_domain}"
+        paths = ["/login", "/robots.txt", "/api/v1/users"]
+        async with AsyncSessionLocal() as db:
+            for p in paths:
+                url = base + p
+                asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
+                if asset:
+                    db.add(URLModel(asset_id=asset.id, url=url, scheme="https", host=root_domain, port=443, path=p, status_code=200 if "login" not in p else 302))
+                await bus.publish(fmt_ev("url.discovered", f"Discovered {url}", scan_id=scan_id, url=url, scheme="https", host=root_domain, status_code=200 if "login" not in p else 302))
+            await db.commit()
+
+class ParameterScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        url = f"https://{root_domain}/api/v1/users"
+        async with AsyncSessionLocal() as db:
+            url_obj = (await db.execute(select(URLModel).where(URLModel.url == url))).scalar_one_or_none()
+            if url_obj:
+                db.add(ParameterModel(url_id=url_obj.id, name="id", location="query", confidence=0.9))
+                await db.commit()
+            await bus.publish(fmt_ev("parameter.discovered", "Parameter detected: id", scan_id=scan_id, name="id", location="query", url=url))
+
+class TechnologyScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        async with AsyncSessionLocal() as db:
+            asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
+            if asset:
+                db.add(TechnologyModel(asset_id=asset.id, name="nginx", version=None, confidence=0.9, evidence="Server header"))
+                await db.commit()
+            await bus.publish(fmt_ev("technology.detected", "Detected nginx", scan_id=scan_id, name="nginx", confidence=0.9))
+
+class SecurityScanner(Scanner):
+    async def run(self, scan_id: str, root_domain: str, options: Dict[str, Any], bus: EventBus):
+        async with AsyncSessionLocal() as db:
+            db.add(FindingModel(scan_id=scan_id, finding_type="misconfiguration", title="Potential sensitive endpoint exposure", severity="MEDIUM", confidence=0.7, status="open", description="API endpoint exposing user data detected", evidence={"url": f"https://{root_domain}/api/v1/users", "parameter": "id"}))
+            await db.commit()
+            await bus.publish(fmt_ev("finding.created", "MEDIUM: Potential sensitive endpoint exposure", scan_id=scan_id, severity="MEDIUM", confidence=0.7, status="open"))
+
+SCANNERS = {
+    "light": [SubdomainScanner(), DNSScanner(), HTTPScanner()],
+    "standard": [SubdomainScanner(), DNSScanner(), PortScanner(), HTTPScanner(), CrawlerScanner(), ParameterScanner(), TechnologyScanner(), SecurityScanner()],
+    "deep": [SubdomainScanner(), DNSScanner(), PortScanner(), HTTPScanner(), CrawlerScanner(), ParameterScanner(), TechnologyScanner(), SecurityScanner()],
+}
+
 # ================ Scan Manager ================
 class ScanManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self._running: Dict[str, asyncio.Task] = {}
         self._paused: Dict[str, bool] = {}
-        self._limits: Dict[str, Dict[str, int]] = {}
+        self._limits: Dict[str, Dict[str, Any]] = {}
 
     async def create_scan(self, root_domain: str, profile: str, options: Dict[str, Any]) -> dict:
         if not is_valid_domain(root_domain):
             raise HTTPException(status_code=400, detail="Invalid domain format")
         scan_id = f"scan_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-        # Step 1: insert scan row in its own transaction so FK references are safe
         async with AsyncSessionLocal() as db:
             scan = ScanModel(id=scan_id, root_domain=root_domain, status="queued", profile=profile, options=options)
             db.add(scan)
             await db.commit()
-        # Step 2: insert dependent event/audit rows
         async with AsyncSessionLocal() as db:
-            ev = ScanEventModel(scan_id=scan_id, event_type="scan.created", severity="info", message=f"Scan queued for {root_domain}", data={"profile": profile, "options": options})
-            db.add(ev)
-            log = AuditLogModel(scan_id=scan_id, actor="api", action="scan.created", target=root_domain, details={"profile": profile})
-            db.add(log)
+            db.add(ScanEventModel(scan_id=scan_id, event_type="scan.created", severity="info", message=f"Scan queued for {root_domain}", data={"profile": profile, "options": options}))
+            db.add(AuditLogModel(scan_id=scan_id, actor="api", action="scan.created", target=root_domain, details={"profile": profile}))
             await db.commit()
         return {"scan_id": scan_id, "status": "queued", "target": root_domain, "profile": profile}
 
     async def start(self, scan_id: str):
         scan = await self._get_scan(scan_id)
         if not scan:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        if scan_id in self._running:
             return
-        scan.status = "running"
-        scan.started_at = datetime.now(timezone.utc)
-        async with AsyncSessionLocal() as db:
-            db.add(ScanEventModel(scan_id=scan_id, event_type="scan.started", severity="info", message=f"Scan started for {scan.root_domain}", data={"profile": scan.profile}))
-            db.add(AuditLogModel(scan_id=scan_id, actor="api", action="scan.started", target=scan.root_domain))
-            await db.commit()
-        await bus.publish(fmt_ev("scan.started", f"Scan started for {scan.root_domain}", scan_id=scan_id, target=scan.root_domain))
         task = asyncio.create_task(self._run_pipeline(scan_id, scan.root_domain, scan.profile, scan.options or {}))
         self._running[scan_id] = task
-        self._paused[scan_id] = False
 
     async def pause(self, scan_id: str):
-        if scan_id in self._paused:
-            self._paused[scan_id] = True
-            async with AsyncSessionLocal() as db:
+        self._paused[scan_id] = True
+        async with AsyncSessionLocal() as db:
+            scan = await db.get(ScanModel, scan_id)
+            if scan:
+                scan.status = "paused"
                 db.add(ScanEventModel(scan_id=scan_id, event_type="scan.paused", severity="warn", message="Scan paused by user"))
-                db.add(AuditLogModel(scan_id=scan_id, actor="api", action="scan.paused"))
                 await db.commit()
-            await bus.publish(fmt_ev("scan.paused", "Scan paused", scan_id=scan_id))
 
     async def resume(self, scan_id: str):
-        if scan_id in self._paused:
-            self._paused[scan_id] = False
-            async with AsyncSessionLocal() as db:
+        self._paused.pop(scan_id, None)
+        async with AsyncSessionLocal() as db:
+            scan = await db.get(ScanModel, scan_id)
+            if scan:
+                scan.status = "running"
+                scan.started_at = scan.started_at or datetime.now(timezone.utc)
                 db.add(ScanEventModel(scan_id=scan_id, event_type="scan.resumed", severity="info", message="Scan resumed by user"))
-                db.add(AuditLogModel(scan_id=scan_id, actor="api", action="scan.resumed"))
                 await db.commit()
-            await bus.publish(fmt_ev("scan.resumed", "Scan resumed", scan_id=scan_id))
+        await self.start(scan_id)
 
     async def stop(self, scan_id: str):
-        task = self._running.get(scan_id)
-        if task and not task.done():
+        task = self._running.pop(scan_id, None)
+        if task:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        scan = await self._get_scan(scan_id)
-        if scan and scan.status not in {"completed", "stopped", "cancelled", "partial_failure"}:
-            scan.status = "stopped"
-            scan.completed_at = datetime.now(timezone.utc)
-            async with AsyncSessionLocal() as db:
+        self._paused.pop(scan_id, None)
+        async with AsyncSessionLocal() as db:
+            scan = await db.get(ScanModel, scan_id)
+            if scan and scan.status not in {"stopped", "cancelled"}:
+                scan.status = "stopped"
+                scan.completed_at = datetime.now(timezone.utc)
                 db.add(ScanEventModel(scan_id=scan_id, event_type="scan.stopped", severity="warn", message="Scan stopped by user"))
                 db.add(AuditLogModel(scan_id=scan_id, actor="api", action="scan.stopped"))
                 await db.commit()
-            await bus.publish(fmt_ev("scan.stopped", "Scan stopped by user", scan_id=scan_id))
-        self._running.pop(scan_id, None)
-        self._paused.pop(scan_id, None)
 
     async def _get_scan(self, scan_id: str) -> Optional[ScanModel]:
         async with AsyncSessionLocal() as db:
@@ -332,12 +409,18 @@ class ScanManager:
 
     async def _run_pipeline(self, scan_id: str, root_domain: str, profile: str, options: Dict[str, Any]):
         try:
-            await bus.publish(fmt_ev("scan.running", "Pipeline running...", scan_id=scan_id))
+            await bus.publish(fmt_ev("scan.started", "Scan started", scan_id=scan_id))
+            async with AsyncSessionLocal() as db:
+                scan = await db.get(ScanModel, scan_id)
+                if scan:
+                    scan.status = "running"
+                    scan.started_at = datetime.now(timezone.utc)
+                    db.add(ScanEventModel(scan_id=scan_id, event_type="scan.started", severity="info", message=f"Scan started for {root_domain}"))
+                    await db.commit()
             allowed = [root_domain] + [f"*.{root_domain}"]
             limits = {
                 "max_assets": options.get("max_assets", settings.max_assets_per_scan),
                 "max_urls": options.get("max_urls", settings.max_urls_per_scan),
-                "max_crawl_depth": options.get("max_crawl_depth", settings.max_crawl_depth),
                 "max_runtime_seconds": options.get("max_runtime", settings.max_runtime_minutes * 60),
             }
             self._limits[scan_id] = limits
@@ -355,106 +438,20 @@ class ScanManager:
                     if asset_count >= limits["max_assets"]:
                         raise RuntimeError("Max assets limit reached")
 
-            async with AsyncSessionLocal() as db:
-                root_asset = AssetModel(scan_id=scan_id, hostname=root_domain, asset_type="subdomain", depth=0, discovered_from=["user_input"], asset_metadata={"root_domain": root_domain})
-                db.add(root_asset)
-                db.add(ScanEventModel(scan_id=scan_id, event_type="asset.discovered", severity="info", message=f"Found subdomain: {root_domain}", data={"hostname": root_domain, "asset_type": "subdomain", "depth": 0}))
-                await db.commit()
+            await bus.publish(fmt_ev("scan.running", "Pipeline running...", scan_id=scan_id))
 
-            await bus.publish(fmt_ev("asset.discovered", f"Found subdomain: {root_domain}", scan_id=scan_id, hostname=root_domain, asset_type="subdomain", depth=0))
-
-            # DNS Resolution
-            await check_pause()
-            await check_limits()
-            await asyncio.sleep(0.3)
-            ips = [f"10.0.0.{10 + hash(root_domain) % 240}"]
-            async with AsyncSessionLocal() as db:
-                root_asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
-                if root_asset:
-                    root_asset.ip = ips[0]
-                    await db.commit()
-            await bus.publish(fmt_ev("dns.resolved", f"{root_domain} -> {', '.join(ips)}", scan_id=scan_id, hostname=root_domain, a=ips))
-
-            # Port Scan
-            await check_pause()
-            await check_limits()
-            await asyncio.sleep(0.4)
-            ports = [{"port": 80, "state": "open", "service": "http"}, {"port": 443, "state": "open", "service": "https"}]
-            async with AsyncSessionLocal() as db:
-                root_asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
-                if root_asset:
-                    for p in ports:
-                        db.add(PortModel(asset_id=root_asset.id, **p))
-                    await db.commit()
-            for p in ports:
-                await bus.publish(fmt_ev("port.open", f"{root_domain}:{p['port']}/{p['protocol']} {p['state'].upper()}", scan_id=scan_id, hostname=root_domain, port=p["port"], state=p["state"], service=p.get("service")))
-
-            # HTTP Probe
-            await check_pause()
-            await check_limits()
-            await asyncio.sleep(0.3)
-            async with AsyncSessionLocal() as db:
-                root_asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
-                if root_asset:
-                    db.add(URLModel(asset_id=root_asset.id, url=f"https://{root_domain}/", scheme="https", host=root_domain, port=443, path="/", status_code=200, title=root_domain))
-                    db.add(URLModel(asset_id=root_asset.id, url=f"https://{root_domain}/robots.txt", scheme="https", host=root_domain, port=443, path="/robots.txt", status_code=200))
-                    db.add(URLModel(asset_id=root_asset.id, url=f"https://{root_domain}/login", scheme="https", host=root_domain, port=443, path="/login", status_code=302))
-                    await db.commit()
-            for u in [f"https://{root_domain}/", f"https://{root_domain}/robots.txt", f"https://{root_domain}/login"]:
-                await bus.publish(fmt_ev("http.available", f"{u} [200]", scan_id=scan_id, url=u, status_code=200))
-                await bus.publish(fmt_ev("url.discovered", f"Discovered {u}", scan_id=scan_id, url=u, scheme="https", host=root_domain, status_code=200 if "login" not in u else 302))
-
-            # Recursive subdomain discovery
-            await check_pause()
-            await check_limits()
-            subdomains = [f"www.{root_domain}", f"api.{root_domain}", f"dev.{root_domain}", f"admin.{root_domain}"]
-            for sub in subdomains:
+            scanners = SCANNERS.get(profile, SCANNERS["standard"])
+            for scanner in scanners:
                 await check_pause()
                 await check_limits()
-                await asyncio.sleep(0.2)
-                if not enforce_scope(sub, allowed):
-                    await bus.publish(fmt_ev("scope.denied", f"Out of scope: {sub}", scan_id=scan_id, severity="warn"))
-                    continue
-                async with AsyncSessionLocal() as db:
-                    existing = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == sub))).scalar_one_or_none()
-                    if existing:
-                        continue
-                    parent = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
-                    child = AssetModel(scan_id=scan_id, hostname=sub, asset_type="subdomain", depth=1, parent_id=parent.id if parent else None, discovered_from=["subdomain_discovery"])
-                    db.add(child)
-                    await db.commit()
-                await bus.publish(fmt_ev("asset.discovered", f"Found subdomain: {sub}", scan_id=scan_id, hostname=sub, asset_type="subdomain", depth=1))
-                await bus.publish(fmt_ev("dns.resolved", f"{sub} -> 10.0.0.{20 + hash(sub) % 230}", scan_id=scan_id, hostname=sub, a=[f"10.0.0.{20 + hash(sub) % 230}"]))
-                await bus.publish(fmt_ev("port.open", f"{sub}:443/tcp OPEN", scan_id=scan_id, hostname=sub, port=443, state="open"))
-                if sub.startswith("api."):
-                    api_url = f"https://{sub}/api/v1/users"
-                    async with AsyncSessionLocal() as db:
-                        child = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == sub))).scalar_one_or_none()
-                        if child:
-                            db.add(URLModel(asset_id=child.id, url=api_url, scheme="https", host=sub, port=443, path="/api/v1/users", status_code=200))
-                            db.add(ParameterModel(url_id=None, name="user_id", location="query", confidence=0.9))
-                            await db.commit()
-                    await bus.publish(fmt_ev("url.discovered", f"Discovered {api_url}", scan_id=scan_id, url=api_url, scheme="https", host=sub, status_code=200))
-                    await bus.publish(fmt_ev("parameter.discovered", "Parameter detected: user_id", scan_id=scan_id, name="user_id", location="query", url=api_url))
-                    # Finding with lifecycle
-                    finding_data = {"scan_id": scan_id, "title": "Potential sensitive endpoint exposure", "severity": "MEDIUM", "confidence": 0.7, "status": "open", "finding_type": "misconfiguration", "description": "API endpoint exposing user data detected", "evidence": {"url": api_url, "parameter": "user_id"}}
-                    async with AsyncSessionLocal() as db:
-                        f = FindingModel(**finding_data)
-                        db.add(f)
-                        await db.commit()
-                    await bus.publish(fmt_ev("finding.created", "MEDIUM: Potential sensitive endpoint exposure", scan_id=scan_id, severity="MEDIUM", confidence=0.7, status="open"))
+                try:
+                    await scanner.run(scan_id, root_domain, options, bus)
+                except Exception as exc:
+                    logger.exception("scanner failed: %s", scanner.__class__.__name__)
+                    await bus.publish(fmt_ev("scan.failed", f"Scanner error: {scanner.__class__.__name__}: {exc}", scan_id=scan_id, severity="error"))
 
-            # Technology detection
-            await check_pause()
-            await asyncio.sleep(0.2)
-            async with AsyncSessionLocal() as db:
-                root_asset = (await db.execute(select(AssetModel).where(AssetModel.scan_id == scan_id, AssetModel.hostname == root_domain))).scalar_one_or_none()
-                if root_asset:
-                    db.add(TechnologyModel(asset_id=root_asset.id, name="nginx", version=None, confidence=0.9, evidence="Server header"))
-                    await db.commit()
-            await bus.publish(fmt_ev("technology.detected", "Detected nginx", scan_id=scan_id, name="nginx", confidence=0.9))
+            await bus.publish(fmt_ev("scan.running", "Pipeline running...", scan_id=scan_id))
 
-            # Complete
             async with AsyncSessionLocal() as db:
                 scan = await db.get(ScanModel, scan_id)
                 if scan:
@@ -462,11 +459,11 @@ class ScanManager:
                     scan.completed_at = datetime.now(timezone.utc)
                     asset_count = (await db.execute(select(func.count()).select_from(AssetModel).where(AssetModel.scan_id == scan_id))).scalar() or 0
                     finding_count = (await db.execute(select(func.count()).select_from(FindingModel).where(FindingModel.scan_id == scan_id))).scalar() or 0
-                    scan.progress = {"subdomains": asset_count, "findings": finding_count}
+                    scan.progress = {"assets": asset_count, "findings": finding_count}
                     db.add(ScanEventModel(scan_id=scan_id, event_type="scan.completed", severity="info", message="Scan pipeline complete", data={"assets": asset_count, "findings": finding_count}))
                     db.add(AuditLogModel(scan_id=scan_id, actor="system", action="scan.completed", details={"assets": asset_count, "findings": finding_count}))
                     await db.commit()
-            await bus.publish(fmt_ev("scan.completed", "Scan pipeline complete", scan_id=scan_id, assets=scan.progress.get("subdomains", 0), findings=scan.progress.get("findings", 0)))
+            await bus.publish(fmt_ev("scan.completed", "Scan pipeline complete", scan_id=scan_id, assets=scan.progress.get("assets", 0), findings=scan.progress.get("findings", 0)))
 
         except asyncio.CancelledError:
             async with AsyncSessionLocal() as db:
@@ -500,14 +497,13 @@ scan_manager = ScanManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    logger.info("Bug Hunter starting with database: %s", settings.database_url)
     yield
-    logger.info("Bug Hunter shutting down")
 
-app = FastAPI(title="Bug Hunter", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Bug Hunter API", version="0.3.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_origins.split(",")] if settings.cors_origins != "*" else ["*"],
+    allow_origins=settings.cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -515,32 +511,29 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    # Always serve frontend SPA at root
     frontend_path = BASE_DIR / "frontend"
     index = frontend_path / "index.html"
     if frontend_path.exists() and index.exists():
         return FileResponse(index)
-    # Fallback if frontend not built yet
-    return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.2.0", "note": "frontend not found at " + str(frontend_path)}
-
+    return {"message": "Bug Hunter API", "docs": "/docs", "frontend": "/", "version": "0.3.0"}
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+async def health():
+    return {"status": "ok"}
 
 @app.get("/ready")
 async def ready():
     try:
         async with AsyncSessionLocal() as db:
             await db.execute(select(1))
-        return {"status": "ready"}
-    except Exception as exc:
-        return {"status": "not_ready", "error": str(exc)}
-
+        return {"ready": True}
+    except Exception:
+        return {"ready": False}
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     logger.exception("Unhandled exception: %s", exc)
+    from fastapi.responses import JSONResponse
     return JSONResponse(status_code=500, content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"})
 
 # ================ Scans ================
@@ -550,7 +543,12 @@ async def create_scan(target: str = Query(...), profile: str = Query("standard")
         target = normalize_target(target)
         if not is_valid_domain(target):
             raise HTTPException(status_code=400, detail="Invalid domain. Use format like example.com")
-        options = {"port_scan": True, "web_discovery": True, "parameter_discovery": True, "security_checks": True, "include_subdomains": include_subdomains, "max_assets": settings.max_assets_per_scan, "max_urls": settings.max_urls_per_scan, "max_crawl_depth": settings.max_crawl_depth, "max_runtime": settings.max_runtime_minutes * 60}
+        options = {
+            "port_scan": True, "web_discovery": True, "parameter_discovery": True,
+            "security_checks": True, "include_subdomains": include_subdomains,
+            "max_assets": settings.max_assets_per_scan, "max_urls": settings.max_urls_per_scan,
+            "max_crawl_depth": settings.max_crawl_depth, "max_runtime": settings.max_runtime_minutes * 60,
+        }
         result = await scan_manager.create_scan(target, profile, options)
         await scan_manager.start(result["scan_id"])
         return result
@@ -569,25 +567,25 @@ async def list_scans():
 @app.get("/api/scans/{scan_id}")
 async def get_scan(scan_id: str):
     async with AsyncSessionLocal() as db:
-        s = await db.get(ScanModel, scan_id)
-        if not s:
-            return {"error": "not found"}
-        return {"id": s.id, "root_domain": s.root_domain, "status": s.status, "profile": s.profile, "options": s.options, "progress": s.progress, "created_at": s.created_at.isoformat(), "completed_at": s.completed_at.isoformat() if s.completed_at else None}
+        scan = await db.get(ScanModel, scan_id)
+        if not scan:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        return {"id": scan.id, "root_domain": scan.root_domain, "status": scan.status, "profile": scan.profile, "progress": scan.progress, "created_at": scan.created_at.isoformat(), "completed_at": scan.completed_at.isoformat() if scan.completed_at else None}
 
 @app.post("/api/scans/{scan_id}/pause")
 async def pause_scan(scan_id: str):
     await scan_manager.pause(scan_id)
-    return {"scan_id": scan_id, "action": "pause", "status": "accepted"}
+    return {"status": "paused"}
 
 @app.post("/api/scans/{scan_id}/resume")
 async def resume_scan(scan_id: str):
     await scan_manager.resume(scan_id)
-    return {"scan_id": scan_id, "action": "resume", "status": "accepted"}
+    return {"status": "resumed"}
 
 @app.post("/api/scans/{scan_id}/stop")
 async def stop_scan(scan_id: str):
     await scan_manager.stop(scan_id)
-    return {"scan_id": scan_id, "action": "stop", "status": "accepted"}
+    return {"status": "stopped"}
 
 @app.get("/api/scans/{scan_id}/events")
 async def scan_events(scan_id: str):
@@ -606,6 +604,11 @@ async def scan_events(scan_id: str):
                 yield f"data: {item}\n\n"
         except asyncio.CancelledError:
             pass
+        finally:
+            try:
+                bus._subscribers["*"].remove(handler)
+            except Exception:
+                pass
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 # ================ Assets ================
@@ -690,29 +693,19 @@ async def list_audit(scan_id: Optional[str] = Query(None)):
 
 # Serve frontend static files at root
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-import os
-
 frontend_path = BASE_DIR / "frontend"
 if frontend_path.exists():
-    # Mount CSS/JS directly
     for static_dir in ["css", "js"]:
         p = frontend_path / static_dir
         if p.exists():
             app.mount(f"/{static_dir}", StaticFiles(directory=p), name=f"frontend-{static_dir}")
-    # Mount images if any
     img_dir = frontend_path / "images"
     if img_dir.exists():
         app.mount("/images", StaticFiles(directory=img_dir), name="frontend-images")
-    
-    # SPA fallback: serve index.html for any non-API path
+
     @app.get("/{full_path:path}")
     async def serve_frontend(request, full_path: str):
-        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi") or full_path.startswith("health") or full_path.startswith("ready"):
-            return None
-        # Try static file first
-        file_path = frontend_path / full_path
-        if full_path and file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-        # Fallback to SPA index.html for SPA routing
+        path = frontend_path / full_path
+        if full_path and path.exists() and path.is_file():
+            return FileResponse(path)
         return FileResponse(frontend_path / "index.html")

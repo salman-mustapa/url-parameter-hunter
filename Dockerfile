@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY frontend ./frontend
 
-RUN mkdir -p /app/storage /app/logs && chown -R appuser:appuser /app
+RUN mkdir -p /app/storage /app/logs /app/data && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 9001
