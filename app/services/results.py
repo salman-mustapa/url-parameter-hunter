@@ -14,6 +14,9 @@ from app.core.db import AsyncSessionLocal
 from app.models.models import Asset, AuditLog, Finding, Observation, Scan, ScanEvent
 
 
+from app.core.sanitizer import sanitize_text
+
+
 class ResultService:
     def __init__(self, dialect: str = "postgresql"):
         self.dialect = dialect
@@ -27,9 +30,9 @@ class ResultService:
             "event_type": event_type,
             "category": cat,
             "severity": data.pop("severity", "info"),
-            "message": message,
+            "message": sanitize_text(message),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "data": data,
+            "data": sanitize_text(data),
         }
 
     async def persist_event(self, event: dict) -> None:
@@ -38,11 +41,12 @@ class ResultService:
                 scan_id=event["scan_id"],
                 event_type=event["event_type"],
                 severity=event.get("severity", "info"),
-                message=event.get("message", ""),
-                data=event.get("data", {}),
+                message=sanitize_text(event.get("message", "")),
+                data=sanitize_text(event.get("data", {})),
             )
             db.add(ev)
             await db.commit()
+
 
     async def upsert_asset(
         self,
@@ -59,17 +63,24 @@ class ResultService:
         discovered_from: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Asset:
+        clean_fp = sanitize_text(fingerprint)
+        clean_host = sanitize_text(hostname)
+        clean_fqdn = sanitize_text(fqdn)
+        clean_ip = sanitize_text(ip)
+        clean_meta = sanitize_text(metadata or {})
+        clean_srcs = sanitize_text(discovered_from or [])
+
         existing = (await db.execute(
-            select(Asset).where(Asset.scan_id == scan_id, Asset.asset_type == asset_type, Asset.fingerprint == fingerprint)
+            select(Asset).where(Asset.scan_id == scan_id, Asset.asset_type == asset_type, Asset.fingerprint == clean_fp)
         )).scalar_one_or_none()
         if existing:
             if parent_id and not existing.parent_id:
                 existing.parent_id = parent_id
-            if ip and not existing.ip:
-                existing.ip = ip
-            if discovered_from:
+            if clean_ip and not existing.ip:
+                existing.ip = clean_ip
+            if clean_srcs:
                 srcs = list(existing.discovered_from or [])
-                for src in discovered_from:
+                for src in clean_srcs:
                     if src not in srcs:
                         srcs.append(src)
                 existing.discovered_from = srcs
@@ -77,14 +88,14 @@ class ResultService:
         asset = Asset(
             scan_id=scan_id,
             asset_type=asset_type,
-            fingerprint=fingerprint,
+            fingerprint=clean_fp,
             parent_id=parent_id,
-            hostname=hostname,
-            fqdn=fqdn,
-            ip=ip,
+            hostname=clean_host,
+            fqdn=clean_fqdn,
+            ip=clean_ip,
             depth=depth,
-            discovered_from=discovered_from or [],
-            metadata_=metadata or {},
+            discovered_from=clean_srcs,
+            metadata_=clean_meta,
         )
         db.add(asset)
         try:
@@ -92,7 +103,7 @@ class ResultService:
         except IntegrityError:
             await db.rollback()
             return (await db.execute(
-                select(Asset).where(Asset.scan_id == scan_id, Asset.asset_type == asset_type, Asset.fingerprint == fingerprint)
+                select(Asset).where(Asset.scan_id == scan_id, Asset.asset_type == asset_type, Asset.fingerprint == clean_fp)
             )).scalar_one()
         return asset
 
@@ -101,18 +112,21 @@ class ResultService:
         severity: str = "INFO", confidence: float = 0.5, description: str | None = None, evidence: dict | None = None,
         status: str = "OPEN",
     ) -> Finding | None:
+        clean_title = sanitize_text(title)
+        clean_desc = sanitize_text(description)
+        clean_ev = sanitize_text(evidence or {})
         existing = (await db.execute(
             select(Finding).where(
-                Finding.scan_id == scan_id, Finding.asset_id == asset_id, Finding.finding_type == finding_type, Finding.title == title,
+                Finding.scan_id == scan_id, Finding.asset_id == asset_id, Finding.finding_type == finding_type, Finding.title == clean_title,
             )
         )).scalar_one_or_none()
         if existing:
             existing.last_seen = datetime.now(timezone.utc)
             return existing
         finding = Finding(
-            scan_id=scan_id, asset_id=asset_id, finding_type=finding_type, title=title,
-            severity=severity, confidence=confidence, description=description,
-            evidence=evidence or {}, status=status,
+            scan_id=scan_id, asset_id=asset_id, finding_type=finding_type, title=clean_title,
+            severity=severity, confidence=confidence, description=clean_desc,
+            evidence=clean_ev, status=status,
         )
         db.add(finding)
         try:
@@ -126,17 +140,19 @@ class ResultService:
         self, db: AsyncSession, *, scan_id: str, asset_id: Optional[str], observation_type: str, title: str,
         evidence: dict | None = None, confidence: float = 0.5,
     ) -> Observation | None:
+        clean_title = sanitize_text(title)
+        clean_ev = sanitize_text(evidence or {})
         existing = (await db.execute(
             select(Observation).where(
                 Observation.scan_id == scan_id, Observation.asset_id == asset_id,
-                Observation.observation_type == observation_type, Observation.title == title,
+                Observation.observation_type == observation_type, Observation.title == clean_title,
             )
         )).scalar_one_or_none()
         if existing:
             return existing
         obs = Observation(
-            scan_id=scan_id, asset_id=asset_id, observation_type=observation_type, title=title,
-            evidence=evidence or {}, confidence=confidence,
+            scan_id=scan_id, asset_id=asset_id, observation_type=observation_type, title=clean_title,
+            evidence=clean_ev, confidence=confidence,
         )
         db.add(obs)
         try:
@@ -147,7 +163,13 @@ class ResultService:
         return obs
 
     async def audit(self, db: AsyncSession, scan_id: str, action: str, actor: str = "system", target: str | None = None, details: dict | None = None):
-        db.add(AuditLog(scan_id=scan_id, actor=actor, action=action, target=target, details=details or {}))
+        db.add(AuditLog(
+            scan_id=scan_id,
+            actor=sanitize_text(actor),
+            action=sanitize_text(action),
+            target=sanitize_text(target),
+            details=sanitize_text(details or {}),
+        ))
         try:
             await db.commit()
         except IntegrityError:

@@ -10,9 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.sanitizer import sanitize_text
 from app.models.models import Asset, Parameter, URL
 from app.scanners.base import ScanContext
 from app.scanners.http import extract_title, fetch_http
+
 
 logger = logging.getLogger("scanner.web")
 
@@ -159,22 +161,27 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
             content_type = (resp.headers.get("content-type") or "").split(";")[0].strip()[:100]
 
             # Upsert URL
+            clean_target_url = sanitize_text(target_url)
+            clean_title = sanitize_text(title)
+            clean_ct = sanitize_text(content_type)
+            clean_path = sanitize_text(parsed.path or "/")
+
             existing = (await db.execute(
-                select(URL).where(URL.asset_id == asset.id, URL.url == target_url)
+                select(URL).where(URL.asset_id == asset.id, URL.url == clean_target_url)
             )).scalar_one_or_none()
 
             url_record = existing
             if not url_record:
                 url_record = URL(
                     asset_id=asset.id,
-                    url=target_url,
+                    url=clean_target_url,
                     scheme=parsed.scheme,
                     host=host,
                     port=port_num,
-                    path=parsed.path or "/",
+                    path=clean_path,
                     status_code=status,
-                    content_type=content_type,
-                    title=title,
+                    content_type=clean_ct,
+                    title=clean_title,
                 )
                 db.add(url_record)
                 await db.flush()
@@ -182,21 +189,22 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
             if status < 400 or status in (401, 403):
                 await ctx.emit(
                     "url.discovered",
-                    f"Endpoint: {target_url} [{status}]" + (f" — \"{title}\"" if title else ""),
-                    url=target_url,
+                    f"Endpoint: {clean_target_url} [{status}]" + (f" — \"{clean_title}\"" if clean_title else ""),
+                    url=clean_target_url,
                     status_code=status,
                     host=host,
-                    title=title,
+                    title=clean_title,
                     asset_id=asset.id,
                     severity="info" if status < 400 else "warn",
                 )
 
             # Parameter Extraction (Query string & HTML forms)
-            found_params = _extract_parameters_from_url(target_url)
+            found_params = _extract_parameters_from_url(clean_target_url)
             if resp.text and status == 200:
                 found_params.extend(_extract_form_inputs(resp.text))
 
-            for param_name, loc in set(found_params):
+            for raw_param_name, loc in set(found_params):
+                param_name = sanitize_text(raw_param_name)
                 existing_param = (await db.execute(
                     select(Parameter).where(
                         Parameter.url_id == url_record.id,
@@ -215,13 +223,14 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
                     ))
                     await ctx.emit(
                         "parameter.discovered",
-                        f"Parameter [{loc}]: {param_name} detected on {parsed.path or '/'}",
+                        f"Parameter [{loc}]: {param_name} detected on {clean_path}",
                         name=param_name,
                         location=loc,
-                        url=target_url,
+                        url=clean_target_url,
                         asset_id=asset.id,
                         severity="info",
                     )
+
 
             # Shallow Link Crawling from HTML Body (max length check)
             if resp.text and len(resp.text) < 500_000 and status == 200:

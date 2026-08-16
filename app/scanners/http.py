@@ -158,38 +158,46 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
                     severity="warn",
                 )
 
+from app.core.sanitizer import sanitize_text
+
+
         # Upsert URL Asset
         parsed = urlparse(url)
         port_num = parsed.port or (443 if scheme == "https" else 80)
+        clean_url_str = sanitize_text(url)
+        clean_title = sanitize_text(title)
+        clean_ct = sanitize_text(content_type)
+
         existing_url = (await db.execute(
-            select(URL).where(URL.asset_id == asset.id, URL.url == url)
+            select(URL).where(URL.asset_id == asset.id, URL.url == clean_url_str)
         )).scalar_one_or_none()
 
         if not existing_url:
             db.add(URL(
                 asset_id=asset.id,
-                url=url,
+                url=clean_url_str,
                 scheme=scheme,
                 host=host,
                 port=port_num,
-                path="/",
+                path=sanitize_text(parsed.path or "/"),
                 status_code=status,
-                content_type=content_type,
-                title=title,
+                content_type=clean_ct,
+                title=clean_title,
             ))
 
         await ctx.emit(
             "http.available",
-            f"HTTP [{status}] {url}" + (f" — \"{title}\"" if title else "") + f" ({latency_ms}ms)",
-            url=url,
+            f"HTTP [{status}] {clean_url_str}" + (f" — \"{clean_title}\"" if clean_title else "") + f" ({latency_ms}ms)",
+            url=clean_url_str,
             status_code=status,
             host=host,
-            title=title,
-            content_type=content_type,
+            title=clean_title,
+            content_type=clean_ct,
             latency_ms=latency_ms,
             asset_id=asset.id,
             severity="info" if status < 400 else "warn",
         )
+
 
         # TLS Certificate Capture for HTTPS
         if scheme == "https":

@@ -53,8 +53,11 @@ COMMON_PORTS = {
 DEEP_PORTS = list(range(1, 1025)) + sorted(COMMON_PORTS.keys())
 
 
+from app.core.sanitizer import clean_banner, sanitize_text
+
+
 async def _grab_banner(host: str, port: int, timeout: float = 1.0) -> str | None:
-    """Brief banner grab for service fingerprinting."""
+    """Brief banner grab for service fingerprinting with null byte sanitization."""
     loop = asyncio.get_running_loop()
 
     def do_grab():
@@ -63,9 +66,9 @@ async def _grab_banner(host: str, port: int, timeout: float = 1.0) -> str | None
             s.settimeout(timeout)
             if port in (80, 8080, 8443, 8000, 3000, 5000):
                 s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
-            banner = s.recv(256)
+            raw = s.recv(256)
             s.close()
-            return banner.decode("utf-8", errors="ignore").strip()[:100]
+            return clean_banner(raw)
         except Exception:
             return None
 
@@ -73,6 +76,7 @@ async def _grab_banner(host: str, port: int, timeout: float = 1.0) -> str | None
         return await loop.run_in_executor(None, do_grab)
     except Exception:
         return None
+
 
 
 async def _check_port(host: str, port: int, timeout: float) -> bool:
