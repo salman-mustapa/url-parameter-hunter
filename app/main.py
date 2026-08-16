@@ -537,6 +537,12 @@ async def ready():
     except Exception as exc:
         return {"status": "not_ready", "error": str(exc)}
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(status_code=500, content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"})
+
 # ================ Scans ================
 @app.post("/api/scans")
 async def create_scan(target: str = Query(...), profile: str = Query("standard"), include_subdomains: bool = Query(True)):
