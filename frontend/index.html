@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Bug Hunter — Attack Surface Intelligence</title>
-<meta name="description" content="Platform Bug Hunting & Attack Surface Discovery berbasis AI. Menyenangkan, cepat, dan real-time." />
+<meta name="description" content="Platform Bug Hunting & Attack Surface Discovery." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,51 +30,17 @@
 
   <main>
     <section class="hero">
-      <div class="container hero-grid">
-        <div class="hero-text">
-          <div class="badge">
-            <span class="badge-star">✦</span>
-            Attack Surface Discovery No. 1 di Indonesia
-          </div>
-          <h1 class="hero-title">
-            Bug Hunting Jadi<br />
-            <span class="highlight">Lebih Menyenangkan</span>
-          </h1>
-          <p class="hero-desc">
-            Cukup masukkan root domain, sistem akan menemukan subdomain, URL, parameter, dan potensi temuan keamanan secara otomatis.
-            Aman, Real-time, dan tanpa perlu setup rumit.
-          </p>
-          <div class="hero-actions">
-            <button id="startBtn" class="btn btn-primary">▶ Mulai Scan</button>
-            <button class="btn btn-secondary">Pelajari Fitur</button>
-          </div>
-        </div>
-        <div class="hero-mockup">
-          <div class="phone">
-            <div class="phone-screen">
-              <div class="phone-header">
-                <span class="phone-dot"></span>
-                <span class="phone-dot"></span>
-                <span class="phone-dot"></span>
-              </div>
-              <div class="phone-body">
-                <div class="phone-title">Live Event Stream</div>
-                <div class="phone-event"><span class="ts">14:32</span> <span class="cat">DISCOVERY</span> api.example.com</div>
-                <div class="phone-event"><span class="ts">14:32</span> <span class="cat">DNS</span> 10.20.30.40</div>
-                <div class="phone-event"><span class="ts">14:32</span> <span class="cat">PORT</span> 443 OPEN</div>
-                <div class="phone-event"><span class="ts">14:32</span> <span class="cat">HTTP</span> 200 OK</div>
-                <div class="phone-event"><span class="ts">14:32</span> <span class="cat">URL</span> /api/v1/users</div>
-                <div class="phone-event"><span class="ts">14:32</span> <span class="cat">FINDING</span> MEDIUM</div>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div class="container">
+        <div class="hero-title">Bug Hunting Jadi <span class="highlight">Lebih Menyenangkan</span></div>
+        <p class="hero-desc">
+          Masukkan root domain, sistem akan menemukan subdomain, URL, parameter, dan potensi temuan keamanan secara otomatis.
+        </p>
       </div>
     </section>
 
     <section class="scan-section">
       <div class="container">
-        <div class="card sketch-border">
+        <div class="card">
           <div class="section-header">
             <h2>🎯 Target Scan</h2>
             <div class="status-pills">
@@ -100,7 +66,7 @@
       <div class="container">
         <div class="panels">
           <div class="panel panel-stream">
-            <div class="card sketch-border">
+            <div class="card">
               <div class="section-header">
                 <h3>📡 Live Scan Stream</h3>
                 <span id="eventCounter" class="counter">0</span>
@@ -111,7 +77,7 @@
             </div>
           </div>
           <div class="panel panel-side">
-            <div class="card sketch-border" style="margin-bottom:16px">
+            <div class="card" style="margin-bottom:16px">
               <div class="section-header">
                 <h3>🌳 Asset Tree</h3>
                 <button id="refreshTreeBtn" class="btn btn-ghost">Refresh</button>
@@ -120,7 +86,7 @@
                 <div class="empty">Belum ada asset.</div>
               </div>
             </div>
-            <div class="card sketch-border">
+            <div class="card">
               <div class="section-header">
                 <h3>🔍 Findings</h3>
                 <span id="findingsSummary" class="counter">—</span>
@@ -136,7 +102,7 @@
 
     <section id="historySection" class="history-section hidden">
       <div class="container">
-        <div class="card sketch-border">
+        <div class="card">
           <div class="section-header">
             <h3>📜 Scan History</h3>
             <button id="refreshHistoryBtn" class="btn btn-ghost">Refresh</button>
@@ -148,11 +114,6 @@
       </div>
     </section>
   </main>
-
-  <nav class="bottom-nav">
-    <button class="nav-item active" data-route="/">Scan</button>
-    <button class="nav-item" data-route="/history">History</button>
-  </nav>
 
   <script src="js/app.js"></script>
 </body>
