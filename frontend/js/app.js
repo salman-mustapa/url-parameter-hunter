@@ -1005,7 +1005,14 @@ document.addEventListener("DOMContentLoaded", () => {
   setupNavigation();
 
   el("startBtn").addEventListener("click", startScan);
+  el("targetInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      startScan();
+    }
+  });
   el("pauseBtn").addEventListener("click", pauseScan);
+
   el("resumeBtn").addEventListener("click", resumeScan);
   el("stopBtn").addEventListener("click", stopScan);
   el("exportBtn").addEventListener("click", exportScanJSON);

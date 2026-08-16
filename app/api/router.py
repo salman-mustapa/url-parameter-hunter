@@ -19,12 +19,29 @@ from app.services.scan_manager import scan_manager
 router = APIRouter(prefix="/api", tags=["api"])
 
 
+class CreateScanRequest(BaseModel):
+    target: Optional[str] = None
+    profile: Optional[str] = "standard"
+    include_subdomains: Optional[bool] = True
+
+
 @router.post("/scans")
-async def create_scan(target: str = Query(...), profile: str = Query("standard"), include_subdomains: bool = Query(True)):
+async def create_scan(
+    target: Optional[str] = Query(None),
+    profile: Optional[str] = Query("standard"),
+    include_subdomains: Optional[bool] = Query(True),
+    body: Optional[CreateScanRequest] = None,
+):
+    final_target = target or (body.target if body else None)
+    final_profile = profile or (body.profile if body else "standard")
+    final_subs = include_subdomains if include_subdomains is not None else (body.include_subdomains if body else True)
+    if not final_target:
+        raise HTTPException(status_code=400, detail="Target domain or URL is required.")
     try:
-        return await scan_manager.create_scan(target, profile, include_subdomains)
+        return await scan_manager.create_scan(final_target.strip(), final_profile, final_subs)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 @router.get("/scans")
@@ -96,14 +113,25 @@ async def scan_events(scan_id: str):
         event_bus.subscribe("*", handler)
         try:
             while True:
-                item = await queue.get()
-                yield f"data: {item}\n\n"
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {item}\n\n"
+                except asyncio.TimeoutError:
+                    # SSE keepalive comment to prevent proxy timeouts
+                    yield ": keepalive\n\n"
         except asyncio.CancelledError:
             pass
         finally:
             event_bus.unsubscribe(handler)
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+        "Content-Type": "text/event-stream",
+    }
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
 
 
 @router.get("/assets/tree")

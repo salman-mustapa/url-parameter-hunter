@@ -15,10 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.db import AsyncSessionLocal
 from app.core.sanitizer import sanitize_text
 from app.models.models import Asset, Certificate, Technology, URL
 from app.scanners.base import ScanContext
 from app.services.results import result_service
+
 
 
 logger = logging.getLogger("scanner.http")
@@ -314,6 +316,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     async def probe_with_sem(a: Asset):
         async with sem:
             await ctx.rate_limiter.wait()
-            await probe_asset(ctx, db, a, root_domain)
+            async with AsyncSessionLocal() as session:
+                await probe_asset(ctx, session, a, root_domain)
 
     await asyncio.gather(*[probe_with_sem(a) for a in assets], return_exceptions=True)
