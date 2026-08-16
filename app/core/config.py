@@ -1,17 +1,23 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", str(BASE_DIR / ".env")), extra="ignore")
     database_url: str = "postgresql+asyncpg://bughunter:bughunter@postgres:5432/bughunter"
-    redis_url: str = "redis://redis:6379/0"
-    secret_key: str = "change-me-in-production"
     cors_origins: str = "*"
-    scan_profiles: str = '{"passive":{},"standard":{"max_ports":1000},"deep":{"max_ports":65535}}'
-    rate_limit_rps: int = 5
-    max_concurrent_hosts: int = 10
-    sqlite_path: str = str(BASE_DIR / "storage" / "dev.sqlite")
+    rate_limit_rps: int = 10
+    max_concurrent_hosts: int = 8
+    max_assets_per_scan: int = 2000
+    max_urls_per_scan: int = 20000
+    max_crawl_depth: int = 3
+    max_runtime_minutes: int = 45
+    port_timeout_seconds: float = 2.0
+    http_timeout_seconds: float = 10.0
+    wordlist_path: str = str(BASE_DIR / "wordlists" / "subdomains.txt")
+    security_mode: str = "SAFE"
+
 
 settings = Settings()

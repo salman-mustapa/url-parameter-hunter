@@ -3,10 +3,9 @@ uvicorn[standard]
 sqlalchemy
 pydantic
 pydantic-settings
-redis
 httpx
-aiosqlite
-python-multipart
-python-dotenv
-aiofiles
 asyncpg
+aiosqlite
+dnspython
+tldextract
+python-multipart

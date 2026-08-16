@@ -1,5 +1,7 @@
 const API_BASE = "/api";
 let activeScan = null;
+let es = null;
+let treePollTimer = null;
 const state = { events: 0, subdomains: 0, ports: 0, urls: 0, parameters: 0, findings: 0 };
 
 function el(id) { return document.getElementById(id); }
@@ -8,9 +10,8 @@ function fmtStatus(status) {
   const map = { queued: "neutral", created: "neutral", running: "running", paused: "stopped", partial_failure: "stopped", completed: "success", stopped: "stopped", cancelled: "stopped" };
   return map[status] || "neutral";
 }
-function clearEmpty(containerId) { const c = el(containerId); const f = c.querySelector(".empty"); if (f) f.remove(); }
-function setEmpty(containerId, text) { const c = el(containerId); c.innerHTML = `<div class="empty">${esc(text)}</div>`; }
-function setText(id, value) { const e = el(id); if (e) e.textContent = value; }
+function clearEmpty(id) { const c = el(id); if (!c) return; const f = c.querySelector(".empty"); if (f) f.remove(); }
+function setEmpty(id, text) { const c = el(id); if (c) c.innerHTML = `<div class="empty">${esc(text)}</div>`; }
 
 function addEvent(ev) {
   const container = el("eventStream");
@@ -19,42 +20,61 @@ function addEvent(ev) {
   item.className = "event-item";
   const sev = ev.severity ? `sev-${ev.severity}` : "sev-info";
   const cat = ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO");
-  const ts = ev.created_at ? ev.created_at.slice(11, 19) : new Date().toLocaleTimeString();
+  const ts = ev.created_at ? String(ev.created_at).slice(11, 19) : new Date().toLocaleTimeString();
   item.innerHTML = `<span class="ts">${esc(ts)}</span><span class="icon">${ev.icon || "📋"}</span><span class="cat ${sev}">${esc(cat)}</span><span>${esc(ev.message)}</span>`;
   container.appendChild(item);
+  while (container.children.length > 500) container.removeChild(container.firstChild);
   container.scrollTop = container.scrollHeight;
   state.events += 1;
   setText("eventCounter", state.events);
 }
 
-function addAssetNode(node) {
-  const container = el("assetTree");
-  clearEmpty("assetTree");
+function renderTreeNode(node, depth = 0) {
   const div = document.createElement("div");
   div.className = "tree-node";
-  const meta = [node.type, `depth ${node.depth}`, node.ip, node.status].filter(Boolean).join(" · ");
-  div.innerHTML = `<div class="title">🐢 ${esc(node.hostname || node.id)}</div><div class="meta">${esc(meta)}</div>`;
-  if (node.children && node.children.length) {
-    const wrap = document.createElement("div");
-    wrap.className = "tree-children";
-    node.children.forEach((c) => wrap.appendChild(makeAssetNode(c)));
-    div.appendChild(wrap);
-  }
-  container.appendChild(div);
+  const meta = [node.type, node.depth != null ? `depth ${node.depth}` : "", node.ip, node.status].filter(Boolean).join(" · ");
+  let label = node.hostname || node.fqdn || node.id;
+  div.innerHTML = `<div class="title" style="padding-left:${depth * 14}px">${depth ? "└ " : ""}${node.type === "ip" ? "🌐" : "🐢"} ${esc(label)} <span class="meta">${esc(meta)}</span></div>`;
+  div.querySelector(".title").addEventListener("click", (e) => {
+    e.stopPropagation();
+    loadAssetDetail(node.id);
+  });
+  (node.children || []).forEach((c) => div.appendChild(renderTreeNode(c, depth + 1)));
+  return div;
 }
 
-function makeAssetNode(node) {
-  const div = document.createElement("div");
-  div.className = "tree-node";
-  const meta = [node.type, `depth ${node.depth}`, node.ip, node.status].filter(Boolean).join(" · ");
-  div.innerHTML = `<div class="title">🐢 ${esc(node.hostname || node.id)}</div><div class="meta">${esc(meta)}</div>`;
-  if (node.children && node.children.length) {
-    const wrap = document.createElement("div");
-    wrap.className = "tree-children";
-    node.children.forEach((c) => wrap.appendChild(makeAssetNode(c)));
-    div.appendChild(wrap);
-  }
-  return div;
+function renderTree(tree) {
+  const container = el("assetTree");
+  container.innerHTML = "";
+  if (!tree || !tree.length) { setEmpty("assetTree", "Belum ada asset."); return; }
+  tree.forEach((n) => container.appendChild(renderTreeNode(n)));
+}
+
+async function refreshTree() {
+  if (!activeScan) return;
+  try {
+    const res = await fetch(`${API_BASE}/assets/tree?scan_id=${encodeURIComponent(activeScan)}`);
+    renderTree(await res.json());
+  } catch (e) { /* silent */ }
+}
+
+async function loadAssetDetail(assetId) {
+  try {
+    const res = await fetch(`${API_BASE}/assets/${encodeURIComponent(assetId)}`);
+    const a = await res.json();
+    if (!a || !a.id) return;
+    const panel = el("assetDetail");
+    panel.classList.remove("hidden");
+    let html = `<div class="section-header"><h3>🔍 ${esc(a.hostname || a.id)}</h3><button class="btn btn-ghost" onclick="document.getElementById('assetDetail').classList.add('hidden')">✕</button></div>`;
+    html += `<div class="meta">${esc(a.type || "")} · depth ${a.depth} · ${esc(a.status || "")} · IP: ${esc(a.ip || "-")}</div>`;
+    if (a.ports && a.ports.length) {
+      html += `<h4>Ports</h4><div class="chips">${a.ports.map(p => `<span class="chip">${p.port}/${p.protocol} ${esc(p.service || "")}</span>`).join("")}</div>`;
+    }
+    if (a.urls && a.urls.length) {
+      html += `<h4>URLs (${a.urls.length})</h4><ul class="url-list">${a.urls.slice(0, 50).map(u => `<li><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a> <span class="code">${u.status_code || "-"}</span></li>`).join("")}</ul>`;
+    }
+    panel.innerHTML = html;
+  } catch (e) { /* silent */ }
 }
 
 function addFinding(f) {
@@ -62,20 +82,22 @@ function addFinding(f) {
   clearEmpty("findingsPanel");
   const div = document.createElement("div");
   div.className = "finding";
-  div.innerHTML = `<span class="severity-badge severity-${f.severity}">${esc(f.severity)}</span><div><div style="font-weight:700">${esc(f.title)}</div><div style="color:var(--muted);font-size:12px">confidence ${Number(f.confidence || 0).toFixed(2)} · ${esc(f.status)}</div></div>`;
+  div.innerHTML = `<span class="severity-badge severity-${esc(f.severity)}">${esc(f.severity)}</span><div><div style="font-weight:700">${esc(f.title)}</div><div style="color:var(--muted);font-size:12px">confidence ${Number(f.confidence || 0).toFixed(2)} · ${esc(f.status)}</div></div>`;
   container.appendChild(div);
-  state.findings += 1;
-  setText("findingsSummary", state.findings);
+  setText("findingsSummary", container.children.length);
 }
 
-function addHistoryItem(scan) {
-  const container = el("historyPanel");
-  clearEmpty("historyPanel");
-  const div = document.createElement("div");
-  div.className = "history-item";
-  div.innerHTML = `<div class="title">${esc(scan.root_domain)}</div><div class="meta">${esc(scan.status)} · ${esc(scan.profile)} · ${scan.created_at ? new Date(scan.created_at).toLocaleString("id-ID") : "-"}</div>`;
-  div.addEventListener("click", () => openHistoryScan(scan.id));
-  container.appendChild(div);
+async function loadFindings() {
+  if (!activeScan) return;
+  try {
+    const res = await fetch(`${API_BASE}/findings?scan_id=${encodeURIComponent(activeScan)}`);
+    const findings = await res.json();
+    const container = el("findingsPanel");
+    container.innerHTML = "";
+    if (!findings.length) { setEmpty("findingsPanel", "Belum ada finding."); return; }
+    findings.forEach((f) => addFinding(f));
+    setText("findingsSummary", findings.length);
+  } catch (e) { /* silent */ }
 }
 
 async function startScan() {
@@ -93,35 +115,46 @@ async function startScan() {
     el("startBtn").disabled = true;
     el("pauseBtn").disabled = false;
     el("stopBtn").disabled = false;
+    el("eventStream").innerHTML = ""; setEmpty("eventStream", "Scan dimulai...");
+    el("assetTree").innerHTML = ""; setEmpty("assetTree", "Menunggu asset...");
+    el("findingsPanel").innerHTML = ""; setEmpty("findingsPanel", "Belum ada finding.");
     connectEvents(activeScan);
+    treePollTimer = setInterval(refreshTree, 5000);
+    refreshTree();
   } catch (e) {
     alert("Gagal start scan: " + e.message);
   }
 }
 
 function connectEvents(scanId) {
-  const es = new EventSource(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events`);
+  if (es) es.close();
+  es = new EventSource(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events`);
   es.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
-    if (data.event_type === "asset.discovered") {
-      state.subdomains += 1;
-    } else if (data.event_type === "port.open") {
-      state.ports += 1;
-    } else if (data.event_type === "url.discovered") {
-      state.urls += 1;
-    } else if (data.event_type === "parameter.discovered") {
-      state.parameters += 1;
-    } else if (data.event_type === "finding.created") {
-      state.findings += 1;
-      addFinding({ title: data.message, severity: data.severity || "INFO", confidence: 0.7, status: "open" });
+    let data;
+    try { data = JSON.parse(ev.data); } catch (e) { return; }
+    if (data.event_type === "asset.discovered") { state.subdomains += 1; refreshTree(); }
+    else if (data.event_type === "port.open") state.ports += 1;
+    else if (data.event_type === "url.discovered") state.urls += 1;
+    else if (data.event_type === "parameter.discovered") state.parameters += 1;
+    else if (data.event_type === "finding.created") { state.findings += 1; loadFindings(); }
+    else if (data.event_type === "scan.completed") {
+      clearInterval(treePollTimer);
+      refreshTree(); loadFindings();
+      setText("scanStatus", "COMPLETED");
+      el("startBtn").disabled = false;
+      el("pauseBtn").disabled = true;
+      el("stopBtn").disabled = true;
+      es.close();
+    } else if (data.event_type === "scan.stopped" || data.event_type === "scan.failed") {
+      clearInterval(treePollTimer);
+      setText("scanStatus", data.event_type === "scan.stopped" ? "STOPPED" : "FAILED");
+      el("startBtn").disabled = false;
+      el("pauseBtn").disabled = true;
+      el("stopBtn").disabled = true;
     }
     addEvent(data);
   };
-  es.onerror = () => {
-    setText("scanStatus", "ERROR");
-    es.close();
-  };
-  window._currentEs = es;
+  es.onerror = () => { /* SSE reconnect auto; keep state */ };
 }
 
 async function loadHistory() {
@@ -129,19 +162,45 @@ async function loadHistory() {
   const scans = await res.json();
   const container = el("historyPanel");
   container.innerHTML = "";
-  if (!scans.length) {
-    setEmpty("historyPanel", "Belum ada history.");
-    return;
-  }
-  scans.forEach((s) => addHistoryItem(s));
+  if (!scans.length) { setEmpty("historyPanel", "Belum ada history."); return; }
+  scans.forEach((scan) => {
+    const div = document.createElement("div");
+    div.className = "history-item";
+    div.innerHTML = `<div class="title">${esc(scan.root_domain)}</div>
+      <div class="meta"><span class="pill pill-${fmtStatus(scan.status)}">${esc(scan.status)}</span> · ${esc(scan.profile)} · ${scan.created_at ? new Date(scan.created_at).toLocaleString("id-ID") : "-"} · assets ${(scan.progress && scan.progress.assets) || 0} · findings ${(scan.progress && scan.progress.findings) || 0}</div>`;
+    div.addEventListener("click", () => openHistoryScan(scan.id, scan.root_domain));
+    container.appendChild(div);
+  });
 }
 
-function openHistoryScan(scanId) {
-  // Placeholder: bisa kamu kembangkan jadi detail view
-  alert("History scan: " + scanId + "\nFitur detail history segera hadir.");
+async function openHistoryScan(scanId, domain) {
+  activeScan = scanId;
+  setText("scanStatus", "LOADED");
+  el("startBtn").disabled = false;
+  el("pauseBtn").disabled = true;
+  el("stopBtn").disabled = true;
+  el("target").value = domain || "";
+  document.querySelector('[data-route="/"]').click();
+  el("eventStream").innerHTML = ""; setEmpty("eventStream", "Stream history tidak diputar ulang. Lihat tree & findings.");
+  await refreshTree();
+  await loadFindings();
+  connectEvents(scanId);
+  treePollTimer = setInterval(refreshTree, 10000);
 }
+
+function setText(id, value) { const e = el(id); if (e) e.textContent = value; }
 
 document.addEventListener("DOMContentLoaded", () => {
+  // simple hash router
+  function route() {
+    const hash = location.hash || "#/";
+    const isHistory = hash.startsWith("#/history");
+    document.querySelector(".dashboard").classList.toggle("hidden", isHistory);
+    document.getElementById("historySection").classList.toggle("hidden", !isHistory);
+    document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === (isHistory ? "/history" : "/")));
+  }
+  window.addEventListener("hashchange", route);
+
   el("startBtn").addEventListener("click", startScan);
   el("pauseBtn").addEventListener("click", async () => {
     if (!activeScan) return;
@@ -152,18 +211,15 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!activeScan) return;
     await fetch(`${API_BASE}/scans/${encodeURIComponent(activeScan)}/stop`, { method: "POST" });
     setText("scanStatus", "STOPPED");
-    if (window._currentEs) window._currentEs.close();
+    if (es) es.close();
+    clearInterval(treePollTimer);
+    el("startBtn").disabled = false;
+    el("pauseBtn").disabled = true;
+    el("stopBtn").disabled = true;
   });
-  el("refreshTreeBtn").addEventListener("click", async () => {
-    if (!activeScan) return;
-    const res = await fetch(`${API_BASE}/assets/tree?scan_id=${encodeURIComponent(activeScan)}`);
-    const tree = await res.json();
-    el("assetTree").innerHTML = "";
-    if (!tree.length) {
-      setEmpty("assetTree", "Belum ada asset.");
-      return;
-    }
-    tree.forEach((node) => addAssetNode(node));
-  });
+  el("refreshTreeBtn").addEventListener("click", refreshTree);
   el("refreshHistoryBtn").addEventListener("click", loadHistory);
+
+  route();
+  loadHistory();
 });
