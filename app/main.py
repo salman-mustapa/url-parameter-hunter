@@ -262,6 +262,7 @@ class ScanManager:
         async with AsyncSessionLocal() as db:
             scan = ScanModel(id=scan_id, root_domain=root_domain, status="queued", profile=profile, options=options)
             db.add(scan)
+            await db.flush()  # ensure parent scan exists before FK-dependent rows
             ev = ScanEventModel(scan_id=scan_id, event_type="scan.created", severity="info", message=f"Scan queued for {root_domain}", data={"profile": profile, "options": options})
             db.add(ev)
             log = AuditLogModel(scan_id=scan_id, actor="api", action="scan.created", target=root_domain, details={"profile": profile})
