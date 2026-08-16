@@ -15,9 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.sanitizer import sanitize_text
 from app.models.models import Asset, Certificate, Technology, URL
 from app.scanners.base import ScanContext
 from app.services.results import result_service
+
 
 logger = logging.getLogger("scanner.http")
 
@@ -158,11 +160,9 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
                     severity="warn",
                 )
 
-from app.core.sanitizer import sanitize_text
-
-
         # Upsert URL Asset
         parsed = urlparse(url)
+
         port_num = parsed.port or (443 if scheme == "https" else 80)
         clean_url_str = sanitize_text(url)
         clean_title = sanitize_text(title)
