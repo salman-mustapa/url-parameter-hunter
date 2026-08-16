@@ -101,9 +101,48 @@ function getCategoryTagClass(cat) {
   return map[cat] || "tag-scan";
 }
 
+function renderStreamEvents() {
+  const container = el("eventStreamContainer");
+  container.innerHTML = "";
+  el("streamCount").textContent = `${state.events.length} events`;
+
+  const filtered = state.events.filter((ev) => {
+    if (state.currentCategoryFilter === "ALL") return true;
+    const cat = (ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO")).toUpperCase();
+    const normalizedCat = cat.startsWith("PARAM") ? "PARAM" : (cat.startsWith("TECH") ? "TECH" : cat);
+    return normalizedCat.includes(state.currentCategoryFilter);
+  });
+
+  if (!filtered.length) {
+    container.innerHTML = `<div class="event-empty-msg"><p>Tidak ada event untuk filter <strong>${esc(state.currentCategoryFilter)}</strong>.</p></div>`;
+    return;
+  }
+
+  filtered.forEach((ev) => {
+    const cat = (ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO")).toUpperCase();
+    const normalizedCat = cat.startsWith("PARAM") ? "PARAM" : (cat.startsWith("TECH") ? "TECH" : cat);
+    const ts = ev.created_at ? String(ev.created_at).slice(11, 19) : new Date().toLocaleTimeString();
+    const tagClass = getCategoryTagClass(normalizedCat);
+
+    const item = document.createElement("div");
+    item.className = "event-item";
+    item.dataset.category = normalizedCat;
+    item.innerHTML = `
+      <span class="event-time">[${esc(ts)}]</span>
+      <span class="event-tag ${tagClass}">${esc(normalizedCat)}</span>
+      <span class="event-msg">${esc(ev.message)}</span>
+    `;
+    container.appendChild(item);
+  });
+
+  if (el("autoScrollCheck").checked) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
 function addEventToStream(ev) {
   state.events.push(ev);
-  if (state.events.length > 800) state.events.shift();
+  if (state.events.length > 1000) state.events.shift();
 
   el("streamCount").textContent = `${state.events.length} events`;
 
@@ -141,40 +180,9 @@ function addEventToStream(ev) {
 
 function filterStreamEvents(filterCat) {
   state.currentCategoryFilter = filterCat;
-  const container = el("eventStreamContainer");
-  container.innerHTML = "";
-
-  const filtered = state.events.filter((ev) => {
-    if (filterCat === "ALL") return true;
-    const cat = (ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO")).toUpperCase();
-    return cat.includes(filterCat);
-  });
-
-  if (!filtered.length) {
-    container.innerHTML = `<div class="event-empty-msg"><p>Tidak ada event untuk filter <strong>${esc(filterCat)}</strong>.</p></div>`;
-    return;
-  }
-
-  filtered.forEach((ev) => {
-    const cat = (ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO")).toUpperCase();
-    const normalizedCat = cat.startsWith("PARAM") ? "PARAM" : (cat.startsWith("TECH") ? "TECH" : cat);
-    const ts = ev.created_at ? String(ev.created_at).slice(11, 19) : new Date().toLocaleTimeString();
-    const tagClass = getCategoryTagClass(normalizedCat);
-
-    const item = document.createElement("div");
-    item.className = "event-item";
-    item.innerHTML = `
-      <span class="event-time">[${esc(ts)}]</span>
-      <span class="event-tag ${tagClass}">${esc(normalizedCat)}</span>
-      <span class="event-msg">${esc(ev.message)}</span>
-    `;
-    container.appendChild(item);
-  });
-
-  if (el("autoScrollCheck").checked) {
-    container.scrollTop = container.scrollHeight;
-  }
+  renderStreamEvents();
 }
+
 
 // --------------------------------------------------------------------------
 // Scan Controls
@@ -897,21 +905,75 @@ async function openHistoricalScan(scanId, domain) {
   el("scanIdDisplay").textContent = `ID: ${scanId}`;
   el("scanIdDisplay").classList.remove("hidden");
 
-  updateScanStatusUI("COMPLETED");
-
-  // Switch to Dashboard
-  document.querySelector('.nav-link[data-tab="dashboard"]').click();
+  // Switch tab view to Dashboard
+  const dashTab = document.querySelector('.nav-link[data-tab="dashboard"]');
+  if (dashTab) dashTab.click();
 
   el("eventStreamContainer").innerHTML = `
     <div class="event-empty-msg">
-      <span class="empty-icon">📁</span>
-      <p>Scan riwayat dibuka: <strong>${esc(scanId)}</strong>. Lihat Asset Tree & Findings.</p>
+      <span class="empty-icon">⏳</span>
+      <p>Memuat data dan timeline scan <strong>${esc(scanId)}</strong>...</p>
     </div>
   `;
 
-  await refreshAssetTree();
-  await loadFindings();
+  try {
+    // 1. Fetch scan status and details
+    const scanRes = await fetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}`);
+    const scanData = await scanRes.json();
+    const scanStatus = (scanData.status || "completed").toUpperCase();
+    updateScanStatusUI(scanStatus);
+
+    if (scanData.profile) {
+      el("profileSelect").value = scanData.profile;
+    }
+
+    // 2. Fetch and render historical event stream
+    const eventsRes = await fetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events/history`);
+    const eventsData = await eventsRes.json();
+    state.events = Array.isArray(eventsData) ? eventsData : [];
+    renderStreamEvents();
+
+    // 3. Update telemetry counters from progress
+    const prog = scanData.progress || {};
+    state.counters.assets = prog.assets || 0;
+    state.counters.ports = prog.ports || 0;
+    state.counters.urls = prog.urls || 0;
+    state.counters.params = prog.parameters || 0;
+    state.counters.techs = prog.technologies || 0;
+    state.counters.findings = prog.findings || 0;
+    updateCounterDisplays();
+
+    // 4. If RUNNING or QUEUED, connect to live SSE stream & start timer
+    if (scanStatus === "RUNNING" || scanStatus === "QUEUED") {
+      startTimer();
+      connectEventSource(scanId);
+      clearInterval(state.treePollInterval);
+      state.treePollInterval = setInterval(refreshAssetTree, 4000);
+    } else {
+      stopTimer();
+      if (state.es) state.es.close();
+      clearInterval(state.treePollInterval);
+      if (scanData.created_at && scanData.completed_at) {
+        const start = new Date(scanData.created_at).getTime();
+        const end = new Date(scanData.completed_at).getTime();
+        const elapsed = Math.max(0, Math.round((end - start) / 1000));
+        el("scanTime").classList.remove("hidden");
+        el("scanTime").textContent = `⏱ ${formatTime(elapsed)}`;
+      }
+    }
+
+    // 5. Load Asset Tree & Findings
+    await refreshAssetTree();
+    await loadFindings();
+
+  } catch (err) {
+    console.error("Gagal membuka riwayat scan:", err);
+    updateScanStatusUI("COMPLETED");
+    await refreshAssetTree();
+    await loadFindings();
+  }
 }
+
 
 // --------------------------------------------------------------------------
 // Differential Scan (Diff)

@@ -30,7 +30,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Bug Hunter API", version="0.4.0", lifespan=lifespan)
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+
+
+app = FastAPI(
+    title="Hunter Aja — Attack Surface & Parameter API",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,6 +62,27 @@ async def ready():
     return {"ready": await ping()}
 
 
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui():
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="Hunter Aja API — Interactive Documentation",
+        swagger_js_url="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.0/swagger-ui-bundle.min.js",
+        swagger_css_url="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.0/swagger-ui.min.css",
+        swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc():
+    return get_redoc_html(
+        openapi_url="/openapi.json",
+        title="Hunter Aja API — ReDoc Reference",
+        redoc_js_url="https://cdnjs.cloudflare.com/ajax/libs/redoc/2.1.3/redoc.standalone.js",
+        redoc_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception: %s", exc)
@@ -68,7 +98,7 @@ async def root():
     index = frontend_path / "index.html"
     if index.exists():
         return FileResponse(index)
-    return {"message": "Bug Hunter API", "docs": "/docs", "version": "0.4.0"}
+    return {"message": "Hunter Aja API", "docs": "/docs", "version": "1.0.0"}
 
 
 if frontend_path.exists():
@@ -79,6 +109,8 @@ if frontend_path.exists():
 
     @app.get("/{full_path:path}")
     async def serve_frontend(request: Request, full_path: str):
+        if full_path in ("docs", "redoc", "openapi.json") or full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         path = frontend_path / full_path
         if full_path and path.exists() and path.is_file():
             return FileResponse(path)

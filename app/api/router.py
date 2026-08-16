@@ -135,9 +135,28 @@ async def scan_events(scan_id: str):
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
 
+@router.get("/scans/{scan_id}/events/history")
+async def get_scan_events_history(scan_id: str, db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(ScanEvent.created_at.asc())
+    )).scalars().all()
+    return [
+        {
+            "scan_id": ev.scan_id,
+            "event_type": ev.event_type,
+            "category": ev.event_type.split(".")[0].upper() if "." in ev.event_type else ev.event_type.upper(),
+            "severity": ev.severity,
+            "message": ev.message,
+            "data": ev.data or {},
+            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+        }
+        for ev in rows
+    ]
+
 
 @router.get("/assets/tree")
 async def tree(scan_id: str = Query(...), db: AsyncSession = Depends(get_db)):
+
     return await asset_tree(db, scan_id)
 
 
