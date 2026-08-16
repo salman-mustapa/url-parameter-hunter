@@ -259,3 +259,70 @@ async def list_audit(scan_id: Optional[str] = Query(None), db: AsyncSession = De
          "target": a.target, "details": a.details or {}, "created_at": a.created_at.isoformat() if a.created_at else None}
         for a in rows
     ]
+
+
+@router.get("/scans/{scan_id}/export")
+async def export_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    from app.models.models import Certificate, Finding, Observation, Parameter, Port, Technology, URL
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    asset_ids = [a.id for a in assets]
+
+    ports = (await db.execute(select(Port).where(Port.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    urls = (await db.execute(select(URL).where(URL.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    url_ids = [u.id for u in urls]
+    params = (await db.execute(select(Parameter).where(Parameter.url_id.in_(url_ids)))).scalars().all() if url_ids else []
+    techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    certs = (await db.execute(select(Certificate).where(Certificate.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+    observations = (await db.execute(select(Observation).where(Observation.scan_id == scan_id))).scalars().all()
+
+    return {
+        "scan": {
+            "id": scan.id,
+            "root_domain": scan.root_domain,
+            "status": scan.status,
+            "profile": scan.profile,
+            "created_at": scan.created_at.isoformat() if scan.created_at else None,
+            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "progress": scan.progress or {},
+        },
+        "statistics": {
+            "total_assets": len(assets),
+            "total_ports": len(ports),
+            "total_urls": len(urls),
+            "total_parameters": len(params),
+            "total_technologies": len(techs),
+            "total_certificates": len(certs),
+            "total_findings": len(findings),
+            "total_observations": len(observations),
+        },
+        "assets": [
+            {"id": a.id, "type": a.asset_type, "hostname": a.hostname, "ip": a.ip, "depth": a.depth, "parent_id": a.parent_id, "discovered_from": a.discovered_from}
+            for a in assets
+        ],
+        "ports": [
+            {"asset_id": p.asset_id, "ip": p.ip, "port": p.port, "protocol": p.protocol, "service": p.service, "banner": p.banner}
+            for p in ports
+        ],
+        "urls": [
+            {"asset_id": u.asset_id, "url": u.url, "status_code": u.status_code, "title": u.title, "content_type": u.content_type}
+            for u in urls
+        ],
+        "parameters": [
+            {"url_id": pr.url_id, "name": pr.name, "location": pr.location, "type": pr.type}
+            for pr in params
+        ],
+        "technologies": [
+            {"asset_id": t.asset_id, "name": t.name, "version": t.version, "evidence": t.evidence}
+            for t in techs
+        ],
+        "findings": [
+            {"id": f.id, "title": f.title, "severity": f.severity, "type": f.finding_type, "description": f.description, "evidence": f.evidence, "status": f.status}
+            for f in findings
+        ],
+    }

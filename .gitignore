@@ -3,4 +3,10 @@ __pycache__/
 .venv/
 storage/
 logs/
+data/
+*.db
+*.sqlite
+*.sqlite3
 .env
+bug_hunting_platform_architecture.md
+

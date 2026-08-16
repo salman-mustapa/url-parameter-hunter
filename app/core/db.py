@@ -4,7 +4,14 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
+is_sqlite = settings.database_url.startswith("sqlite")
+engine_kwargs = {"echo": False}
+if not is_sqlite:
+    engine_kwargs["pool_pre_ping"] = True
+else:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_async_engine(settings.database_url, **engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -18,7 +25,7 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    from app.models import models  # noqa: F401  ensure models registered
+    from app.models import models  # noqa: F401 ensure models registered
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

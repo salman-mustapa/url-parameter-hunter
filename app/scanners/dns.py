@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
-from typing import Any
+from typing import Any, List, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,87 +15,150 @@ from app.services.results import result_service
 logger = logging.getLogger("scanner.dns")
 
 
-async def _resolve(host: str, qtype: str = "A") -> list[str]:
-    loop = asyncio.get_event_loop()
+async def _resolve_socket(host: str) -> list[str]:
+    loop = asyncio.get_running_loop()
     try:
         answers = await loop.run_in_executor(None, socket.getaddrinfo, host, None)
-        return [addr[4][0] for addr in answers if addr[0] in (socket.AF_INET, socket.AF_INET6)][:10]
-    except socket.gaierror:
-        return []
+        return list(dict.fromkeys(
+            addr[4][0] for addr in answers if addr[0] in (socket.AF_INET, socket.AF_INET6)
+        ))[:10]
     except Exception:
         return []
 
 
-async def _dns_query(host: str, qtype: str = "A") -> list[str]:
-    import dns.resolver
-    from dns.resolver import NXDOMAIN, NoAnswer
+async def _query_dns_records(host: str) -> dict[str, list[str]]:
+    """Query DNS A, AAAA, CNAME, MX, TXT, NS records with timeout."""
+    loop = asyncio.get_running_loop()
 
-    resolver = dns.resolver.Resolver()
-    resolver.timeout = 5
-    resolver.lifetime = 5
+    def do_queries() -> dict[str, list[str]]:
+        import dns.resolver
+        from dns.resolver import NXDOMAIN, NoAnswer
+
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 3.0
+        resolver.lifetime = 3.0
+        records: dict[str, list[str]] = {"A": [], "AAAA": [], "CNAME": [], "MX": [], "TXT": [], "NS": []}
+
+        for qtype in ("A", "AAAA", "CNAME", "MX", "TXT", "NS"):
+            try:
+                answers = resolver.resolve(host, qtype)
+                if qtype == "CNAME":
+                    records[qtype] = [str(r.target).rstrip(".") for r in answers]
+                elif qtype == "MX":
+                    records[qtype] = [f"{r.preference} {str(r.exchange).rstrip('.')}" for r in answers]
+                else:
+                    records[qtype] = [str(r).strip('"') for r in answers]
+            except Exception:
+                pass
+        return records
+
     try:
-        answers = resolver.resolve(host, qtype)
-        return [str(r) for r in answers]
-    except (NoAnswer, NXDOMAIN, dns.resolver.LifetimeTimeout, Exception):
-        return []
-
-
-async def _cname_query(host: str) -> str | None:
-    import dns.resolver
-    from dns.resolver import NXDOMAIN, NoAnswer
-
-    resolver = dns.resolver.Resolver()
-    resolver.timeout = 5
-    resolver.lifetime = 5
-    try:
-        answers = resolver.resolve(host, "CNAME")
-        for a in answers:
-            return str(a.target).rstrip(".")
-    except (NoAnswer, NXDOMAIN, dns.resolver.LifetimeTimeout, Exception):
-        return None
+        return await loop.run_in_executor(None, do_queries)
+    except Exception:
+        return {"A": [], "AAAA": [], "CNAME": [], "MX": [], "TXT": [], "NS": []}
 
 
 async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
-    await ctx.emit("scan.dns", f"DNS resolution for {root_domain}")
+    """DNS Enrichment & DNS Asset Mapping."""
+    await ctx.emit("scan.dns", f"Enriching DNS records and mapping IPs for {root_domain}", severity="info")
 
     assets = (await db.execute(
-        select(Asset).where(Asset.scan_id == ctx.scan_id, Asset.asset_type.in_(["domain", "subdomain"]))
+        select(Asset).where(
+            Asset.scan_id == ctx.scan_id,
+            Asset.asset_type.in_(["domain", "subdomain"]),
+        )
     )).scalars().all()
 
     for asset in assets:
         if not asset.hostname:
             continue
+
         await ctx.rate_limiter.wait()
+        dns_data = await _query_dns_records(asset.hostname)
 
-        cname = await _cname_query(asset.hostname)
-        if cname and not ctx.scope.host_allowed(cname):
-            await ctx.emit("scope.denied",
-                           f"CNAME {asset.hostname} -> {cname} out of scope, skip",
-                           hostname=asset.hostname, cname=cname, severity="warn")
-            continue
-        if cname:
-            asset.metadata_ = {**(asset.metadata_ or {}), "cname": cname}
-
-        a_records = await _dns_query(asset.hostname, "A")
-        aaaa_records = await _dns_query(asset.hostname, "AAAA")
+        # Fallback socket lookup if dnspython returned no A/AAAA
+        a_records = dns_data.get("A", [])
+        aaaa_records = dns_data.get("AAAA", [])
+        cname_records = dns_data.get("CNAME", [])
+        
         if not a_records and not aaaa_records:
-            continue
+            sock_ips = await _resolve_socket(asset.hostname)
+            for ip in sock_ips:
+                if ":" in ip:
+                    aaaa_records.append(ip)
+                else:
+                    a_records.append(ip)
 
-        asset.ip = (a_records or aaaa_records)[0]
-        asset.status = "resolved"
+        all_ips = list(dict.fromkeys(a_records + aaaa_records))
+        cname = cname_records[0] if cname_records else None
+
+        # Check CNAME Scope & potential takeover observation
+        if cname:
+            if not ctx.scope.host_allowed(cname):
+                # CNAME points out of scope (e.g. AWS S3, Cloudflare, Github Pages, Heroku)
+                await ctx.emit(
+                    "observation.recorded",
+                    f"External CNAME detected: {asset.hostname} -> {cname}",
+                    hostname=asset.hostname,
+                    cname=cname,
+                    asset_id=asset.id,
+                    severity="info",
+                )
+
+        # Update Asset metadata
+        meta = dict(asset.metadata_ or {})
+        meta.update({
+            "dns_a": a_records,
+            "dns_aaaa": aaaa_records,
+            "dns_cname": cname_records,
+            "dns_mx": dns_data.get("MX", []),
+            "dns_txt": dns_data.get("TXT", []),
+            "dns_ns": dns_data.get("NS", []),
+            "cname": cname,
+            "active": bool(all_ips or cname),
+        })
+        asset.metadata_ = meta
+
+        if all_ips:
+            asset.ip = all_ips[0]
+            asset.status = "resolved"
+        elif cname:
+            asset.status = "cname_only"
+
         await db.commit()
 
-        await ctx.emit("dns.resolved", f"{asset.hostname} -> {', '.join(a_records or aaaa_records)}",
-                       hostname=asset.hostname, a=a_records, aaaa=aaaa_records,
-                       cname=cname, asset_id=asset.id)
+        if all_ips or cname:
+            msg = f"DNS: {asset.hostname} -> " + (", ".join(all_ips) if all_ips else f"CNAME {cname}")
+            await ctx.emit(
+                "dns.resolved",
+                msg,
+                hostname=asset.hostname,
+                a=a_records,
+                aaaa=aaaa_records,
+                cname=cname,
+                mx=dns_data.get("MX", []),
+                txt=dns_data.get("TXT", []),
+                asset_id=asset.id,
+                severity="info",
+            )
 
-        # create IP assets
-        for ip in (a_records + aaaa_records):
+        # Create distinct IP assets for Attack Surface graph
+        for ip in all_ips:
             if not ctx.scope.ip_allowed(ip) and ctx.options.get("strict_scope"):
                 continue
-            ip_asset = await result_service.upsert_asset(
-                db, scan_id=ctx.scan_id, asset_type="ip", fingerprint=ip,
-                ip=ip, parent_id=asset.id, discovered_from=["dns"],
-                metadata={"a": a_records, "aaaa": aaaa_records},
+
+            await result_service.upsert_asset(
+                db,
+                scan_id=ctx.scan_id,
+                asset_type="ip",
+                fingerprint=ip,
+                ip=ip,
+                depth=asset.depth + 1,
+                parent_id=asset.id,
+                discovered_from=["dns_resolution"],
+                metadata={
+                    "associated_host": asset.hostname,
+                    "is_ipv6": ":" in ip,
+                },
             )
             await db.commit()
