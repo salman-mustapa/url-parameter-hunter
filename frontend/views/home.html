@@ -1,0 +1,288 @@
+<!-- VIEW 1: HOME / LANDING PAGE (Modern, Clean, Captivating & Engaging) -->
+<section id="viewHome" class="tab-view active">
+  <!-- Hero Header Section -->
+  <div class="hero-section">
+    <div class="hero-badge">
+      <span class="live-dot pulse"></span>
+      <span>NEXT-GEN ATTACK SURFACE INTELLIGENCE</span>
+    </div>
+    <h1 class="hero-title">
+      Temukan Attack Surface & Parameter Tersembunyi <span class="highlight">dalam Hitungan Detik</span>
+    </h1>
+    <p class="hero-desc">
+      Platform otomatisasi reconnaissance cerdas untuk Bug Hunter & Security Analyst. Validasi subdomain aktif,
+      crawling endpoint, ekstraksi parameter dinamis, dan deteksi risiko dalam satu antarmuka terpadu.
+    </p>
+  </div>
+
+  <!-- Quick Scan Sandbox Box -->
+  <div id="homeTrialSection" class="card sketch-card control-card home-trial-card">
+    <div class="control-header">
+      <div class="control-title-wrap">
+        <span class="section-icon">⚡</span>
+        <div>
+          <h2>Reconnaissance Sandbox</h2>
+          <div class="pill-muted" style="font-size: 12.5px; margin-top: 2px;">
+            ⚡ Uji coba reconnaissance langsung pada target domain Anda secara instan.
+          </div>
+        </div>
+      </div>
+      <div class="status-wrap">
+        <span id="trialScanStatus" class="pill pill-running">READY</span>
+      </div>
+    </div>
+
+    <div class="control-form">
+      <div class="input-group-target">
+        <label for="trialTargetInput">Target Domain / Host URL</label>
+        <div class="input-with-icon">
+          <span class="input-icon">🌐</span>
+          <input id="trialTargetInput" type="text"
+            placeholder="Masukkan target (contoh: example.com atau google.com)" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="input-group-option">
+        <label for="trialScopeModeSelect">Target Scope & Mode</label>
+        <select id="trialScopeModeSelect" class="custom-select">
+          <option value="recursive" selected>🌐 Full Domain Recon (Buru Semua Subdomain, Ports, Endpoints & Leaks)</option>
+          <option value="targeted">🎯 Focused Single Endpoint (Audit Khusus URL / Host Ini)</option>
+        </select>
+      </div>
+
+      <div class="input-group-option engine-status-group">
+        <label>AI & Security Engine</label>
+        <div class="engine-status-pill">
+          <span class="live-dot pulse"></span>
+          <span>Full Power (10+ Tools & AI)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="control-actions">
+      <button id="startTrialBtn" class="btn btn-primary btn-lg">
+        <span class="btn-icon">🚀</span> MULAI SCAN SEKARANG
+      </button>
+      <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
+        <span class="btn-icon">🔑</span> Masuk untuk Scan Tanpa Batas
+      </button>
+    </div>
+
+    <!-- Quick Suggestion Chips -->
+    <div class="quick-samples-row">
+      <span class="quick-sample-label">Contoh Target Cepat:</span>
+      <button type="button" class="sample-chip" data-sample="example.com">⚡ example.com</button>
+      <button type="button" class="sample-chip" data-sample="google.com">🌐 google.com</button>
+      <button type="button" class="sample-chip" data-sample="facebook.com">👥 facebook.com</button>
+      <button type="button" class="sample-chip" data-sample="tesla.com">🎯 tesla.com</button>
+    </div>
+  </div>
+
+  <!-- Trust Signals & Architecture Highlights -->
+  <div class="trust-signals-bar">
+    <div class="trust-signal-item">
+      <span class="trust-icon">🛡️</span>
+      <div>
+        <strong>100% Non-Destructive</strong>
+        <p>Pemindaian aman berbasis inspeksi pasif & standard probing.</p>
+      </div>
+    </div>
+    <div class="trust-signal-item">
+      <span class="trust-icon">🌳</span>
+      <div>
+        <strong>Active DNS Validation</strong>
+        <p>Hanya subdomain aktif & tervalidasi yang ditampilkan di pohon aset.</p>
+      </div>
+    </div>
+    <div class="trust-signal-item">
+      <span class="trust-icon">🧩</span>
+      <div>
+        <strong>Dynamic Parameter Mining</strong>
+        <p>Ekstraksi otomatis form action, query string, dan hidden inputs.</p>
+      </div>
+    </div>
+    <div class="trust-signal-item">
+      <span class="trust-icon">🔒</span>
+      <div>
+        <strong>Zero-Lost Scan Attribution</strong>
+        <p>Hasil scan trial otomatis diklaim ke akun Anda saat mendaftar.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive 3-Step "How It Works" Flow -->
+  <div class="how-it-works-section">
+    <div class="section-heading-center">
+      <span class="badge-pill">Cara Kerja Engine</span>
+      <h2>Alur Reconnaissance 3 Langkah</h2>
+      <p>Bagaimana Hunter Aja memetakan attack surface target Anda secara menyeluruh dalam hitungan menit.</p>
+    </div>
+
+    <div class="workflow-steps-grid">
+      <div class="card sketch-card workflow-step-card">
+        <div class="step-badge">Langkah 1</div>
+        <div class="step-icon">🎯</div>
+        <h3>Input Scope Target</h3>
+        <p>Masukkan root domain (misal <code>example.com</code>) atau host spesifik (misal
+          <code>api.example.com</code>) dengan opsi recursive subdomain.</p>
+      </div>
+
+      <div class="card sketch-card workflow-step-card">
+        <div class="step-badge">Langkah 2</div>
+        <div class="step-icon">⚡</div>
+        <h3>Parallel Discovery Engine</h3>
+        <p>Engine menjalankan DNS active validation, TCP port scanning, TLS cert audit, web endpoint crawling, dan
+          parameter mining secara paralel.</p>
+      </div>
+
+      <div class="card sketch-card workflow-step-card">
+        <div class="step-badge">Langkah 3</div>
+        <div class="step-icon">📊</div>
+        <h3>Visual Graph & Triaging</h3>
+        <p>Hasil pemindaian tersusun rapi dalam pohon aset hierarkis, live event stream, matriks port global,
+          serta klasifikasi tingkat keparahan risiko.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Visual Feature Showcase Grid -->
+  <div id="homeFeaturesSection" class="features-showcase-section">
+    <div class="section-heading-center">
+      <span class="badge-pill">Fitur Unggulan</span>
+      <h2>Platform Intelijen Penetrasi Modern</h2>
+      <p>Dirancang dengan visual yang clean, intuitif, dan responsif untuk bug hunter dan penetration tester profesional.</p>
+    </div>
+
+    <div class="features-grid">
+      <!-- Feature 1 -->
+      <div class="card sketch-card feature-card">
+        <div class="feature-icon">🌳</div>
+        <h3>Dynamic Subdomain Tree</h3>
+        <p>Mengumpulkan subdomain dari Certificate Transparency (crt.sh), AlienVault OTX, HackerTarget, dan brute-force wordlists dengan validasi DNS dinamis.</p>
+        <div class="feature-mini-preview">
+          <div class="mini-node-item root"><span class="dot-active"></span> target.com <span class="mini-tag">ROOT</span></div>
+          <div class="mini-node-item sub"><span class="dot-active"></span> api.target.com <span class="mini-tag">104.21.4.1</span></div>
+          <div class="mini-node-item sub"><span class="dot-active"></span> app.target.com <span class="mini-tag">103.111.20.5</span></div>
+        </div>
+      </div>
+
+      <!-- Feature 2 -->
+      <div class="card sketch-card feature-card">
+        <div class="feature-icon">🧩</div>
+        <h3>Deep Parameter Hunter</h3>
+        <p>Menemukan parameter URL dari tautan aktif, form action, input query string, dan payload endpoint tersembunyi secara otomatis.</p>
+        <div class="feature-mini-preview mini-tags-wrap">
+          <span class="mini-chip-param">?redirect_url=</span>
+          <span class="mini-chip-param">?token=</span>
+          <span class="mini-chip-param">?query=</span>
+          <span class="mini-chip-param">?id=</span>
+        </div>
+      </div>
+
+      <!-- Feature 3 -->
+      <div class="card sketch-card feature-card">
+        <div class="feature-icon">📡</div>
+        <h3>Port & Service Matrix</h3>
+        <p>Inspeksi port jaringan non-destruktif, identifikasi service banner, serta analisis sertifikat TLS/SSL untuk mendeteksi celah eksposur.</p>
+        <div class="feature-mini-preview mini-tags-wrap">
+          <span class="mini-chip-port http">80 HTTP</span>
+          <span class="mini-chip-port https">443 HTTPS</span>
+          <span class="mini-chip-port alt">8080 ALT</span>
+          <span class="mini-chip-port db">3306 DB</span>
+        </div>
+      </div>
+
+      <!-- Feature 4 -->
+      <div class="card sketch-card feature-card">
+        <div class="feature-icon">🛡️</div>
+        <h3>Instant Security Triaging</h3>
+        <p>Klasifikasi otomatis temuan keamanan berbasis heuristik: CORS misconfiguration, sensitive header leaks, dan open directory status.</p>
+        <div class="feature-mini-preview mini-tags-wrap">
+          <span class="mini-chip-sev crit">🔴 CORS Wildcard</span>
+          <span class="mini-chip-sev high">🟠 Directory Listing</span>
+          <span class="mini-chip-sev med">🟡 Missing CSP</span>
+        </div>
+      </div>
+
+      <!-- Feature 5 -->
+      <div class="card sketch-card feature-card">
+        <div class="feature-icon">⚖️</div>
+        <h3>Differential Scan (Diff)</h3>
+        <p>Bandingkan dua pemindaian berbeda untuk mengidentifikasi aset baru yang terbuka, subdomain baru, dan perubahan attack surface.</p>
+        <div class="feature-mini-preview mini-tags-wrap">
+          <span class="mini-chip-diff add">+3 Subdomain Baru</span>
+          <span class="mini-chip-diff rem">-1 Port Ditutup</span>
+        </div>
+      </div>
+
+      <!-- Feature 6 -->
+      <div class="card sketch-card feature-card">
+        <div class="feature-icon">🔒</div>
+        <h3>Anti-Abuse & RBAC Privacy</h3>
+        <p>Sistem uji coba cerdas dengan proteksi sidik jari perangkat, isolasi riwayat pemindaian antar pengguna, dan audit pengawasan admin.</p>
+        <div class="feature-mini-preview mini-tags-wrap">
+          <span class="mini-chip-auth">🔒 Device Protected</span>
+          <span class="mini-chip-auth">👤 Auto Scan Claim</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FAQ Section -->
+  <div class="faq-section">
+    <div class="section-heading-center">
+      <span class="badge-pill">FAQ</span>
+      <h2>Pertanyaan yang Sering Diajukan</h2>
+      <p>Jawaban atas pertanyaan seputar cara kerja, keamanan, dan batasan penggunaan platform.</p>
+    </div>
+
+    <div class="faq-accordion-list">
+      <div class="card sketch-card faq-item">
+        <div class="faq-question">
+          <h4>Apakah proses scanning aman dan tidak merusak server target?</h4>
+          <span class="faq-toggle-icon">➕</span>
+        </div>
+        <div class="faq-answer">
+          <p>Ya, 100% aman dan non-destruktif. Hunter Aja hanya melakukan inspeksi pasif OSINT, resolusi DNS
+            aktif, probing port ringan, dan web crawling standar tanpa mengirimkan payload eksploitasi berbahaya.</p>
+        </div>
+      </div>
+
+      <div class="card sketch-card faq-item">
+        <div class="faq-question">
+          <h4>Bagaimana cara kerja uji coba reconnaissance untuk pengguna baru?</h4>
+          <span class="faq-toggle-icon">➕</span>
+        </div>
+        <div class="faq-answer">
+          <p>Setiap perangkat fisik yang belum memiliki akun dapat mencoba pemindaian reconnaissance langsung
+            secara instan. Sidik jari perangkat akan mencatat sesi uji coba tersebut, dan saat Anda mendaftar akun
+            baru, seluruh hasil temuan scan tersebut otomatis diklaim ke akun Anda.</p>
+        </div>
+      </div>
+
+      <div class="card sketch-card faq-item">
+        <div class="faq-question">
+          <h4>Apa perbedaan opsi Recursive Subdomains vs Target-Only?</h4>
+          <span class="faq-toggle-icon">➕</span>
+        </div>
+        <div class="faq-answer">
+          <p>Jika opsi <strong>Recursive Subdomains</strong> dicentang, engine akan memburu seluruh subdomain yang
+            berinduk pada domain tersebut. Jika tidak dicentang, engine akan memindai secara spesifik hanya pada
+            host/subdomain yang Anda masukkan.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Call to Action Banner on Landing Page -->
+  <div class="card sketch-card cta-banner-card">
+    <div class="cta-content">
+      <h2>Siap Memburu Attack Surface Hari Ini?</h2>
+      <p>Daftar sekarang secara gratis untuk mendapatkan akses pemindaian penuh, riwayat tersimpan, dan diff analyzer tanpa batas.</p>
+      <div class="cta-actions">
+        <button id="ctaRegisterBtn" class="btn btn-primary btn-lg">✨ Buat Akun Gratis Sekarang</button>
+        <button id="ctaLoginBtn" class="btn btn-secondary btn-lg">🔑 Masuk ke Dashboard</button>
+      </div>
+    </div>
+  </div>
+</section>

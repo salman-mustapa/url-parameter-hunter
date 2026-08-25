@@ -1,0 +1,153 @@
+<!-- VIEW 4: PUSAT LAPORAN KEAMANAN & ASSESSMENT CENTER (V5 §31-§35) -->
+<section id="viewReports" class="tab-view hidden">
+  <!-- Reports Level Breadcrumb Navigation -->
+  <nav id="reportsBreadcrumb" class="breadcrumb-nav">
+    <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+    <span class="breadcrumb-sep">›</span>
+    <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+    <span class="breadcrumb-sep">›</span>
+    <a href="#" class="breadcrumb-link" data-action="goReports">📑 Pusat Laporan</a>
+    <span class="breadcrumb-sep">›</span>
+    <span id="reportsBreadcrumbScan" class="breadcrumb-current">Semua Laporan</span>
+  </nav>
+
+  <div class="card sketch-card reports-hub-card">
+    <div class="card-header-flex">
+      <div class="title-with-icon">
+        <span class="section-icon">📑</span>
+        <div>
+          <h2>Pusat Laporan & Professional Disclosure Hub</h2>
+          <div class="pill-muted text-xs">Arsitektur Pelaporan Eksekutif, Bukti Tervalidasi E3/E4, dan Panduan Remediasi.</div>
+        </div>
+      </div>
+      <div class="report-top-selector">
+        <label class="text-xs font-bold">Pilih Sesi Scan Target:</label>
+        <select id="reportScanSelect" class="custom-select" style="min-width: 260px;"></select>
+        <button id="refreshReportHubBtn" class="btn btn-secondary btn-sm">🔄 Refresh</button>
+      </div>
+    </div>
+
+    <!-- 1. Executive Summary & Risk Scoring (§31) -->
+    <div class="report-executive-banner">
+      <div class="exec-banner-left">
+        <span class="exec-target-badge" id="reportTargetBadge">TARGET: -</span>
+        <h3 id="reportExecTitle" class="exec-title">Security Assessment Summary</h3>
+        <p id="reportExecDesc" class="exec-desc">
+          Ringkasan penilaian keamanan komprehensif berdasarkan telemetri tervalidasi dan audit Proof Quality Gate.
+        </p>
+        <div class="exec-meta-chips">
+          <span class="pill pill-neutral font-mono" id="reportScanIdChip">Scan ID: -</span>
+          <span class="pill pill-neutral" id="reportDateChip">Tanggal: -</span>
+          <span class="pill pill-success" id="reportAuthChip">Scope: AUTHORIZED</span>
+        </div>
+      </div>
+      <div class="exec-banner-right">
+        <div class="risk-gauge-card">
+          <span class="risk-gauge-label">Composite Risk Rating</span>
+          <span class="risk-gauge-val" id="reportRiskGauge">0.0</span>
+          <span class="risk-gauge-status" id="reportRiskStatus">INFORMATIONAL</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Telemetry & Attack Surface Exposure Breakdown -->
+    <div class="report-metrics-grid">
+      <div class="rep-stat-card">
+        <span class="rep-stat-num" id="repStatAssets">0</span>
+        <span class="rep-stat-title">Subdomain Terpetakan</span>
+      </div>
+      <div class="rep-stat-card">
+        <span class="rep-stat-num" id="repStatPorts">0</span>
+        <span class="rep-stat-title">Port Terbuka</span>
+      </div>
+      <div class="rep-stat-card">
+        <span class="rep-stat-num" id="repStatUrls">0</span>
+        <span class="rep-stat-title">Endpoint URL</span>
+      </div>
+      <div class="rep-stat-card">
+        <span class="rep-stat-num" id="repStatParams">0</span>
+        <span class="rep-stat-title">Parameter Discovered</span>
+      </div>
+      <div class="rep-stat-card">
+        <span class="rep-stat-num text-danger" id="repStatFindings">0</span>
+        <span class="rep-stat-title">Temuan Terkonfirmasi</span>
+      </div>
+    </div>
+
+    <!-- 3. Professional Export & Disclosure Suite (§31-§35) -->
+    <div class="report-export-section">
+      <h3 class="section-title-sm">📦 1-Click Professional Export Suite (V7.1 Architecture)</h3>
+      <p class="section-subtext">Hasilkan laporan terstruktur siap kirim untuk eksekutif, auditor, bug bounty platform, maupun riset CVE.</p>
+
+      <div class="export-suite-grid">
+        <!-- PDF -->
+        <div class="export-card">
+          <div class="export-card-icon">📑</div>
+          <div class="export-card-content">
+            <h4>Executive Audit Report (PDF)</h4>
+            <p>Laporan resmi berstandar audit korporat lengkap dengan kop dokumen, ringkasan telemetri, matriks port, dan PoC.</p>
+          </div>
+          <button id="hubPdfBtn" class="btn btn-primary btn-sm">📥 Unduh PDF</button>
+        </div>
+
+        <!-- HTML -->
+        <div class="export-card">
+          <div class="export-card-icon">🌐</div>
+          <div class="export-card-content">
+            <h4>Interactive HTML Report</h4>
+            <p>Laporan mandiri interaktif dengan visualizer pohon aset, pencarian temuan, dan syntax highlight.</p>
+          </div>
+          <button id="hubHtmlBtn" class="btn btn-secondary btn-sm">👁️ Buka HTML</button>
+        </div>
+
+        <!-- Bug Bounty MD -->
+        <div class="export-card">
+          <div class="export-card-icon">🎯</div>
+          <div class="export-card-content">
+            <h4>Bug Bounty Submission (.md)</h4>
+            <p>Format terstandarisasi HackerOne / Bugcrowd lengkap dengan CVSS vector, preconditions, dan impact.</p>
+          </div>
+          <button id="hubBountyBtn" class="btn btn-secondary btn-sm">📋 Unduh Markdown</button>
+        </div>
+
+        <!-- CVE Research MD -->
+        <div class="export-card">
+          <div class="export-card-icon">🔬</div>
+          <div class="export-card-content">
+            <h4>CVE-Ready Research (.md)</h4>
+            <p>Format pelaporan riset kerentanan untuk pengajuan CVE ID atau publikasi zero-day terkoordinasi.</p>
+          </div>
+          <button id="hubCveBtn" class="btn btn-secondary btn-sm">🔬 Unduh Research</button>
+        </div>
+
+        <!-- Evidence Bundle JSON -->
+        <div class="export-card">
+          <div class="export-card-icon">🔒</div>
+          <div class="export-card-content">
+            <h4>Evidence Package Bundle (.json)</h4>
+            <p>Paket bukti terenkapsulasi dengan tanda tangan integritas hash SHA-256 dan log verifikasi.</p>
+          </div>
+          <button id="hubJsonBtn" class="btn btn-secondary btn-sm">📦 Unduh JSON</button>
+        </div>
+
+        <!-- Reproduction Guide MD -->
+        <div class="export-card">
+          <div class="export-card-icon">🧪</div>
+          <div class="export-card-content">
+            <h4>Reproduction Guide (.md)</h4>
+            <p>Panduan langkah reproduksi terisolasi langkah-demi-langkah bagi tim pengembang software.</p>
+          </div>
+          <button id="hubReproBtn" class="btn btn-secondary btn-sm">🧪 Unduh Panduan</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. Validated Findings Table in Report Hub -->
+    <div class="report-findings-section">
+      <h3 class="section-title-sm">🛡️ Matriks Temuan Keamanan Tervalidasi (Proof Quality Gate)</h3>
+      <div id="reportHubFindingsContainer" class="table-responsive-box mt-2">
+        <div class="empty-msg">Pilih scan untuk melihat matriks temuan tervalidasi.</div>
+      </div>
+    </div>
+  </div>
+</section>

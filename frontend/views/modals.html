@@ -1,0 +1,418 @@
+<!-- Contextual Modal 0: Security Assessment Report Hub Modal (§52, §53, §100)-->
+<div id="reportModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card report-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">📄</span>
+        <div>
+          <h3>Pusat Laporan Keamanan & Unduhan</h3>
+          <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">KLASIFIKASI: CONFIDENTIAL / TLP:AMBER</span>
+        </div>
+      </div>
+      <button id="closeReportModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="report-summary-card">
+        <div class="report-summary-header">
+          <div>
+            <span class="report-target-label">TARGET PENILAIAN:</span>
+            <strong id="reportModalTarget" class="report-target-value">-</strong>
+          </div>
+          <span id="reportModalScanId" class="badge-pill">ID: -</span>
+        </div>
+        <div class="report-metrics-grid">
+          <div class="report-metric-box">
+            <span class="rm-label">Total Aset</span>
+            <strong id="reportMetricAssets" class="rm-value">0</strong>
+          </div>
+          <div class="report-metric-box">
+            <span class="rm-label">Open Ports</span>
+            <strong id="reportMetricPorts" class="rm-value">0</strong>
+          </div>
+          <div class="report-metric-box">
+            <span class="rm-label">URLs</span>
+            <strong id="reportMetricUrls" class="rm-value">0</strong>
+          </div>
+          <div class="report-metric-box">
+            <span class="rm-label">Parameters</span>
+            <strong id="reportMetricParams" class="rm-value">0</strong>
+          </div>
+          <div class="report-metric-box">
+            <span class="rm-label">Total Temuan</span>
+            <strong id="reportMetricFindings" class="rm-value count-finding">0</strong>
+          </div>
+        </div>
+      </div>
+
+      <h4 class="report-section-title">Pilih Format Laporan:</h4>
+
+      <div class="report-formats-grid">
+        <div class="report-format-card primary-format">
+          <div class="format-icon">📕</div>
+          <div class="format-info">
+            <strong>Dokumen PDF Resmi (Siap Pakai)</strong>
+            <p>Laporan eksekutif & teknis berformat PDF dengan kop resmi, ringkasan telemetri, tabel inventaris aset, dan reproduksi PoC.</p>
+          </div>
+          <button id="downloadPdfReportBtn" class="btn btn-primary btn-block">📥 Unduh Dokumen PDF (.pdf)</button>
+        </div>
+
+        <div class="report-format-card">
+          <div class="format-icon">🌐</div>
+          <div class="format-info">
+            <strong>Laporan Web HTML Interaktif</strong>
+            <p>Tampilan laporan responsif lengkap dengan fitur pencarian dan tombol bawaan Simpan ke PDF / Cetak langsung.</p>
+          </div>
+          <button id="viewHtmlReportBtn" class="btn btn-secondary btn-block">👁 Buka Laporan HTML (Tab Baru)</button>
+        </div>
+
+        <div class="report-format-card">
+          <div class="format-icon">📝</div>
+          <div class="format-info">
+            <strong>Laporan Markdown Audit</strong>
+            <p>Format teks terstruktur Markdown murni untuk dokumentasi teknis tim engineering, ticket Jira/GitHub, dan arsip internal.</p>
+          </div>
+          <button id="downloadMdReportBtn" class="btn btn-secondary btn-block">📥 Unduh Dokumen Markdown (.md)</button>
+        </div>
+
+        <div class="report-format-card">
+          <div class="format-icon">💾</div>
+          <div class="format-info">
+            <strong>Ekspor Data Mentah JSON</strong>
+            <p>Dataset JSON mentah seluruh aset, port, parameter, dan evidence untuk integrasi SIEM atau automated pipelines.</p>
+          </div>
+          <button id="downloadJsonReportBtn" class="btn btn-secondary btn-block">📥 Unduh Dataset JSON (.json)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 1: Global All Ports Matrix Modal -->
+<div id="portsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card matrix-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">📡</span>
+        <h3>Global Port Matrix & Service Explorer</h3>
+      </div>
+      <button id="closePortsModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex">
+        <input type="text" id="portSearchInput" placeholder="Filter host, port (80, 443, 3306), service..." class="tree-search-input" />
+        <button id="refreshPortsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Port</button>
+      </div>
+      <div class="port-filter-tags">
+        <button class="port-filter-pill active" data-port-filter="ALL">Semua Port</button>
+        <button class="port-filter-pill" data-port-filter="80">HTTP (80)</button>
+        <button class="port-filter-pill" data-port-filter="443">HTTPS (443)</button>
+        <button class="port-filter-pill" data-port-filter="WEB_ALT">Web Alt (8080/8443/8000)</button>
+        <button class="port-filter-pill" data-port-filter="DB">Database (3306/5432/6379)</button>
+        <button class="port-filter-pill" data-port-filter="SSH">SSH (22)</button>
+      </div>
+      <div id="portsMatrixContainer" class="table-responsive-box modal-table-scroll">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 2: Global All Parameters Explorer Modal -->
+<div id="paramsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card matrix-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">🧩</span>
+        <h3>Global Parameter Discovery Explorer</h3>
+      </div>
+      <button id="closeParamsModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex">
+        <input type="text" id="paramSearchInput" placeholder="Cari nama parameter, URL, atau host..." class="tree-search-input" />
+        <button id="refreshParamsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Params</button>
+      </div>
+      <div id="paramsMatrixContainer" class="table-responsive-box modal-table-scroll">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 3: Global Discovered URLs Explorer Modal -->
+<div id="urlsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card matrix-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">🔗</span>
+        <h3>Global Discovered URLs & Endpoints Explorer</h3>
+      </div>
+      <button id="closeUrlsModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex">
+        <input type="text" id="urlSearchInput" placeholder="Cari URL, path, host, atau status code (200, 302, 403)..." class="tree-search-input" />
+        <button id="refreshUrlsBtn" class="btn btn-secondary btn-sm">🔄 Refresh URLs</button>
+      </div>
+      <div class="port-filter-tags">
+        <button class="url-filter-pill active" data-url-filter="ALL">Semua URL</button>
+        <button class="url-filter-pill" data-url-filter="200">200 OK</button>
+        <button class="url-filter-pill" data-url-filter="REDIRECT">3xx Redirect</button>
+        <button class="url-filter-pill" data-url-filter="CLIENT_ERR">4xx Client</button>
+        <button class="url-filter-pill" data-url-filter="SERVER_ERR">5xx Error</button>
+        <button class="url-filter-pill" data-url-filter="HAS_PARAMS">Has Params 🧩</button>
+      </div>
+      <div id="urlsMatrixContainer" class="table-responsive-box modal-table-scroll">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 4: Global Technology Stack & Fingerprints Modal -->
+<div id="techsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card matrix-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">⚙️</span>
+        <h3>Global Technology Stack & Fingerprints Matrix</h3>
+      </div>
+      <button id="closeTechsModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex">
+        <input type="text" id="techSearchInput" placeholder="Cari nama teknologi, versi, atau host..." class="tree-search-input" />
+        <button id="refreshTechsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Tech</button>
+      </div>
+      <div class="port-filter-tags">
+        <button class="tech-filter-pill active" data-tech-filter="ALL">Semua Teknologi</button>
+        <button class="tech-filter-pill" data-tech-filter="SERVER">Web Server</button>
+        <button class="tech-filter-pill" data-tech-filter="CMS">CMS</button>
+        <button class="tech-filter-pill" data-tech-filter="FRAMEWORK">Framework</button>
+        <button class="tech-filter-pill" data-tech-filter="CDN_WAF">CDN / WAF</button>
+      </div>
+      <div id="techsMatrixContainer" class="table-responsive-box modal-table-scroll">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 5: Global Active Assets & Subdomains Modal -->
+<div id="assetsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card matrix-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">🌳</span>
+        <h3>Global Active Assets & Subdomains Matrix</h3>
+      </div>
+      <button id="closeAssetsModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex">
+        <input type="text" id="assetSearchInput" placeholder="Cari subdomain, host, atau IP..." class="tree-search-input" />
+        <button id="refreshAssetsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Assets</button>
+      </div>
+      <div class="port-filter-tags">
+        <button class="asset-filter-pill active" data-asset-filter="ALL">Semua Aset</button>
+        <button class="asset-filter-pill" data-asset-filter="ROOT">Root Domain</button>
+        <button class="asset-filter-pill" data-asset-filter="SUBDOMAINS">Subdomains</button>
+        <button class="asset-filter-pill" data-asset-filter="HAS_PORTS">Has Ports 📡</button>
+        <button class="asset-filter-pill" data-asset-filter="HAS_FINDINGS">Has Findings 🛡️</button>
+      </div>
+      <div id="assetsMatrixContainer" class="table-responsive-box modal-table-scroll">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 6: Global Security Findings & Vulnerabilities Modal -->
+<div id="findingsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card matrix-modal-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">🛡️</span>
+        <h3>Global Security Findings & Vulnerability Matrix</h3>
+      </div>
+      <button id="closeFindingsModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex">
+        <input type="text" id="findingModalSearchInput" placeholder="Cari judul temuan, CWE, CVE, atau host..." class="tree-search-input" />
+        <button id="refreshFindingsModalBtn" class="btn btn-secondary btn-sm">🔄 Refresh Findings</button>
+      </div>
+      <div class="port-filter-tags">
+        <button class="finding-modal-filter-pill active" data-fsev-filter="ALL">Semua Temuan</button>
+        <button class="finding-modal-filter-pill" data-fsev-filter="CRITICAL">Critical</button>
+        <button class="finding-modal-filter-pill" data-fsev-filter="HIGH">High</button>
+        <button class="finding-modal-filter-pill" data-fsev-filter="MEDIUM">Medium</button>
+        <button class="finding-modal-filter-pill" data-fsev-filter="LOW">Low</button>
+        <button class="finding-modal-filter-pill" data-fsev-filter="CONFIRMED">Confirmed (E3)</button>
+      </div>
+      <div id="findingsModalContainer" class="table-responsive-box modal-table-scroll">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 7: MITRE ATT&CK Matrix Modal -->
+<div id="mitreModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card" style="max-width: 1200px; width: 95%;">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">🎯</span>
+        <div>
+          <h3>MITRE ATT&CK Enterprise Matrix Navigator</h3>
+          <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">ATT&CK v14.1 — Threat Behavioral Modeling</span>
+        </div>
+      </div>
+      <button id="closeMitreModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex" style="margin-bottom: 12px;">
+        <div class="pill-muted" style="font-size: 12px;">
+          Memetakan kerentanan terkonfirmasi dan observasi reconnaissance ke taktik & teknik ATT&CK resmi.
+        </div>
+        <button id="refreshMitreModalBtn" class="btn btn-secondary btn-sm">🔄 Refresh Matriks</button>
+      </div>
+      <div id="mitreMatrixGrid" style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 14px; min-height: 380px;">
+        <div class="loading-spinner">Memuat Matriks MITRE ATT&CK...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Contextual Modal 8: Visual Proof Screenshot & Evidence Gallery Modal -->
+<div id="galleryModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card" style="max-width: 1100px; width: 95%;">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">📸</span>
+        <div>
+          <h3>Galeri Bukti Visual & Screenshot PoC</h3>
+          <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">FIRST-CLASS EVIDENCE — SHA-256 PROVENANCE</span>
+        </div>
+      </div>
+      <button id="closeGalleryModalBtn" class="btn btn-ghost btn-sm" title="Tutup Modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-toolbar-flex" style="margin-bottom: 14px;">
+        <div class="pill-muted" style="font-size: 12px;">
+          Seluruh tangkapan layar antarmuka web, portal login, dan PoC temuan dengan segel kriptografi.
+        </div>
+        <button id="refreshGalleryModalBtn" class="btn btn-secondary btn-sm">🔄 Refresh Galeri</button>
+      </div>
+      <div id="galleryGrid" class="gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px;">
+        <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Auth Modal (Login & Register Dialog) -->
+<div id="authModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card auth-modal-card">
+    <div class="modal-header">
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab-btn active" data-auth-tab="login" onclick="openAuthModal('login')">Masuk (Login)</button>
+        <button type="button" class="auth-tab-btn" data-auth-tab="register" onclick="openAuthModal('register')">Daftar Akun Baru</button>
+      </div>
+      <button id="closeAuthModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup" onclick="closeAuthModal()">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div id="authAlert" class="auth-alert hidden"></div>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="auth-form">
+        <div class="form-group">
+          <label for="loginUsername">Username atau Email</label>
+          <input type="text" id="loginUsername" class="custom-input" placeholder="Masukkan username atau email" required autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" class="custom-input" placeholder="••••••••" required autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">🚀 Masuk ke Hunter Aja</button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="registerForm" class="auth-form hidden">
+        <div class="form-group">
+          <label for="regUsername">Username</label>
+          <input type="text" id="regUsername" class="custom-input" placeholder="contoh: budi_security" required />
+        </div>
+        <div class="form-group">
+          <label for="regEmail">Email</label>
+          <input type="email" id="regEmail" class="custom-input" placeholder="budi@example.com" required />
+        </div>
+        <div class="form-group">
+          <label for="regPassword">Password (min. 6 karakter)</label>
+          <input type="password" id="regPassword" class="custom-input" placeholder="Minimal 6 karakter" required />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">✨ Buat Akun & Masuk</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- System Confirmation Modal -->
+<div id="systemConfirmModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card system-dialog-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon" id="sysModalIcon">⚠️</span>
+        <h3 id="sysModalTitle">Konfirmasi Sistem</h3>
+      </div>
+      <button id="sysModalCloseBtn" class="btn btn-ghost btn-sm">✕</button>
+    </div>
+    <div class="modal-body">
+      <p id="sysModalMessage" class="sys-modal-text"></p>
+      <div class="modal-footer-actions">
+        <button id="sysModalCancelBtn" class="btn btn-secondary btn-sm">Batal</button>
+        <button id="sysModalConfirmBtn" class="btn btn-primary btn-sm">Ya, Lanjutkan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Screenshot Lightbox Modal -->
+<div id="screenshotLightboxModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card lightbox-dialog-card">
+    <div class="modal-header">
+      <div class="title-with-icon">
+        <span class="section-icon">📸</span>
+        <h3 id="lightboxTitle">Bukti Tangkapan Layar (Screenshot)</h3>
+      </div>
+      <button id="closeLightboxBtn" class="btn btn-ghost btn-sm">✕</button>
+    </div>
+    <div class="modal-body lightbox-body">
+      <div id="lightboxImageWrap" class="lightbox-img-wrap">
+        <img id="lightboxImg" src="" alt="Screenshot PoC" class="lightbox-img" />
+      </div>
+      <div id="lightboxMeta" class="lightbox-meta-bar"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Global Command Palette & Search Overlay (Ctrl+K / Cmd+K) -->
+<div id="globalSearchOverlay" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card command-palette-dialog">
+    <div class="modal-header command-palette-header">
+      <div class="command-input-wrap">
+        <span class="command-search-icon">🔍</span>
+        <input id="globalSearchInput" type="text" placeholder="Cari aset, domain, IP, URL, parameter, kerentanan, atau ketik perintah (Ctrl+K)..." autocomplete="off" />
+        <span class="command-kbd-badge">ESC untuk menutup</span>
+      </div>
+      <button id="closeSearchOverlay" class="btn btn-ghost btn-sm">✕</button>
+    </div>
+    <div class="modal-body command-palette-body">
+      <div id="globalSearchResults" class="command-results-container">
+        <div class="search-hint">Ketik minimal 2 karakter untuk mencari atau pilih perintah cepat di bawah...</div>
+      </div>
+    </div>
+  </div>
+</div>

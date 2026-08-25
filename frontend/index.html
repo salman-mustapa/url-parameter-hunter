@@ -1,171 +1,675 @@
 <!DOCTYPE html>
 <html lang="id">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bug Hunter — Attack Surface & Parameter Intelligence</title>
-  <meta name="description" content="Platform modern attack surface discovery, dynamic active subdomain graph, parameter hunting, dan visualisasi scan realtime." />
+  <title>Hunter Aja — Attack Surface & Parameter Intelligence Platform</title>
+  <meta name="description"
+    content="Platform modern attack surface discovery, dynamic active subdomain graph, parameter hunting, visualisasi scan realtime, dan pengawasan domain terpusat." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600;1,700;1,800&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="vendor/jstree/jstree.min.css" />
+  <link rel="stylesheet" href="css/styles.css?v=8.5.0" />
+
+
 </head>
+
 <body>
   <!-- Top Navigation Bar -->
   <header class="topbar">
     <div class="container topbar-container">
-      <div class="brand">
+      <div class="brand" id="brandLogoBtn" title="Kembali ke Beranda">
         <div class="brand-avatar">🐙</div>
         <div class="brand-text">
           <span class="brand-name">Hunter Aja</span>
-          <span class="brand-badge">PRO v1.0</span>
+          <span class="brand-badge">PRO v2.0</span>
         </div>
       </div>
 
-      <nav class="nav">
-        <button class="nav-link active" data-tab="dashboard">Dashboard</button>
-        <button class="nav-link" data-tab="history">Scan History</button>
-        <button class="nav-link" data-tab="diff">Diff Analyzer</button>
+      <!-- Desktop Navigation Tabs (Center - Hidden on Mobile) -->
+      <nav id="mainNav" class="nav desktop-nav">
+        <!-- Guest Tabs -->
+        <button class="nav-link active guest-tab" data-tab="home">Home</button>
+        <button class="nav-link guest-tab" data-tab="trial">Recon Sandbox</button>
+        <button class="nav-link guest-tab" data-tab="features">Fitur Unggulan</button>
+
+        <!-- Authenticated User Tabs -->
+        <button class="nav-link user-tab hidden" data-tab="dashboard">Dashboard</button>
+        <button class="nav-link user-tab hidden" data-tab="history">Scan History</button>
+        <button class="nav-link user-tab hidden" data-tab="reports">Pusat Laporan</button>
+        <button class="nav-link user-tab hidden" data-tab="diff">Diff Analyzer</button>
+
+        <!-- Admin-only Tab -->
+        <button id="adminTabBtn" class="nav-link admin-only-tab hidden" data-tab="admin">🛡️ Admin Monitor</button>
+
         <a class="nav-link" href="/docs" target="_blank" rel="noopener">API Docs ↗</a>
       </nav>
 
       <div class="topbar-actions">
-        <button id="quickExportBtn" class="btn btn-secondary btn-sm" title="Export current scan JSON">
-          📥 Export JSON
+        <!-- Logged out trigger -->
+        <button id="openAuthBtn" class="btn btn-primary btn-sm" onclick="openAuthModal('login')">
+          🔑 Masuk / Daftar
+        </button>
+
+        <!-- Logged in state with Modern Profile Dropdown -->
+        <div id="userProfileWrap" class="user-profile-wrap relative hidden">
+          <button id="userProfileDropdownBtn" class="user-avatar-pill" type="button" aria-haspopup="true" aria-expanded="false" title="Menu Akun & Profil">
+            <span class="avatar-icon">👤</span>
+            <span id="navUsername" class="user-name-text">User</span>
+            <span id="navUserRole" class="role-badge role-user">USER</span>
+            <span id="navChevron" class="dropdown-chevron">▾</span>
+          </button>
+
+          <!-- Floating Interactive Profile Dropdown -->
+          <div id="userProfileDropdown" class="profile-dropdown-menu hidden" role="menu">
+            <div class="dropdown-user-header">
+              <div class="dropdown-avatar-circle">
+                <span id="dropdownAvatarInitial">U</span>
+              </div>
+              <div class="dropdown-user-details">
+                <div class="dropdown-user-name" id="dropdownUsername">User</div>
+                <div class="dropdown-user-email" id="dropdownUserEmail">user@hunteraja.internal</div>
+                <div class="dropdown-user-badges">
+                  <span id="dropdownRoleBadge" class="role-badge role-user">USER</span>
+                  <span class="member-status-chip">🛡️ Active Researcher</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="dropdown-divider"></div>
+
+            <div class="dropdown-group-label">PENGATURAN & KEAMANAN</div>
+            <div class="dropdown-menu-list">
+              <button class="dropdown-menu-item" type="button" onclick="openAccountSettingsModal('password')">
+                <span class="menu-item-icon">🔑</span>
+                <div class="menu-item-content">
+                  <span class="menu-item-title">Ganti Password</span>
+                  <span class="menu-item-desc">Ubah kata sandi akun</span>
+                </div>
+              </button>
+
+              <button class="dropdown-menu-item" type="button" onclick="openAccountSettingsModal('linked')">
+                <span class="menu-item-icon">🔗</span>
+                <div class="menu-item-content">
+                  <span class="menu-item-title">Akun Terhubung (SSO)</span>
+                  <span class="menu-item-desc">Google, GitHub, SAML</span>
+                </div>
+              </button>
+
+              <button class="dropdown-menu-item" type="button" onclick="openAccountSettingsModal('tokens')">
+                <span class="menu-item-icon">⚡</span>
+                <div class="menu-item-content">
+                  <span class="menu-item-title">API Token & Key</span>
+                  <span class="menu-item-desc">Token akses automation CLI</span>
+                </div>
+              </button>
+
+              <button class="dropdown-menu-item" type="button" onclick="openAccountSettingsModal('preferences')">
+                <span class="menu-item-icon">⚙️</span>
+                <div class="menu-item-content">
+                  <span class="menu-item-title">Preferensi Workspace</span>
+                  <span class="menu-item-desc">Notifikasi suara & tema</span>
+                </div>
+              </button>
+            </div>
+
+            <div class="dropdown-divider"></div>
+
+            <button id="logoutBtn" class="dropdown-menu-item dropdown-item-danger" type="button">
+              <span class="menu-item-icon">🚪</span>
+              <div class="menu-item-content">
+                <span class="menu-item-title font-semibold">Keluar dari Akun</span>
+                <span class="menu-item-desc">Akhiri sesi aktif pada perangkat ini</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <button id="openToolsCatalogBtn" class="btn btn-secondary btn-sm" onclick="openToolRegistryModal()" title="Katalog Tool Keamanan & Kapabilitas Platform">
+          🛠️ Tools Matrix
+        </button>
+        <button id="quickExportBtn" class="btn btn-secondary btn-sm" title="Buka Pusat Unduhan Laporan Keamanan">
+          📄 Unduh Laporan
         </button>
       </div>
     </div>
   </header>
 
+
+
+
   <main class="main-content">
     <div class="container">
 
-      <!-- Hero Header Section -->
-      <section class="hero-section">
-        <div class="hero-badge">
-          <span class="badge-star">✨</span> Attack Surface & Dynamic Parameter Hunter
+      <!-- Admin Notice Banner (shown if logged in as admin) -->
+      <div id="adminNoticeBanner" class="admin-notice-banner hidden">
+        <div class="admin-banner-content">
+          <span class="admin-banner-icon">🛡️</span>
+          <div>
+            <strong>Mode Pengawasan Administrator:</strong> Anda memiliki akses penuh ke <em>Admin Monitor</em> untuk
+            mengaudit pengguna dan pemetaan domain. Untuk melakukan pemindaian aktif, silakan beralih ke akun user
+            biasa.
+          </div>
         </div>
-        <h1 class="hero-title">
-          Memburu Attack Surface Jadi <span class="highlight">Lebih Menyenangkan</span>
-        </h1>
-        <p class="hero-desc">
-          Platform penemuan aset, validasi subdomain aktif secara dinamis, inspeksi port & TLS, crawling endpoint otomatis, ekstraksi parameter, dan deteksi miskonfigurasi keamanan dalam satu kendali terpadu.
-        </p>
-      </section>
+      </div>
 
-      <!-- Target & Scan Control Center -->
-      <section class="control-section">
-        <div class="card sketch-card control-card">
+      <!-- ================================================================= -->
+      <!-- VIEW 1: HOME / LANDING PAGE (Modern, Clean, Captivating & Engaging) -->
+      <!-- ================================================================= -->
+      <section id="viewHome" class="tab-view active">
+        <!-- Hero Header Section -->
+        <div class="hero-section">
+          <div class="hero-badge">
+            <span class="live-dot pulse"></span>
+            <span>NEXT-GEN ATTACK SURFACE INTELLIGENCE</span>
+          </div>
+          <h1 class="hero-title">
+            Temukan Attack Surface & Parameter Tersembunyi <span class="highlight">dalam Hitungan Detik</span>
+          </h1>
+          <p class="hero-desc">
+            Platform otomatisasi reconnaissance cerdas untuk Bug Hunter & Security Analyst. Validasi subdomain aktif,
+            crawling endpoint, ekstraksi parameter dinamis, dan deteksi risiko dalam satu antarmuka terpadu.
+          </p>
+        </div>
+
+        <!-- Quick Scan Sandbox Box -->
+        <div id="homeTrialSection" class="card sketch-card control-card home-trial-card">
           <div class="control-header">
             <div class="control-title-wrap">
-              <span class="section-icon">🎯</span>
-              <h2>Target & Konfigurasi Scan</h2>
+              <span class="section-icon">⚡</span>
+              <div>
+                <h2>Reconnaissance Sandbox</h2>
+                <div class="pill-muted" style="font-size: 12.5px; margin-top: 2px;">
+                  ⚡ Uji coba reconnaissance langsung pada target domain Anda secara instan.
+                </div>
+              </div>
             </div>
             <div class="status-wrap">
-              <span id="scanStatus" class="pill pill-neutral">IDLE</span>
-              <span id="scanTime" class="pill pill-muted hidden">⏱ 00:00</span>
-              <span id="scanIdDisplay" class="pill pill-muted hidden">ID: -</span>
+              <span id="trialScanStatus" class="pill pill-running">READY</span>
             </div>
           </div>
 
           <div class="control-form">
             <div class="input-group-target">
-              <label for="targetInput">Root Domain / URL Target</label>
+              <label for="trialTargetInput">Target Domain / Host URL</label>
               <div class="input-with-icon">
                 <span class="input-icon">🌐</span>
-                <input id="targetInput" type="text" placeholder="example.com atau https://sub.example.com" autocomplete="off" />
+                <input id="trialTargetInput" type="text"
+                  placeholder="Masukkan target (contoh: example.com atau google.com)" autocomplete="off" />
               </div>
             </div>
 
             <div class="input-group-option">
-              <label for="profileSelect">Scan Profile</label>
-              <select id="profileSelect" class="custom-select">
-                <option value="standard" selected>Standard (CT + DNS + Top Ports + Web + Params)</option>
-                <option value="deep">Deep (Comprehensive Wordlist + 1024 Ports + Deep Crawl)</option>
-                <option value="passive">Passive OSINT (No direct port scan / fast)</option>
+              <label for="trialScopeModeSelect">Target Scope & Mode</label>
+              <select id="trialScopeModeSelect" class="custom-select">
+                <option value="recursive" selected>🌐 Full Domain Recon (Buru Semua Subdomain, Ports, Endpoints & Leaks)</option>
+                <option value="targeted">🎯 Focused Single Endpoint (Audit Khusus URL / Host Ini)</option>
               </select>
             </div>
 
-            <div class="input-group-checkbox">
-              <label class="checkbox-label" title="Secara otomatis menemukan dan memvalidasi seluruh subdomain">
-                <input type="checkbox" id="subdomainsToggle" checked />
-                <span>Recursive Subdomains</span>
-              </label>
+            <div class="input-group-option engine-status-group">
+              <label>AI & Security Engine</label>
+              <div class="engine-status-pill">
+                <span class="live-dot pulse"></span>
+                <span>Full Power (10+ Tools & AI)</span>
+              </div>
             </div>
           </div>
 
           <div class="control-actions">
-            <button id="startBtn" class="btn btn-primary btn-lg">
-              <span class="btn-icon">🚀</span> START SCAN
+            <button id="startTrialBtn" class="btn btn-primary btn-lg">
+              <span class="btn-icon">🚀</span> MULAI SCAN SEKARANG
             </button>
-            <button id="pauseBtn" class="btn btn-secondary btn-lg" disabled>
-              <span class="btn-icon">⏸</span> PAUSE
+            <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
+              <span class="btn-icon">🔑</span> Masuk untuk Scan Tanpa Batas
             </button>
-            <button id="resumeBtn" class="btn btn-secondary btn-lg hidden">
-              <span class="btn-icon">▶</span> RESUME
-            </button>
-            <button id="stopBtn" class="btn btn-danger btn-lg" disabled>
-              <span class="btn-icon">⏹</span> STOP
-            </button>
-            <button id="exportBtn" class="btn btn-ghost btn-lg" disabled>
-              <span class="btn-icon">📦</span> Unduh Laporan
-            </button>
+          </div>
+
+          <!-- Quick Suggestion Chips -->
+          <div class="quick-samples-row">
+            <span class="quick-sample-label">Contoh Target Cepat:</span>
+            <button type="button" class="sample-chip" data-sample="example.com">⚡ example.com</button>
+            <button type="button" class="sample-chip" data-sample="google.com">🌐 google.com</button>
+            <button type="button" class="sample-chip" data-sample="facebook.com">👥 facebook.com</button>
+            <button type="button" class="sample-chip" data-sample="tesla.com">🎯 tesla.com</button>
+          </div>
+        </div>
+
+
+
+        <!-- Trust Signals & Architecture Highlights -->
+        <div class="trust-signals-bar">
+          <div class="trust-signal-item">
+            <span class="trust-icon">🛡️</span>
+            <div>
+              <strong>100% Non-Destructive</strong>
+              <p>Pemindaian aman berbasis inspeksi pasif & standard probing.</p>
+            </div>
+          </div>
+          <div class="trust-signal-item">
+            <span class="trust-icon">🌳</span>
+            <div>
+              <strong>Active DNS Validation</strong>
+              <p>Hanya subdomain aktif & tervalidasi yang ditampilkan di pohon aset.</p>
+            </div>
+          </div>
+          <div class="trust-signal-item">
+            <span class="trust-icon">🧩</span>
+            <div>
+              <strong>Dynamic Parameter Mining</strong>
+              <p>Ekstraksi otomatis form action, query string, dan hidden inputs.</p>
+            </div>
+          </div>
+          <div class="trust-signal-item">
+            <span class="trust-icon">🔒</span>
+            <div>
+              <strong>Zero-Lost Scan Attribution</strong>
+              <p>Hasil scan trial otomatis diklaim ke akun Anda saat mendaftar.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive 3-Step "How It Works" Flow -->
+        <div class="how-it-works-section">
+          <div class="section-heading-center">
+            <span class="badge-pill">Cara Kerja Engine</span>
+            <h2>Alur Reconnaissance 3 Langkah</h2>
+            <p>Bagaimana Hunter Aja memetakan attack surface target Anda secara menyeluruh dalam hitungan menit.</p>
+          </div>
+
+          <div class="workflow-steps-grid">
+            <div class="card sketch-card workflow-step-card">
+              <div class="step-badge">Langkah 1</div>
+              <div class="step-icon">🎯</div>
+              <h3>Input Scope Target</h3>
+              <p>Masukkan root domain (misal <code>example.com</code>) atau host spesifik (misal
+                <code>api.example.com</code>) dengan opsi recursive subdomain.</p>
+
+            </div>
+
+            <div class="card sketch-card workflow-step-card">
+              <div class="step-badge">Langkah 2</div>
+              <div class="step-icon">⚡</div>
+              <h3>Parallel Discovery Engine</h3>
+              <p>Engine menjalankan DNS active validation, TCP port scanning, TLS cert audit, web endpoint crawling, dan
+                parameter mining secara paralel.</p>
+            </div>
+
+            <div class="card sketch-card workflow-step-card">
+              <div class="step-badge">Langkah 3</div>
+              <div class="step-icon">📊</div>
+              <h3>Visual Graph & Triaging</h3>
+              <p>Hasil pemindaian tersusun rapi dalam pohon aset hierarkis, live event stream, matriks port global,
+                serta klasifikasi tingkat keparahan risiko.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Visual Feature Showcase Grid -->
+        <div id="homeFeaturesSection" class="features-showcase-section">
+          <div class="section-heading-center">
+            <span class="badge-pill">Fitur Unggulan</span>
+            <h2>Platform Intelijen Penetrasi Modern</h2>
+            <p>Dirancang dengan visual yang clean, intuitif, dan responsif untuk bug hunter dan penetration tester
+              profesional.</p>
+          </div>
+
+          <div class="features-grid">
+            <!-- Feature 1 -->
+            <div class="card sketch-card feature-card">
+              <div class="feature-icon">🌳</div>
+              <h3>Dynamic Subdomain Tree</h3>
+              <p>Mengumpulkan subdomain dari Certificate Transparency (crt.sh), AlienVault OTX, HackerTarget, dan
+                brute-force wordlists dengan validasi DNS dinamis.</p>
+              <div class="feature-mini-preview">
+                <div class="mini-node-item root"><span class="dot-active"></span> target.com <span
+                    class="mini-tag">ROOT</span></div>
+                <div class="mini-node-item sub"><span class="dot-active"></span> api.target.com <span
+                    class="mini-tag">104.21.4.1</span></div>
+                <div class="mini-node-item sub"><span class="dot-active"></span> app.target.com <span
+                    class="mini-tag">103.111.20.5</span></div>
+              </div>
+
+            </div>
+
+            <!-- Feature 2 -->
+            <div class="card sketch-card feature-card">
+              <div class="feature-icon">🧩</div>
+              <h3>Deep Parameter Hunter</h3>
+              <p>Menemukan parameter URL dari tautan aktif, form action, input query string, dan payload endpoint
+                tersembunyi secara otomatis.</p>
+              <div class="feature-mini-preview mini-tags-wrap">
+                <span class="mini-chip-param">?redirect_url=</span>
+                <span class="mini-chip-param">?token=</span>
+                <span class="mini-chip-param">?query=</span>
+                <span class="mini-chip-param">?id=</span>
+              </div>
+            </div>
+
+            <!-- Feature 3 -->
+            <div class="card sketch-card feature-card">
+              <div class="feature-icon">📡</div>
+              <h3>Port & Service Matrix</h3>
+              <p>Inspeksi port jaringan non-destruktif, identifikasi service banner, serta analisis sertifikat TLS/SSL
+                untuk mendeteksi celah eksposur.</p>
+              <div class="feature-mini-preview mini-tags-wrap">
+                <span class="mini-chip-port http">80 HTTP</span>
+                <span class="mini-chip-port https">443 HTTPS</span>
+                <span class="mini-chip-port alt">8080 ALT</span>
+                <span class="mini-chip-port db">3306 DB</span>
+              </div>
+            </div>
+
+            <!-- Feature 4 -->
+            <div class="card sketch-card feature-card">
+              <div class="feature-icon">🛡️</div>
+              <h3>Instant Security Triaging</h3>
+              <p>Klasifikasi otomatis temuan keamanan berbasis heuristik: CORS misconfiguration, sensitive header leaks,
+                dan open directory status.</p>
+              <div class="feature-mini-preview mini-tags-wrap">
+                <span class="mini-chip-sev crit">🔴 CORS Wildcard</span>
+                <span class="mini-chip-sev high">🟠 Directory Listing</span>
+                <span class="mini-chip-sev med">🟡 Missing CSP</span>
+              </div>
+            </div>
+
+            <!-- Feature 5 -->
+            <div class="card sketch-card feature-card">
+              <div class="feature-icon">⚖️</div>
+              <h3>Differential Scan (Diff)</h3>
+              <p>Bandingkan dua pemindaian berbeda untuk mengidentifikasi aset baru yang terbuka, subdomain baru, dan
+                perubahan attack surface.</p>
+              <div class="feature-mini-preview mini-tags-wrap">
+                <span class="mini-chip-diff add">+3 Subdomain Baru</span>
+                <span class="mini-chip-diff rem">-1 Port Ditutup</span>
+              </div>
+            </div>
+
+            <!-- Feature 6 -->
+            <div class="card sketch-card feature-card">
+              <div class="feature-icon">🔒</div>
+              <h3>Anti-Abuse & RBAC Privacy</h3>
+              <p>Sistem uji coba cerdas dengan proteksi sidik jari perangkat, isolasi riwayat pemindaian antar pengguna,
+                dan audit pengawasan admin.</p>
+              <div class="feature-mini-preview mini-tags-wrap">
+                <span class="mini-chip-auth">🔒 Device Protected</span>
+                <span class="mini-chip-auth">👤 Auto Scan Claim</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FAQ Section -->
+        <div class="faq-section">
+          <div class="section-heading-center">
+            <span class="badge-pill">FAQ</span>
+            <h2>Pertanyaan yang Sering Diajukan</h2>
+            <p>Jawaban atas pertanyaan seputar cara kerja, keamanan, dan batasan penggunaan platform.</p>
+          </div>
+
+          <div class="faq-accordion-list">
+            <div class="card sketch-card faq-item">
+              <div class="faq-question">
+                <h4>Apakah proses scanning aman dan tidak merusak server target?</h4>
+                <span class="faq-toggle-icon">➕</span>
+              </div>
+              <div class="faq-answer">
+                <p>Ya, 100% aman dan non-destruktif. Hunter Aja hanya melakukan inspeksi pasif OSINT, resolusi DNS
+                  aktif, probing port ringan, dan web crawling standar tanpa mengirimkan payload eksploitasi berbahaya.
+                </p>
+              </div>
+            </div>
+
+            <div class="card sketch-card faq-item">
+              <div class="faq-question">
+                <h4>Bagaimana cara kerja uji coba reconnaissance untuk pengguna baru?</h4>
+                <span class="faq-toggle-icon">➕</span>
+              </div>
+              <div class="faq-answer">
+                <p>Setiap perangkat fisik yang belum memiliki akun dapat mencoba pemindaian reconnaissance langsung
+                  secara instan. Sidik jari perangkat akan mencatat sesi uji coba tersebut, dan saat Anda mendaftar akun
+                  baru, seluruh hasil temuan scan tersebut otomatis diklaim ke akun Anda.</p>
+              </div>
+            </div>
+
+
+            <div class="card sketch-card faq-item">
+              <div class="faq-question">
+                <h4>Apa perbedaan opsi Recursive Subdomains vs Target-Only?</h4>
+                <span class="faq-toggle-icon">➕</span>
+              </div>
+              <div class="faq-answer">
+                <p>Jika opsi <strong>Recursive Subdomains</strong> dicentang, engine akan memburu seluruh subdomain yang
+                  berinduk pada domain tersebut. Jika tidak dicentang, engine akan memindai secara spesifik hanya pada
+                  host/subdomain yang Anda masukkan.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Call to Action Banner on Landing Page -->
+        <div class="card sketch-card cta-banner-card">
+          <div class="cta-content">
+            <h2>Siap Memburu Attack Surface Hari Ini?</h2>
+            <p>Daftar sekarang secara gratis untuk mendapatkan akses pemindaian penuh, riwayat tersimpan, dan diff
+              analyzer tanpa batas.</p>
+            <div class="cta-actions">
+              <button id="ctaRegisterBtn" class="btn btn-primary btn-lg">✨ Buat Akun Gratis Sekarang</button>
+              <button id="ctaLoginBtn" class="btn btn-secondary btn-lg">🔑 Masuk ke Dashboard</button>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- Live Counters Bar -->
-      <section class="telemetry-section">
-        <div class="telemetry-grid">
-          <div class="telemetry-card">
-            <div class="telemetry-icon">🌳</div>
-            <div class="telemetry-data">
-              <span class="telemetry-label">Active Assets</span>
-              <span id="counterAssets" class="telemetry-value">0</span>
+
+      <!-- ================================================================= -->
+      <!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS)   -->
+      <!-- ================================================================= -->
+      <section id="viewDashboard" class="tab-view hidden">
+        <!-- Scan Completion & Report Action Banner (§52, §54) -->
+        <div id="scanCompletedBanner" class="scan-completed-banner hidden">
+          <div class="banner-content-flex">
+            <div class="banner-text">
+              <span class="banner-icon">🎉</span>
+              <div>
+                <strong id="scanCompletedTitle">Pemindaian Selesai!</strong>
+                <p id="scanCompletedSummary">Attack surface & temuan risiko berhasil dipetakan secara lengkap.</p>
+              </div>
             </div>
-          </div>
-          <div class="telemetry-card">
-            <div class="telemetry-icon">📡</div>
-            <div class="telemetry-data">
-              <span class="telemetry-label">Open Ports</span>
-              <span id="counterPorts" class="telemetry-value">0</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <div class="telemetry-icon">🔗</div>
-            <div class="telemetry-data">
-              <span class="telemetry-label">Discovered URLs</span>
-              <span id="counterUrls" class="telemetry-value">0</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <div class="telemetry-icon">🧩</div>
-            <div class="telemetry-data">
-              <span class="telemetry-label">Parameters</span>
-              <span id="counterParams" class="telemetry-value">0</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <div class="telemetry-icon">⚙️</div>
-            <div class="telemetry-data">
-              <span class="telemetry-label">Technologies</span>
-              <span id="counterTechs" class="telemetry-value">0</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <div class="telemetry-icon">🛡️</div>
-            <div class="telemetry-data">
-              <span class="telemetry-label">Security Findings</span>
-              <span id="counterFindings" class="telemetry-value count-finding">0</span>
+            <div class="banner-actions">
+              <button id="bannerDownloadReportBtn" class="btn btn-primary btn-sm">📦 Buka Pusat Laporan</button>
+              <button id="bannerDismissBtn" class="btn btn-ghost btn-sm" title="Tutup">✕</button>
             </div>
           </div>
         </div>
-      </section>
 
-      <!-- Main Operational View (Dashboard) -->
-      <section id="viewDashboard" class="tab-view active">
+        <!-- Dashboard Level Breadcrumb Navigation -->
+        <nav id="dashboardBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-link">🎯 Recon Dashboard</span>
+          <span class="breadcrumb-sep">›</span>
+          <span id="dashboardBreadcrumbName" class="breadcrumb-current">Live Workspace</span>
+        </nav>
+
+        <!-- Active Multi-Scan Background Switcher Bar -->
+        <div id="activeScansBar" class="active-scans-switcher-bar hidden">
+          <span class="active-scans-title">
+            <span class="live-dot pulse"></span>
+            <span>Sesi Scan Berjalan (Background):</span>
+          </span>
+          <div id="activeScansChipsList" class="active-scans-chips-list"></div>
+        </div>
+
+        <!-- Target & Scan Control Center -->
+        <div id="scanControlSection" class="control-section">
+          <div class="card sketch-card control-card">
+            <div class="control-header">
+              <div class="control-title-wrap">
+                <span class="section-icon">🎯</span>
+                <h2>Target & Konfigurasi Scan</h2>
+              </div>
+              <div class="status-wrap">
+                <span id="scanStatus" class="pill pill-neutral">IDLE</span>
+                <span id="scanTime" class="pill pill-muted hidden">⏱ 00:00</span>
+                <span id="scanIdDisplay" class="pill pill-muted hidden">ID: -</span>
+              </div>
+            </div>
+
+            <div class="control-form">
+              <div class="input-group-target">
+                <label for="targetInput">Root Domain / URL Target</label>
+                <div class="input-with-icon">
+                  <span class="input-icon">🌐</span>
+                  <input id="targetInput" type="text" placeholder="example.com atau https://sub.example.com"
+                    autocomplete="off" />
+                </div>
+              </div>
+
+              <div class="input-group-option">
+                <label for="scopeModeSelect">Target Scope & Mode</label>
+                <select id="scopeModeSelect" class="custom-select">
+                  <option value="recursive" selected>🌐 Full Domain Recon (Buru semua Subdomain, Ports, Endpoints & Leaks)</option>
+                  <option value="targeted">🎯 Focused Single Host / Endpoint (Audit mendalam khusus URL/Endpoint ini)</option>
+                </select>
+              </div>
+
+              <div class="input-group-option engine-status-group">
+                <label>AI & Security Engine</label>
+                <div class="engine-status-pill">
+                  <span class="live-dot pulse"></span>
+                  <span>Full Power (10+ Tools & AI)</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="control-actions">
+              <button id="startBtn" class="btn btn-primary btn-lg">
+                <span class="btn-icon">🚀</span> START SCAN
+              </button>
+              <button id="pauseBtn" class="btn btn-secondary btn-lg" disabled>
+                <span class="btn-icon">⏸</span> PAUSE
+              </button>
+              <button id="resumeBtn" class="btn btn-secondary btn-lg hidden">
+                <span class="btn-icon">▶</span> RESUME
+              </button>
+              <button id="stopBtn" class="btn btn-danger btn-lg" disabled>
+                <span class="btn-icon">⏹</span> STOP
+              </button>
+              <button id="exportBtn" class="btn btn-secondary btn-lg" disabled>
+                <span class="btn-icon">📦</span> Unduh Laporan
+              </button>
+            </div>
+          </div>
+        </div>
+
+
+        <!-- Live Counters Bar (Contextually Clickable for All Explorers) -->
+        <div class="telemetry-section">
+          <div class="telemetry-grid">
+            <div id="telemetryAssetsCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Explorer Subdomain & Aset Global scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">🌳</span>
+                <span id="counterAssets" class="telemetry-value">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Active Assets</span>
+                <span class="click-hint-badge">Buka ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryPortsCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Matriks Port Global scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">📡</span>
+                <span id="counterPorts" class="telemetry-value">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Open Ports</span>
+                <span class="click-hint-badge">Buka ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryUrlsCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Explorer URL & Endpoint Global scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">🔗</span>
+                <span id="counterUrls" class="telemetry-value">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Discovered URLs</span>
+                <span class="click-hint-badge">Buka ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryParamsCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Explorer Parameter Global scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">🧩</span>
+                <span id="counterParams" class="telemetry-value">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Parameters</span>
+                <span class="click-hint-badge">Buka ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryTechsCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Matriks Teknologi & Fingerprint scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">⚙️</span>
+                <span id="counterTechs" class="telemetry-value">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Technologies</span>
+                <span class="click-hint-badge">Buka ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryFindingsCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Matriks Temuan Keamanan & Kerentanan scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">🛡️</span>
+                <span id="counterFindings" class="telemetry-value count-finding">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Findings</span>
+                <span class="click-hint-badge">Buka ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryMitreCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Matriks MITRE ATT&CK Navigator scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">🎯</span>
+                <span id="counterMitre" class="telemetry-value" style="color:#0284c7;">10</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">MITRE Tactics</span>
+                <span class="click-hint-badge">Matrix ↗</span>
+              </div>
+            </div>
+
+            <div id="telemetryGalleryCard" class="telemetry-card clickable"
+              title="Klik untuk membuka Galeri Visual Proof & Screenshot scan aktif">
+              <div class="telemetry-card-top">
+                <span class="telemetry-icon">📸</span>
+                <span id="counterScreenshots" class="telemetry-value" style="color:#059669;">0</span>
+              </div>
+              <div class="telemetry-card-bottom">
+                <span class="telemetry-label">Visual Proofs</span>
+                <span class="click-hint-badge">Galeri ↗</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="dashboard-grid">
-          
           <!-- Left Column: Realtime Event Stream Terminal -->
           <div class="column-left">
             <div class="card sketch-card stream-card">
@@ -176,12 +680,21 @@
                 </div>
                 <div class="stream-toolbar">
                   <span id="streamCount" class="badge-pill">0 events</span>
-                  <button id="clearStreamBtn" class="btn btn-ghost btn-xs" title="Clear stream log">Bersihkan</button>
+                  <button id="clearStreamBtn" class="btn btn-ghost btn-xs" title="Clear stream log" onclick="clearStreamLog()">Bersihkan</button>
                   <label class="auto-scroll-toggle">
                     <input type="checkbox" id="autoScrollCheck" checked />
                     <span>Auto-scroll</span>
                   </label>
                 </div>
+              </div>
+
+              <!-- Autonomous Loop Real-Time Action Tracker (§67) -->
+              <div id="autonomousActionBanner" class="autonomous-action-banner hidden" style="background:#F0FDF4; border:1.5px solid #86EFAC; border-radius:6px; padding:6px 10px; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; font-size:11px; font-weight:700;">
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span class="live-dot pulse" style="background:#16A34A;"></span>
+                  <span><strong>Autonomous Loop:</strong> <span id="autonomousActiveActionText">Menunggu event baru...</span></span>
+                </div>
+                <span id="autonomousQueueBadge" class="badge-pill" style="font-size:9.5px; background:#DCFCE7; color:#15803D;">0 Antrean</span>
               </div>
 
               <!-- Stream Filter Tags -->
@@ -208,26 +721,156 @@
 
           <!-- Right Column: Hierarchical Asset Tree + Asset Details + Findings -->
           <div class="column-right">
-            
-            <!-- Asset Tree Card -->
+
+            <!-- Asset Tree & Attack Surface Graph Card -->
             <div class="card sketch-card asset-tree-card">
+
               <div class="card-header-flex">
                 <div class="title-with-icon">
-                  <span class="section-icon">🌳</span>
-                  <h3>Hierarchical Asset Tree</h3>
+                  <div class="view-mode-tabs" style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button id="showTreeModeBtn" class="btn btn-xs btn-primary active" onclick="switchAssetViewMode('tree')">🌳 Tree View</button>
+                    <button id="showGraphModeBtn" class="btn btn-xs btn-secondary" onclick="switchAssetViewMode('graph')">🕸️ Attack Graph</button>
+                    <button id="showHypothesesModeBtn" class="btn btn-xs btn-secondary" onclick="switchAssetViewMode('hypotheses')">🧠 AI Hypotheses & Plans</button>
+                    <button id="showStateMachineModeBtn" class="btn btn-xs btn-secondary" onclick="switchAssetViewMode('statemachine')">⚙️ State Machine</button>
+                  </div>
                 </div>
                 <div class="header-actions">
-                  <input type="text" id="treeSearchInput" placeholder="Cari subdomain / IP..." class="tree-search-input" />
-                  <button id="collapseAllBtn" class="btn btn-ghost btn-xs" title="Collapse All Subtrees">➖ Tutup Semua</button>
-                  <button id="expandAllBtn" class="btn btn-ghost btn-xs" title="Expand All Subtrees">➕ Buka Semua</button>
-                  <button id="refreshTreeBtn" class="btn btn-ghost btn-sm" title="Refresh Asset Tree">🔄 Refresh</button>
+                  <input type="text" id="treeSearchInput" placeholder="Cari subdomain / IP..."
+                    class="tree-search-input" />
+                  <button id="collapseAllBtn" class="btn btn-ghost btn-xs" title="Collapse All Subtrees" onclick="collapseAllNodes()">➖ Tutup
+                    Semua</button>
+                  <button id="expandAllBtn" class="btn btn-ghost btn-xs" title="Expand All Subtrees" onclick="expandAllNodes()">➕ Buka
+                    Semua</button>
+                  <button id="refreshTreeBtn" class="btn btn-ghost btn-sm" title="Refresh Asset View" onclick="refreshAssetTree()">🔄
+                    Refresh</button>
                 </div>
-
               </div>
-              
-              <div id="assetTreeContainer" class="tree-container">
+
+              <div id="assetTreeContainer" class="asset-tree-container tree-container">
                 <div class="tree-empty-msg">
                   <p>Aset akan muncul secara hierarkis (Root → Subdomain → IP) saat scanning berjalan.</p>
+                </div>
+              </div>
+
+              <div id="assetGraphContainer" class="asset-graph-container hidden" style="position:relative; width:100%; height:500px; background:#FAF7F2; border:2px solid var(--border); border-radius:8px; overflow:hidden; box-shadow:inset 1.5px 1.5px 0 var(--shadow); margin-top:10px;">
+                <canvas id="attackGraphCanvas" style="width:100%; height:100%; display:block; cursor:grab;"></canvas>
+                
+                <!-- Layout Selection Toolbar -->
+                <div id="graphLayoutControls" style="position:absolute; top:10px; left:10px; display:flex; gap:6px; background:rgba(255,255,255,0.95); border:1.5px solid var(--border); border-radius:8px; padding:4px 6px; box-shadow:1.5px 1.5px 0 var(--shadow); z-index:10;">
+                  <span style="font-size:11px; font-weight:700; align-self:center; margin-right:4px;">📐 Tata Letak:</span>
+                  <button class="btn btn-xs btn-primary active" id="layoutRadialBtn" onclick="changeGraphLayout('radial')" title="Tata Letak Melingkar (Radial Orbit)">🌟 Radial</button>
+                  <button class="btn btn-xs btn-secondary" id="layoutTreeBtn" onclick="changeGraphLayout('tree')" title="Tata Letak Pohon Bertingkat (Hierarki)">🌲 Hierarki</button>
+                  <button class="btn btn-xs btn-secondary" id="layoutForceBtn" onclick="changeGraphLayout('force')" title="Tata Letak Otomatis Menyebar (Organik)">🧲 Force</button>
+                  <button class="btn btn-xs btn-secondary" id="layoutGridBtn" onclick="changeGraphLayout('grid')" title="Tata Letak Baris Matriks (Grid)">⏹️ Grid</button>
+                </div>
+
+                <!-- Drag Instruction Badge -->
+                <div style="position:absolute; top:52px; left:10px; background:rgba(240,253,244,0.92); border:1px solid #86EFAC; color:#166534; border-radius:6px; padding:3px 8px; font-size:10px; font-weight:700; pointer-events:none; box-shadow:1px 1px 0 var(--shadow);">
+                  💡 Drag & Geser node secara bebas untuk mengatur posisi yang Anda inginkan
+                </div>
+
+                <!-- Graph Legend -->
+                <div id="graphLegend" style="position:absolute; bottom:10px; left:10px; background:rgba(255,255,255,0.92); border:1.5px solid var(--border); border-radius:6px; padding:6px 10px; font-size:10px; font-weight:700; display:flex; gap:8px; box-shadow:1.5px 1.5px 0 var(--shadow); pointer-events:none;">
+                  <span>🎯 Domain</span>
+                  <span>🌱 Subdomain</span>
+                  <span>💻 IP</span>
+                  <span>📡 Port</span>
+                  <span>🔴 Finding</span>
+                </div>
+
+                <!-- Zoom & Reset Controls -->
+                <div id="graphZoomControls" style="position:absolute; top:10px; right:10px; display:flex; flex-direction:column; gap:4px; z-index:10;">
+                  <button class="btn btn-xs btn-secondary" onclick="zoomAttackGraph(1.2)" title="Perbesar (Zoom In)">➕</button>
+                  <button class="btn btn-xs btn-secondary" onclick="zoomAttackGraph(0.8)" title="Perkecil (Zoom Out)">➖</button>
+                  <button class="btn btn-xs btn-secondary" onclick="resetAttackGraph()" title="Pusatkan & Reset Tampilan">🎯</button>
+                </div>
+              </div>
+
+              <!-- V4 AI Hypotheses & Attack Plans Live Visualizer Panel -->
+              <div id="aiHypothesesContainer" class="v4-hypotheses-container hidden">
+                <div id="aiReasoningSummaryBox" class="v4-reasoning-summary-box">
+                  <!-- Injected via JavaScript -->
+                </div>
+                <div class="v4-subsections-grid">
+                  <div class="v4-subsec-col">
+                    <div class="v4-subsec-hdr">
+                      <div class="v4-subsec-title"><span class="v4-hdr-icon">💡</span> <h4>Formulated Hypotheses</h4></div>
+                      <button class="btn btn-ghost btn-xs" onclick="loadV4HypothesesAndPlans()">🔄 Refresh</button>
+                    </div>
+                    <div id="hypothesesListContainer" class="v4-items-scrollbox">
+                      <!-- Injected via JavaScript -->
+                    </div>
+                  </div>
+                  <div class="v4-subsec-col">
+                    <div class="v4-subsec-hdr">
+                      <div class="v4-subsec-title"><span class="v4-hdr-icon">📋</span> <h4>Multi-Step Attack Plans</h4></div>
+                    </div>
+                    <div id="attackPlansListContainer" class="v4-items-scrollbox">
+                      <!-- Injected via JavaScript -->
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- V4 State Machine Lifecycle Pipeline Visualizer Panel -->
+              <div id="stateMachineContainer" class="v4-state-machine-container hidden">
+                <div class="v4-sm-header">
+                  <div class="v4-sm-title"><span class="v4-hdr-icon">⚙️</span> <h4>Autonomous State Machine Pipeline</h4></div>
+                  <button class="btn btn-ghost btn-xs" onclick="loadV4StateMachineData()">🔄 Refresh</button>
+                </div>
+                <div id="stateMachineTimelineContainer" class="v4-sm-timeline-box">
+                  <!-- Injected via JavaScript -->
+                </div>
+                <div class="v4-sm-history-header">
+                  <h5>📜 Riwayat Transisi State & Triggers</h5>
+                </div>
+                <div id="stateMachineHistoryContainer" class="v4-sm-history-box">
+                  <!-- Injected via JavaScript -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Entity Details Drawer (§19, §20 Slide-in Inspector) -->
+            <div id="assetDetailDrawer" class="entity-drawer-backdrop hidden">
+              <div class="entity-drawer sketch-card">
+                <div class="drawer-header">
+                  <div class="title-with-icon">
+                    <span class="section-icon">🖥️</span>
+                    <div>
+                      <h3 id="drawerAssetTitle" class="drawer-title">Asset Detail</h3>
+                      <div class="drawer-meta-row">
+                        <span id="drawerAssetType" class="pill pill-primary">SUBDOMAIN</span>
+                        <span id="drawerAssetIP" class="pill-muted mono">-</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button id="closeDrawerBtn" class="btn btn-ghost btn-sm" title="Tutup Drawer (ESC)">✕</button>
+                </div>
+
+                <div class="drawer-body">
+                  <div class="drawer-section">
+                    <div class="drawer-section-header">
+                      <h4>📡 Open Ports & Services</h4>
+                    </div>
+                    <div id="drawerPortsList" class="drawer-content-box">
+                      <span class="empty-msg">Memuat port...</span>
+                    </div>
+                  </div>
+
+                  <div class="drawer-section">
+                    <div class="drawer-section-header">
+                      <h4>🔗 Discovered Endpoints</h4>
+                    </div>
+                    <div id="drawerUrlsList" class="drawer-content-box url-list-compact">
+                      <span class="empty-msg">Memuat URL...</span>
+                    </div>
+                  </div>
+
+                  <div class="drawer-footer-actions">
+                    <button id="drawerDeepDiveBtn" class="btn btn-primary btn-sm btn-block">
+                      🔍 Buka 360° Deep Inspector ↗
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -250,10 +893,12 @@
                 <button class="detail-tab active" data-detail-tab="overview">Overview</button>
                 <button class="detail-tab" data-detail-tab="ports">Ports (<span id="tabCountPorts">0</span>)</button>
                 <button class="detail-tab" data-detail-tab="urls">URLs (<span id="tabCountUrls">0</span>)</button>
-                <button class="detail-tab" data-detail-tab="params">Parameters (<span id="tabCountParams">0</span>)</button>
+                <button class="detail-tab" data-detail-tab="params">Parameters (<span
+                    id="tabCountParams">0</span>)</button>
                 <button class="detail-tab" data-detail-tab="tech">Tech (<span id="tabCountTechs">0</span>)</button>
                 <button class="detail-tab" data-detail-tab="certs">TLS Certs</button>
-                <button class="detail-tab" data-detail-tab="findings">Findings (<span id="tabCountFindings">0</span>)</button>
+                <button class="detail-tab" data-detail-tab="findings">Findings (<span
+                    id="tabCountFindings">0</span>)</button>
               </div>
 
               <div id="detailTabContent" class="detail-tab-content">
@@ -261,7 +906,7 @@
               </div>
             </div>
 
-            <!-- Security Findings Card -->
+            <!-- Security Findings Card with Directly Clickable Severity Filter Tags -->
             <div class="card sketch-card findings-card">
               <div class="card-header-flex">
                 <div class="title-with-icon">
@@ -271,12 +916,28 @@
                 <span id="findingsBadgeTotal" class="badge-pill">0 Total</span>
               </div>
 
+              <!-- Clickable Severity Chips to Filter Asset Tree -->
               <div class="severity-summary-bar">
-                <div class="sev-tag sev-critical"><span class="sev-dot"></span> Critical: <strong id="sevCritCount">0</strong></div>
-                <div class="sev-tag sev-high"><span class="sev-dot"></span> High: <strong id="sevHighCount">0</strong></div>
-                <div class="sev-tag sev-medium"><span class="sev-dot"></span> Medium: <strong id="sevMedCount">0</strong></div>
-                <div class="sev-tag sev-low"><span class="sev-dot"></span> Low: <strong id="sevLowCount">0</strong></div>
-                <div class="sev-tag sev-info"><span class="sev-dot"></span> Info: <strong id="sevInfoCount">0</strong></div>
+                <div class="sev-tag sev-critical clickable-sev-tag" data-sev-filter="CRITICAL"
+                  title="Klik untuk filter Subdomain dengan Critical Findings">
+                  <span class="sev-dot"></span> Critical: <strong id="sevCritCount">0</strong>
+                </div>
+                <div class="sev-tag sev-high clickable-sev-tag" data-sev-filter="HIGH"
+                  title="Klik untuk filter Subdomain dengan High Findings">
+                  <span class="sev-dot"></span> High: <strong id="sevHighCount">0</strong>
+                </div>
+                <div class="sev-tag sev-medium clickable-sev-tag" data-sev-filter="MEDIUM"
+                  title="Klik untuk filter Subdomain dengan Medium Findings">
+                  <span class="sev-dot"></span> Medium: <strong id="sevMedCount">0</strong>
+                </div>
+                <div class="sev-tag sev-low clickable-sev-tag" data-sev-filter="LOW"
+                  title="Klik untuk filter Subdomain dengan Low Findings">
+                  <span class="sev-dot"></span> Low: <strong id="sevLowCount">0</strong>
+                </div>
+                <div class="sev-tag sev-info clickable-sev-tag" data-sev-filter="INFO"
+                  title="Klik untuk filter Subdomain dengan Info Findings">
+                  <span class="sev-dot"></span> Info: <strong id="sevInfoCount">0</strong>
+                </div>
               </div>
 
               <div id="findingsListContainer" class="findings-list">
@@ -286,31 +947,338 @@
               </div>
             </div>
 
+            <!-- Integrated Scan Intelligence & Report Dossier Card (§31-§35) -->
+            <div id="dashReportCard" class="card sketch-card dash-report-card">
+              <div class="card-header-flex">
+                <div class="title-with-icon">
+                  <span class="section-icon">📑</span>
+                  <div>
+                    <h3 id="dashReportTitle">Scan Intelligence & Professional Report Center</h3>
+                    <div class="pill-muted text-xs">Laporan komprehensif, ekspor instan, dan matriks risiko attack
+                      surface terpadu.</div>
+                  </div>
+                </div>
+                <div class="header-actions">
+                  <button id="dashReportBBBtn" class="btn btn-secondary btn-xs" title="Format HackerOne / Bugcrowd">🎯
+                    Bug Bounty (.md)</button>
+                  <button id="dashReportCVEBtn" class="btn btn-secondary btn-xs" title="Format Riset Kerentanan">🛡️ CVE
+                    Report (.md)</button>
+                  <button id="dashReportJSONBtn" class="btn btn-secondary btn-xs" title="Paket Kriptografis SHA-256">📦
+                    Evidence JSON</button>
+                  <button id="dashReportHubBtn" class="btn btn-primary btn-xs" onclick="switchViewTab('reports')"
+                    title="Buka di Pusat Laporan Mandiri">📑 Buka Report Hub Penuh ↗</button>
+                </div>
+              </div>
+
+              <div class="dash-report-body"
+                style="padding:16px; background:var(--surface-alt); border-radius:12px; border:2px solid var(--border); margin-top:12px;">
+                <div
+                  style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-bottom:14px;">
+                  <div class="info-item"><span class="info-label">Domain Target</span><span id="dashReportTarget"
+                      class="info-value mono">-</span></div>
+                  <div class="info-item"><span class="info-label">Status Penilaian</span><span id="dashReportStatus"
+                      class="info-value" style="font-weight:700; color:var(--text-muted);">IDLE</span></div>
+                  <div class="info-item"><span class="info-label">Skor Risiko (CVSS v4)</span><span id="dashReportRisk"
+                      class="info-value mono" style="font-weight:800; color:var(--text-muted);">0.0 / 10.0</span></div>
+                  <div class="info-item"><span class="info-label">Kualitas Bukti</span><span id="dashReportEvidence"
+                      class="info-value badge-e0">NO PROOF</span></div>
+                </div>
+
+                <div class="executive-summary-text"
+                  style="font-size:12px; color:var(--text); line-height:1.6; background:var(--surface); border:1.5px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+                  <strong style="color:var(--text-accent);">📋 Ringkasan Eksekutif Keamanan:</strong>
+                  <p id="dashReportExecText" style="margin:6px 0 0 0; color:var(--text-muted);">Hasil audit attack
+                    surface dan validasi parameter akan disintesis secara otomatis di sini setelah pemindaian selesai.
+                  </p>
+                </div>
+
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between;">
+                  <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button class="btn btn-ghost btn-xs" onclick="openParamsModal()">🔍 Buka Matriks Parameter
+                      ↗</button>
+                    <button class="btn btn-ghost btn-xs" onclick="openPortsModal()">📡 Buka Matriks Port ↗</button>
+                    <button class="btn btn-ghost btn-xs" onclick="openUrlsModal()">🔗 Buka Matriks URL ↗</button>
+                    <button class="btn btn-ghost btn-xs" onclick="openTechsModal()">⚡ Buka Matriks Teknologi ↗</button>
+                  </div>
+                  <span class="pill-muted" style="font-size:10px;">Safe & Non-Destructive Controlled Proof (V9.1)</span>
+                </div>
+              </div>
+            </div>
+
           </div>
 
         </div>
       </section>
 
-      <!-- Scan History Tab View -->
+      <!-- ================================================================= -->
+      <!-- Tab 2: Scan History View (User's Isolated Scans)                 -->
+      <!-- ================================================================= -->
       <section id="viewHistory" class="tab-view hidden">
-        <div class="card sketch-card history-card">
+        <!-- History Level Breadcrumb Navigation -->
+        <nav id="historyBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-current">📜 Riwayat Scan & Target Intelligence</span>
+        </nav>
+
+        <div class="history-header-block">
+          <div class="history-header-title">
+            <span class="section-icon">📜</span>
+            <div>
+              <h2>Riwayat Scan & Target Intelligence</h2>
+              <div class="pill-muted text-xs">Semua sesi pemindaian tersimpan secara persisten dan terorganisir per
+                domain target.</div>
+            </div>
+          </div>
+          <button id="refreshHistoryBtn" class="btn btn-secondary btn-sm">🔄 Refresh Riwayat</button>
+        </div>
+
+        <!-- Global History Overview Telemetry Bar -->
+        <div class="history-telemetry-grid">
+          <div class="hist-stat-card">
+            <span class="hist-stat-icon">🌐</span>
+            <div>
+              <span class="hist-stat-val" id="histTotalDomains">0</span>
+              <span class="hist-stat-label">Domain Dipantau</span>
+            </div>
+          </div>
+          <div class="hist-stat-card">
+            <span class="hist-stat-icon">🎯</span>
+            <div>
+              <span class="hist-stat-val" id="histTotalScans">0</span>
+              <span class="hist-stat-label">Total Sesi Scan</span>
+            </div>
+          </div>
+          <div class="hist-stat-card">
+            <span class="hist-stat-icon">🌳</span>
+            <div>
+              <span class="hist-stat-val" id="histTotalSubdomains">0</span>
+              <span class="hist-stat-label">Subdomain Aktif</span>
+            </div>
+          </div>
+          <div class="hist-stat-card">
+            <span class="hist-stat-icon">🛡️</span>
+            <div>
+              <span class="hist-stat-val text-danger" id="histTotalFindings">0</span>
+              <span class="hist-stat-label">Temuan Kritis & Tinggi</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Search, Filter & Sort Toolbar -->
+        <div class="history-filter-toolbar">
+          <div class="history-toolbar-top">
+            <div class="search-input-wrap">
+              <span class="search-icon">🔍</span>
+              <input type="text" id="historySearchInput" class="custom-input"
+                placeholder="Cari domain target, IP host, ID scan (#scan_...), atau profil..." />
+            </div>
+            <div class="history-sort-wrap">
+              <label class="text-xs font-bold">Urutkan:</label>
+              <select id="historySortSelect" class="custom-select custom-select-sm">
+                <option value="LATEST">Terbaru Di-scan</option>
+                <option value="HIGHEST_RISK">Risiko Tertinggi</option>
+                <option value="MOST_ASSETS">Aset Terbanyak</option>
+                <option value="MOST_FINDINGS">Temuan Terbanyak</option>
+                <option value="ALPHABETICAL">Nama Domain (A-Z)</option>
+              </select>
+            </div>
+          </div>
+          <div class="history-toolbar-bottom">
+            <div class="history-filter-pills">
+              <button class="hist-filter-pill active" data-hist-filter="ALL">Semua Target</button>
+              <button class="hist-filter-pill" data-hist-filter="HIGH_RISK">🔥 High / Critical</button>
+              <button class="hist-filter-pill" data-hist-filter="COMPLETED">🟢 Selesai</button>
+              <button class="hist-filter-pill" data-hist-filter="RUNNING">⚡ Running</button>
+              <button class="hist-filter-pill" data-hist-filter="HAS_FINDINGS">🛡️ Has Findings</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="historyListContainer" class="history-domain-list">
+          <div class="empty-msg">Memuat riwayat scan...</div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- Tab: Pusat Laporan Keamanan & Assessment Center (V5 §31-§35)       -->
+      <!-- ================================================================= -->
+      <section id="viewReports" class="tab-view hidden">
+        <!-- Reports Level Breadcrumb Navigation -->
+        <nav id="reportsBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goReports">📑 Pusat Laporan</a>
+          <span class="breadcrumb-sep">›</span>
+          <span id="reportsBreadcrumbScan" class="breadcrumb-current">Semua Laporan</span>
+        </nav>
+
+        <div class="card sketch-card reports-hub-card">
           <div class="card-header-flex">
             <div class="title-with-icon">
-              <span class="section-icon">📜</span>
-              <h2>Riwayat Scan Terorganisir per Domain</h2>
+              <span class="section-icon">📑</span>
+              <div>
+                <h2>Pusat Laporan & Professional Disclosure Hub</h2>
+                <div class="pill-muted text-xs">Arsitektur Pelaporan Eksekutif, Bukti Tervalidasi E3/E4, dan Panduan
+                  Remediasi.</div>
+              </div>
             </div>
-            <button id="refreshHistoryBtn" class="btn btn-secondary btn-sm">🔄 Refresh Riwayat</button>
+            <div class="report-top-selector">
+              <label class="text-xs font-bold">Pilih Sesi Scan Target:</label>
+              <select id="reportScanSelect" class="custom-select" style="min-width: 260px;"></select>
+              <button id="refreshReportHubBtn" class="btn btn-secondary btn-sm">🔄 Refresh</button>
+            </div>
           </div>
-          <p class="section-subtext">Semua scan tersimpan secara persistent. Klik salah satu scan untuk membuka kembali dan meninjau tree serta temuan.</p>
 
-          <div id="historyListContainer" class="history-domain-list">
-            <div class="empty-msg">Memuat riwayat scan...</div>
+          <!-- 1. Executive Summary & Risk Scoring (§31) -->
+          <div class="report-executive-banner">
+            <div class="exec-banner-left">
+              <span class="exec-target-badge" id="reportTargetBadge">TARGET: -</span>
+              <h3 id="reportExecTitle" class="exec-title">Security Assessment Summary</h3>
+              <p id="reportExecDesc" class="exec-desc">
+                Ringkasan penilaian keamanan komprehensif berdasarkan telemetri tervalidasi dan audit Proof Quality
+                Gate.
+              </p>
+              <div class="exec-meta-chips">
+                <span class="pill pill-neutral font-mono" id="reportScanIdChip">Scan ID: -</span>
+                <span class="pill pill-neutral" id="reportDateChip">Tanggal: -</span>
+                <span class="pill pill-success" id="reportAuthChip">Scope: AUTHORIZED</span>
+              </div>
+            </div>
+            <div class="exec-banner-right">
+              <div class="risk-gauge-card">
+                <span class="risk-gauge-label">Composite Risk Rating</span>
+                <span class="risk-gauge-val" id="reportRiskGauge">0.0</span>
+                <span class="risk-gauge-status" id="reportRiskStatus">INFORMATIONAL</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Telemetry & Attack Surface Exposure Breakdown -->
+          <div class="report-metrics-grid">
+            <div class="rep-stat-card">
+              <span class="rep-stat-num" id="repStatAssets">0</span>
+              <span class="rep-stat-title">Subdomain Terpetakan</span>
+            </div>
+            <div class="rep-stat-card">
+              <span class="rep-stat-num" id="repStatPorts">0</span>
+              <span class="rep-stat-title">Port Terbuka</span>
+            </div>
+            <div class="rep-stat-card">
+              <span class="rep-stat-num" id="repStatUrls">0</span>
+              <span class="rep-stat-title">Endpoint URL</span>
+            </div>
+            <div class="rep-stat-card">
+              <span class="rep-stat-num" id="repStatParams">0</span>
+              <span class="rep-stat-title">Parameter Discovered</span>
+            </div>
+            <div class="rep-stat-card">
+              <span class="rep-stat-num text-danger" id="repStatFindings">0</span>
+              <span class="rep-stat-title">Temuan Terkonfirmasi</span>
+            </div>
+          </div>
+
+          <!-- 3. Professional Export & Disclosure Suite (§31-§35) -->
+          <div class="report-export-section">
+            <h3 class="section-title-sm">📦 1-Click Professional Export Suite (V7.1 Architecture)</h3>
+            <p class="section-subtext">Hasilkan laporan terstruktur siap kirim untuk eksekutif, auditor, bug bounty
+              platform, maupun riset CVE.</p>
+
+            <div class="export-suite-grid">
+              <!-- PDF -->
+              <div class="export-card">
+                <div class="export-card-icon">📑</div>
+                <div class="export-card-content">
+                  <h4>Executive Audit Report (PDF)</h4>
+                  <p>Laporan resmi berstandar audit korporat lengkap dengan kop dokumen, ringkasan telemetri, matriks
+                    port, dan PoC.</p>
+                </div>
+                <button id="hubPdfBtn" class="btn btn-primary btn-sm">📥 Unduh PDF</button>
+              </div>
+
+              <!-- HTML -->
+              <div class="export-card">
+                <div class="export-card-icon">🌐</div>
+                <div class="export-card-content">
+                  <h4>Interactive HTML Report</h4>
+                  <p>Laporan mandiri interaktif dengan visualizer pohon aset, pencarian temuan, dan syntax highlight.
+                  </p>
+                </div>
+                <button id="hubHtmlBtn" class="btn btn-secondary btn-sm">👁️ Buka HTML</button>
+              </div>
+
+              <!-- Bug Bounty MD -->
+              <div class="export-card">
+                <div class="export-card-icon">🎯</div>
+                <div class="export-card-content">
+                  <h4>Bug Bounty Submission (.md)</h4>
+                  <p>Format terstandarisasi HackerOne / Bugcrowd lengkap dengan CVSS vector, preconditions, dan
+                    impact.</p>
+                </div>
+                <button id="hubBountyBtn" class="btn btn-secondary btn-sm">📋 Unduh Markdown</button>
+              </div>
+
+              <!-- CVE Research MD -->
+              <div class="export-card">
+                <div class="export-card-icon">🔬</div>
+                <div class="export-card-content">
+                  <h4>CVE-Ready Research (.md)</h4>
+                  <p>Format pelaporan riset kerentanan untuk pengajuan CVE ID atau publikasi zero-day
+                    terkoordinasi.</p>
+                </div>
+                <button id="hubCveBtn" class="btn btn-secondary btn-sm">🔬 Unduh Research</button>
+              </div>
+
+              <!-- Evidence Bundle JSON -->
+              <div class="export-card">
+                <div class="export-card-icon">🔒</div>
+                <div class="export-card-content">
+                  <h4>Evidence Package Bundle (.json)</h4>
+                  <p>Paket bukti terenkapsulasi dengan tanda tangan integritas hash SHA-256 dan log
+                    verifikasi.</p>
+                </div>
+                <button id="hubJsonBtn" class="btn btn-secondary btn-sm">📦 Unduh JSON</button>
+              </div>
+
+              <!-- Reproduction Guide MD -->
+              <div class="export-card">
+                <div class="export-card-icon">🧪</div>
+                <div class="export-card-content">
+                  <h4>Reproduction Guide (.md)</h4>
+                  <p>Panduan langkah reproduksi terisolasi langkah-demi-langkah bagi tim pengembang software.</p>
+                </div>
+                <button id="hubReproBtn" class="btn btn-secondary btn-sm">🧪 Unduh Panduan</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Validated Findings Table in Report Hub -->
+          <div class="report-findings-section">
+            <h3 class="section-title-sm">🛡️ Matriks Temuan Keamanan Tervalidasi (Proof Quality Gate)</h3>
+            <div id="reportHubFindingsContainer" class="table-responsive-box mt-2">
+              <div class="empty-msg">Pilih scan untuk melihat matriks temuan tervalidasi.</div>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- Differential Scan Tab View -->
+      <!-- ================================================================= -->
+      <!-- Tab 3: Differential Scan (Diff) View                              -->
+      <!-- ================================================================= -->
       <section id="viewDiff" class="tab-view hidden">
+        <!-- Diff Level Breadcrumb Navigation -->
+        <nav id="diffBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-current">⚖️ Differential Scan Analyzer (Diff)</span>
+        </nav>
+
         <div class="card sketch-card diff-card">
           <div class="card-header-flex">
             <div class="title-with-icon">
@@ -318,7 +1286,8 @@
               <h2>Differential Scan Analyzer (Diff)</h2>
             </div>
           </div>
-          <p class="section-subtext">Bandingkan 2 scan pada domain yang sama untuk mendeteksi subdomain baru, IP yang berubah, port terbuka baru, dan temuan baru secara instan.</p>
+          <p class="section-subtext">Bandingkan 2 scan pada domain yang sama untuk mendeteksi subdomain baru, IP yang
+            berubah, port terbuka baru, dan temuan baru secara instan.</p>
 
           <div class="diff-selector-grid">
             <div class="diff-select-group">
@@ -340,9 +1309,946 @@
         </div>
       </section>
 
+      <!-- ================================================================= -->
+      <!-- Tab 4: Admin Oversight Dashboard (Monitoring Only)                -->
+      <!-- ================================================================= -->
+      <section id="viewAdmin" class="tab-view hidden">
+        <!-- Admin Level Breadcrumb Navigation -->
+        <nav id="adminBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-current">🛡️ Admin Oversight & Analytics</span>
+        </nav>
+
+        <div class="card sketch-card admin-dashboard-card">
+          <div class="card-header-flex">
+            <div class="title-with-icon">
+              <span class="section-icon">🛡️</span>
+              <h2>Admin Oversight — Domain & User Scrapping Analytics</h2>
+            </div>
+            <button id="refreshAdminBtn" class="btn btn-secondary btn-sm">🔄 Refresh Admin Data</button>
+          </div>
+          <p class="section-subtext">Pusat pengawasan platform: memantau aktivitas scrapping setiap pengguna, pemetaan
+            domain ke pengguna, dan agregasi aset seluruh sistem.</p>
+
+          <!-- Admin Global Metric Cards -->
+          <div class="admin-metrics-grid">
+            <div class="telemetry-card admin-metric">
+              <div class="telemetry-icon">👥</div>
+              <div class="telemetry-data">
+                <span class="telemetry-label">Total Pengguna</span>
+                <span id="admTotalUsers" class="telemetry-value">0</span>
+              </div>
+            </div>
+            <div class="telemetry-card admin-metric">
+              <div class="telemetry-icon">🎯</div>
+              <div class="telemetry-data">
+                <span class="telemetry-label">Total Scans Dijalankan</span>
+                <span id="admTotalScans" class="telemetry-value">0</span>
+              </div>
+            </div>
+            <div class="telemetry-card admin-metric">
+              <div class="telemetry-icon">🌐</div>
+              <div class="telemetry-data">
+                <span class="telemetry-label">Root Domain Dipantau</span>
+                <span id="admTotalDomains" class="telemetry-value">0</span>
+              </div>
+            </div>
+            <div class="telemetry-card admin-metric">
+              <div class="telemetry-icon">🌳</div>
+              <div class="telemetry-data">
+                <span class="telemetry-label">Subdomain Aktif</span>
+                <span id="admTotalSubdomains" class="telemetry-value">0</span>
+              </div>
+            </div>
+            <div class="telemetry-card admin-metric">
+              <div class="telemetry-icon">📡</div>
+              <div class="telemetry-data">
+                <span class="telemetry-label">Discovered Host IPs</span>
+                <span id="admTotalIps" class="telemetry-value">0</span>
+              </div>
+            </div>
+            <div class="telemetry-card admin-metric">
+              <div class="telemetry-icon">🛡️</div>
+              <div class="telemetry-data">
+                <span class="telemetry-label">Security Findings</span>
+                <span id="admTotalFindings" class="telemetry-value count-finding">0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Admin Sub-Navigation -->
+          <div class="admin-subtabs">
+            <button class="admin-subtab active" data-admin-view="users">👥 Aktivitas Scrapping Pengguna</button>
+            <button class="admin-subtab" data-admin-view="domains">🌐 Audit Pemetaan Domain</button>
+          </div>
+
+          <!-- Admin View 1: User Scrapping Analytics Table -->
+          <div id="adminUsersView" class="admin-view-content">
+            <div class="table-responsive-box">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Total Scans</th>
+                    <th>Root Domains</th>
+                    <th>Subdomain Aktif</th>
+                    <th>Discovered IPs</th>
+                    <th>Security Findings</th>
+                    <th>Terakhir Aktif</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersTbody">
+                  <tr>
+                    <td colspan="9" class="table-loading">Memuat data pengguna...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Admin View 2: Domain Scrapping Audit Table -->
+          <div id="adminDomainsView" class="admin-view-content hidden">
+            <div class="table-responsive-box">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>Root Domain</th>
+                    <th>Total Scans</th>
+                    <th>Discrapped Oleh (Users)</th>
+                    <th>Subdomain Aktif</th>
+                    <th>Discovered IPs</th>
+                    <th>Security Findings</th>
+                    <th>Pertama Ditemukan</th>
+                    <th>Terakhir Di-scan</th>
+                  </tr>
+                </thead>
+                <tbody id="adminDomainsTbody">
+                  <tr>
+                    <td colspan="8" class="table-loading">Memuat data audit domain...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- VIEW: DOMAIN DETAIL PAGE (§36)                                    -->
+      <!-- ================================================================= -->
+      <section id="viewDomainDetail" class="tab-view hidden">
+        <!-- Breadcrumb Navigation (§4) -->
+        <nav id="domainBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+          <span class="breadcrumb-sep">›</span>
+          <span id="domainBreadcrumbName" class="breadcrumb-current"></span>
+        </nav>
+
+        <div class="detail-header">
+          <div class="detail-header-info">
+            <h2 id="domainDetailTitle" class="detail-title">🌐 Domain Overview</h2>
+            <div class="detail-meta-row">
+              <span id="domainHealthBadge" class="status-badge status-active">ACTIVE</span>
+              <span id="domainRiskBadge" class="risk-badge risk-low">LOW</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Domain Stats Grid -->
+        <div class="detail-stats-grid">
+          <div class="stat-card-mini"><span class="stat-value" id="domainSubdomainCount">0</span><span
+              class="stat-label">Subdomains</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="domainIPCount">0</span><span class="stat-label">IP
+              Addresses</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="domainPortCount">0</span><span
+              class="stat-label">Open Ports</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="domainURLCount">0</span><span
+              class="stat-label">URLs</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="domainFindingCount">0</span><span
+              class="stat-label">Findings</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="domainScanCount">0</span><span
+              class="stat-label">Scans</span></div>
+        </div>
+
+        <!-- Subdomain List -->
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">📡 Subdomains</h3>
+          <div id="domainSubdomainList" class="tag-cloud"></div>
+        </div>
+
+        <!-- IP Addresses -->
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">🌍 IP Addresses</h3>
+          <div id="domainIPList" class="tag-cloud"></div>
+        </div>
+
+        <!-- Technologies -->
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">⚙️ Technologies</h3>
+          <div id="domainTechList" class="tag-cloud"></div>
+        </div>
+
+        <!-- Findings -->
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">🔒 Security Findings</h3>
+          <div id="domainFindingsList" class="findings-list"></div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- VIEW: ASSET DETAIL PAGE (§37)                                     -->
+      <!-- ================================================================= -->
+      <section id="viewAssetDetail" class="tab-view hidden">
+        <nav id="assetBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" id="assetBreadcrumbDomain" data-action="goDomain"></a>
+          <span class="breadcrumb-sep">›</span>
+          <span id="assetBreadcrumbName" class="breadcrumb-current"></span>
+        </nav>
+
+        <div class="detail-header">
+          <div class="detail-header-info">
+            <h2 id="assetDetailTitle" class="detail-title">🖥️ Asset Detail</h2>
+            <div class="detail-meta-row">
+              <span id="assetStatusBadge" class="status-badge status-active">ACTIVE</span>
+              <span id="assetTypeBadge" class="type-badge"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-stats-grid">
+          <div class="stat-card-mini"><span class="stat-value" id="assetPortCount">0</span><span
+              class="stat-label">Ports</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="assetURLCount">0</span><span
+              class="stat-label">URLs</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="assetParamCount">0</span><span
+              class="stat-label">Parameters</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="assetTechCount">0</span><span
+              class="stat-label">Technologies</span></div>
+          <div class="stat-card-mini"><span class="stat-value" id="assetFindingCount">0</span><span
+              class="stat-label">Findings</span></div>
+        </div>
+
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">📡 Ports & Services</h3>
+          <div id="assetPortsList" class="table-responsive-box"></div>
+        </div>
+
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">⚙️ Technologies</h3>
+          <div id="assetTechList" class="tag-cloud"></div>
+        </div>
+
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">🔗 URLs</h3>
+          <div id="assetURLList" class="url-list-compact"></div>
+        </div>
+
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">🔒 Findings</h3>
+          <div id="assetFindingsList" class="findings-list"></div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- VIEW: FINDING DETAIL PAGE (§38)                                   -->
+      <!-- ================================================================= -->
+      <section id="viewFindingDetail" class="tab-view hidden">
+        <nav id="findingBreadcrumb" class="breadcrumb-nav">
+          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+          <span class="breadcrumb-sep">›</span>
+          <a href="#" class="breadcrumb-link" id="findingBreadcrumbAsset" data-action="goAsset"></a>
+          <span class="breadcrumb-sep">›</span>
+          <span id="findingBreadcrumbName" class="breadcrumb-current"></span>
+        </nav>
+
+        <div class="detail-header">
+          <div class="detail-header-info">
+            <h2 id="findingDetailTitle" class="detail-title">🔒 Finding Detail</h2>
+            <div class="detail-meta-row">
+              <span id="findingSeverityBadge" class="severity-badge severity-high">HIGH</span>
+              <span id="findingStatusBadge" class="status-badge status-confirmed">CONFIRMED</span>
+              <span id="findingEvidenceLevelBadge" class="badge-e3">E3 — IMPACT PROOF</span>
+              <span id="findingConfidenceBadge" class="confidence-badge">CONFIDENCE: HIGH</span>
+              <span id="findingScoreBadge" class="pill-muted">EVIDENCE SCORE: 85/100</span>
+            </div>
+          </div>
+          <div class="detail-header-actions">
+            <button id="btnDownloadEvidencePackage" class="btn btn-secondary btn-sm"
+              title="Unduh Paket Evidence Kriptografis SHA-256">
+              📦 Evidence Package (.json)
+            </button>
+            <button id="btnDownloadBugBountyReport" class="btn btn-secondary btn-sm"
+              title="Unduh Laporan Format HackerOne/Bugcrowd">
+              🎯 Bug Bounty (.md)
+            </button>
+            <button id="btnDownloadCveReport" class="btn btn-secondary btn-sm"
+              title="Unduh Laporan Riset Kerentanan Baru">
+              🛡️ CVE Research (.md)
+            </button>
+            <button id="btnDownloadReproduction" class="btn btn-secondary btn-sm"
+              title="Unduh Panduan Reproduksi Terisolasi">
+              📄 Reproduction (.md)
+            </button>
+            <button id="btnExecuteLiveRetest" class="btn btn-primary btn-sm"
+              title="Jalankan Pengujian Ulang Langsung & Verifikasi Remediasi">
+              🔄 Live Retest
+            </button>
+          </div>
+        </div>
+
+        <!-- Proof Quality Gate 12-Point Checklist -->
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">🛡️ 12-Point Proof Quality Gate Verification</h3>
+          <div class="quality-gate-grid">
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Scope Authorized</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Target Correct</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Vulnerability Reproducible</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Impact Demonstrated</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Evidence Captured</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Timestamp Sealed</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> SHA-256 Hash Generated</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Cleanup Completed</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> False-Positive Filtered</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> Severity Calculated</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> CWE Mapped</div>
+            <div class="qg-item pass"><span class="qg-icon">✓</span> CVE Applicability Checked</div>
+          </div>
+        </div>
+
+        <!-- Summary & Impact Matrix -->
+        <div class="detail-section sketch-card">
+          <h3 class="detail-section-title">📋 Summary & Impact Matrix</h3>
+          <div class="finding-info-grid">
+            <div class="info-item"><span class="info-label">Finding Code</span><span id="findingCode"
+                class="info-value mono"></span></div>
+            <div class="info-item"><span class="info-label">CWE</span><span id="findingCWE"
+                class="info-value mono"></span></div>
+            <div class="info-item"><span class="info-label">CVE</span><span id="findingCVE"
+                class="info-value mono"></span></div>
+            <div class="info-item"><span class="info-label">CVSS Base</span><span id="findingCVSS"
+                class="info-value mono"></span></div>
+            <div class="info-item"><span class="info-label">Asset Target</span><span id="findingAsset"
+                class="info-value"></span></div>
+            <div class="info-item"><span class="info-label">Endpoint / Location</span><span id="findingLocation"
+                class="info-value mono"></span></div>
+          </div>
+
+          <!-- Impact Matrix Grid Component -->
+          <div class="impact-matrix-container">
+            <h4 class="im-title">📊 Evaluasi Matriks Dampak Keamanan (Impact Matrix):</h4>
+            <div class="impact-matrix-grid">
+              <div class="im-card"><span class="im-label">Confidentiality</span><strong id="imConfidentiality"
+                  class="im-val high">HIGH</strong></div>
+              <div class="im-card"><span class="im-label">Integrity</span><strong id="imIntegrity"
+                  class="im-val medium">MEDIUM</strong></div>
+              <div class="im-card"><span class="im-label">Availability</span><strong id="imAvailability"
+                  class="im-val low">LOW</strong></div>
+              <div class="im-card"><span class="im-label">Auth Bypass</span><strong id="imAuthBypass"
+                  class="im-val">POSSIBLE</strong></div>
+              <div class="im-card"><span class="im-label">Data Exposure</span><strong id="imDataExposure"
+                  class="im-val high">HIGH</strong></div>
+            </div>
+          </div>
+        </div>
+        <!-- Local AI Intelligence & MITRE ATT&CK Matrix -->
+        <div class="detail-section sketch-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 class="detail-section-title" style="margin:0;">🧠 Local AI Intelligence & Triaging Engine</h3>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button id="reTriageAiBtn" class="btn btn-secondary btn-xs" onclick="reTriageFindingWithAi()">🤖 Re-Triage Live LLM</button>
+                <span id="aiConfidenceChip" class="pill pill-success" style="font-weight:700;">AI CONFIDENCE: 95%</span>
+              </div>
+            </div>
+            <div class="ai-intelligence-container"
+              style="background:#090f1f; border:1px solid #1e293b; border-radius:8px; padding:16px; margin-bottom:12px;">
+              <div
+                style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:14px;">
+                <div class="info-item"><span class="info-label">AI Triage Decision</span><span id="aiTriageDecision"
+                    class="info-value" style="color:#10b981; font-weight:700;">CONFIRMED</span></div>
+                <div class="info-item"><span class="info-label">False-Positive Risk</span><span id="aiFpRisk"
+                    class="info-value mono" style="color:#38bdf8;">0.0% (Low Risk)</span></div>
+                <div class="info-item"><span class="info-label">Proof Mode</span><span id="aiProofMode"
+                    class="info-value mono">Controlled Non-Destructive</span></div>
+              </div>
+              <div>
+                <h4 style="font-size:12px; font-weight:700; color:#cbd5e1; margin-bottom:8px;">🎯 MITRE ATT&CK
+                  Enterprise Matrix Correlation:</h4>
+                <div id="aiMitreContainer" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Root Cause & Plain-English Explanation -->
+          <div class="detail-section sketch-card">
+            <h3 class="detail-section-title">💡 Penjelasan Eksekutif & Akar Masalah (Root Cause)</h3>
+            <div class="executive-explanation-box">
+              <strong>Penjelasan Non-Teknis:</strong>
+              <p id="findingExecutiveDesc" class="exec-desc-text"></p>
+            </div>
+            <div class="root-cause-box">
+              <strong>Akar Masalah Teknis (Root Cause):</strong>
+              <p id="findingRootCause" class="root-cause-text"></p>
+            </div>
+          </div>
+
+          <!-- Technical Details -->
+          <div class="detail-section sketch-card">
+            <h3 class="detail-section-title">🔧 Technical Analysis & PoC Demonstration</h3>
+            <div id="findingTechDetails" class="detail-content-block"></div>
+          </div>
+
+          <!-- Discovered Artifacts & Schema Intelligence -->
+          <div id="findingArtifactsSection" class="detail-section sketch-card hidden">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 class="detail-section-title" style="margin:0;">📦 Discovered Artifacts & Schema Intelligence</h3>
+              <span id="findingArtifactsCountBadge" class="pill pill-primary">0 Artifacts</span>
+            </div>
+            <div id="findingArtifactsList"></div>
+          </div>
+
+          <!-- Evidence Package & Cryptographic Provenance -->
+          <div class="detail-section sketch-card">
+            <h3 class="detail-section-title">📎 Evidence Package & SHA-256 Provenance</h3>
+            <div id="findingEvidence" class="evidence-list"></div>
+          </div>
+
+          <!-- Remediation -->
+          <div class="detail-section sketch-card">
+            <h3 class="detail-section-title">🛠️ Langkah Remediasi Spesifik</h3>
+            <div id="findingRemediation" class="detail-content-block"></div>
+          </div>
+
+          <!-- Retest & Lifecycle Status (§42) -->
+          <div class="detail-section sketch-card">
+            <h3 class="detail-section-title">🔄 Status Retest & Riwayat Lifecycle</h3>
+            <div id="retestStatusBanner" class="retest-banner hidden">
+              <span class="retest-icon">🔍</span>
+              <div id="retestStatusText">Hasil Retest Terkini: Menunggu eksekusi.</div>
+            </div>
+            <div class="finding-actions-row">
+              <button id="findingTransitionBtn" class="btn btn-primary btn-sm">Ubah Status Lifecycle</button>
+            </div>
+            <div id="findingTimeline" class="finding-timeline"></div>
+          </div>
+      </section>
+
     </div>
   </main>
 
+  <!-- ===================================================================== -->
+  <!-- GLOBAL SEARCH OVERLAY (§47)                                           -->
+  <!-- ===================================================================== -->
+  <div id="globalSearchOverlay" class="search-overlay hidden">
+    <div class="search-overlay-content">
+      <div class="search-overlay-header">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="globalSearchInput" class="search-overlay-input"
+          placeholder="Search domains, IPs, URLs, CVEs, findings..." autocomplete="off" />
+        <button id="closeSearchOverlay" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div id="globalSearchResults" class="search-results-container">
+        <div class="search-hint">Type to search across all assets, domains, IPs, URLs, and findings...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 0: Security Assessment Report Hub Modal (§52, §53, §100)-->
+  <!-- ===================================================================== -->
+  <div id="reportModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card report-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">📄</span>
+          <div>
+            <h3>Pusat Laporan Keamanan & Unduhan</h3>
+            <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">KLASIFIKASI: CONFIDENTIAL /
+              TLP:AMBER</span>
+          </div>
+        </div>
+        <button id="closeReportModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="closeReportModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Target & Telemetry Executive Card -->
+        <div class="report-summary-card">
+          <div class="report-summary-header">
+            <div>
+              <span class="report-target-label">TARGET PENILAIAN:</span>
+              <strong id="reportModalTarget" class="report-target-value">-</strong>
+            </div>
+            <span id="reportModalScanId" class="badge-pill">ID: -</span>
+          </div>
+          <div class="report-metrics-grid">
+            <div class="report-metric-box">
+              <span class="rm-label">Total Aset</span>
+              <strong id="reportMetricAssets" class="rm-value">0</strong>
+            </div>
+            <div class="report-metric-box">
+              <span class="rm-label">Open Ports</span>
+              <strong id="reportMetricPorts" class="rm-value">0</strong>
+            </div>
+            <div class="report-metric-box">
+              <span class="rm-label">URLs</span>
+              <strong id="reportMetricUrls" class="rm-value">0</strong>
+            </div>
+            <div class="report-metric-box">
+              <span class="rm-label">Parameters</span>
+              <strong id="reportMetricParams" class="rm-value">0</strong>
+            </div>
+            <div class="report-metric-box">
+              <span class="rm-label">Total Temuan</span>
+              <strong id="reportMetricFindings" class="rm-value count-finding">0</strong>
+            </div>
+          </div>
+        </div>
+
+        <h4 class="report-section-title">Pilih Format Laporan:</h4>
+
+        <div class="report-formats-grid">
+          <!-- Option 1: PDF Executive -->
+          <div class="report-format-card primary-format">
+            <div class="format-icon">📕</div>
+            <div class="format-info">
+              <strong>Dokumen PDF Resmi (Siap Pakai)</strong>
+              <p>Laporan eksekutif & teknis berformat PDF dengan kop resmi, ringkasan telemetri, tabel inventaris aset,
+                dan reproduksi Proof of Concept (PoC).</p>
+            </div>
+            <button id="downloadPdfReportBtn" class="btn btn-primary btn-block">
+              📥 Unduh Dokumen PDF (.pdf)
+            </button>
+          </div>
+
+          <!-- Option 2: HTML Interactive -->
+          <div class="report-format-card">
+            <div class="format-icon">🌐</div>
+            <div class="format-info">
+              <strong>Laporan Web HTML Interaktif</strong>
+              <p>Tampilan laporan dark-theme responsif lengkap dengan fitur pencarian dan tombol bawaan Simpan ke PDF /
+                Cetak langsung.</p>
+            </div>
+            <button id="viewHtmlReportBtn" class="btn btn-secondary btn-block">
+              👁 Buka Laporan HTML (Tab Baru)
+            </button>
+          </div>
+
+          <!-- Option 3: Markdown Technical -->
+          <div class="report-format-card">
+            <div class="format-icon">📝</div>
+            <div class="format-info">
+              <strong>Laporan Markdown Audit</strong>
+              <p>Format teks terstruktur Markdown murni untuk dokumentasi teknis tim engineering, ticket Jira/GitHub,
+                dan arsip internal.</p>
+            </div>
+            <button id="downloadMdReportBtn" class="btn btn-secondary btn-block">
+              📥 Unduh Dokumen Markdown (.md)
+            </button>
+          </div>
+
+          <!-- Option 4: Raw JSON Export -->
+          <div class="report-format-card">
+            <div class="format-icon">💾</div>
+            <div class="format-info">
+              <strong>Ekspor Data Mentah JSON</strong>
+              <p>Dataset JSON mentah seluruh aset, port, parameter, dan evidence untuk integrasi SIEM, BigData, atau
+                automated pipelines.</p>
+            </div>
+            <button id="downloadJsonReportBtn" class="btn btn-secondary btn-block">
+              📥 Unduh Dataset JSON (.json)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 1: Global All Ports Matrix Modal                     -->
+  <!-- ===================================================================== -->
+  <div id="portsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">📡</span>
+          <h3>Global Port Matrix & Service Explorer</h3>
+        </div>
+        <button id="closePortsModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('portsModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="portSearchInput" placeholder="Filter host, port (80, 443, 3306), service..."
+            class="tree-search-input" />
+          <button id="refreshPortsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Port</button>
+        </div>
+        <div class="port-filter-tags">
+          <button class="port-filter-pill active" data-port-filter="ALL">Semua Port</button>
+          <button class="port-filter-pill" data-port-filter="80">HTTP (80)</button>
+          <button class="port-filter-pill" data-port-filter="443">HTTPS (443)</button>
+          <button class="port-filter-pill" data-port-filter="WEB_ALT">Web Alt (8080/8443/8000)</button>
+          <button class="port-filter-pill" data-port-filter="DB">Database (3306/5432/6379)</button>
+          <button class="port-filter-pill" data-port-filter="SSH">SSH (22)</button>
+        </div>
+        <div id="portsMatrixContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 2: Global All Parameters Explorer Modal              -->
+  <!-- ===================================================================== -->
+  <div id="paramsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🧩</span>
+          <h3>Global Parameter Discovery Explorer</h3>
+        </div>
+        <button id="closeParamsModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('paramsModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="paramSearchInput" placeholder="Cari nama parameter, URL, atau host..."
+            class="tree-search-input" />
+          <button id="refreshParamsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Params</button>
+        </div>
+        <div id="paramsMatrixContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 3: Global Discovered URLs Explorer Modal             -->
+  <!-- ===================================================================== -->
+  <div id="urlsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🔗</span>
+          <h3>Global Discovered URLs & Endpoints Explorer</h3>
+        </div>
+        <button id="closeUrlsModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('urlsModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="urlSearchInput" placeholder="Cari URL, path, host, atau status code (200, 302, 403)..."
+            class="tree-search-input" />
+          <button id="refreshUrlsBtn" class="btn btn-secondary btn-sm">🔄 Refresh URLs</button>
+        </div>
+        <div class="port-filter-tags">
+          <button class="url-filter-pill active" data-url-filter="ALL">Semua URL</button>
+          <button class="url-filter-pill" data-url-filter="200">200 OK</button>
+          <button class="url-filter-pill" data-url-filter="REDIRECT">3xx Redirect</button>
+          <button class="url-filter-pill" data-url-filter="CLIENT_ERR">4xx Client</button>
+          <button class="url-filter-pill" data-url-filter="SERVER_ERR">5xx Error</button>
+          <button class="url-filter-pill" data-url-filter="HAS_PARAMS">Has Params 🧩</button>
+        </div>
+        <div id="urlsMatrixContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 4: Global Technology Stack & Fingerprints Modal      -->
+  <!-- ===================================================================== -->
+  <div id="techsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">⚙️</span>
+          <h3>Global Technology Stack & Fingerprints Matrix</h3>
+        </div>
+        <button id="closeTechsModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('techsModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="techSearchInput" placeholder="Cari nama teknologi, versi, atau host..."
+            class="tree-search-input" />
+          <button id="refreshTechsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Tech</button>
+        </div>
+        <div class="port-filter-tags">
+          <button class="tech-filter-pill active" data-tech-filter="ALL">Semua Teknologi</button>
+          <button class="tech-filter-pill" data-tech-filter="SERVER">Web Server</button>
+          <button class="tech-filter-pill" data-tech-filter="CMS">CMS</button>
+          <button class="tech-filter-pill" data-tech-filter="FRAMEWORK">Framework</button>
+          <button class="tech-filter-pill" data-tech-filter="CDN_WAF">CDN / WAF</button>
+        </div>
+        <div id="techsMatrixContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 5: Global Active Assets & Subdomains Modal           -->
+  <!-- ===================================================================== -->
+  <div id="assetsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🌳</span>
+          <h3>Global Active Assets & Subdomains Matrix</h3>
+        </div>
+        <button id="closeAssetsModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('assetsModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="assetSearchInput" placeholder="Cari subdomain, host, atau IP..."
+            class="tree-search-input" />
+          <button id="refreshAssetsBtn" class="btn btn-secondary btn-sm">🔄 Refresh Assets</button>
+        </div>
+        <div class="port-filter-tags">
+          <button class="asset-filter-pill active" data-asset-filter="ALL">Semua Aset</button>
+          <button class="asset-filter-pill" data-asset-filter="ROOT">Root Domain</button>
+          <button class="asset-filter-pill" data-asset-filter="SUBDOMAINS">Subdomains</button>
+          <button class="asset-filter-pill" data-asset-filter="HAS_PORTS">Has Ports 📡</button>
+          <button class="asset-filter-pill" data-asset-filter="HAS_FINDINGS">Has Findings 🛡️</button>
+        </div>
+        <div id="assetsMatrixContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 6: Global Security Findings & Vulnerabilities Modal  -->
+  <!-- ===================================================================== -->
+  <div id="findingsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🛡️</span>
+          <h3>Global Security Findings & Vulnerability Matrix</h3>
+        </div>
+        <button id="closeFindingsModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('findingsModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="findingModalSearchInput" placeholder="Cari judul temuan, CWE, CVE, atau host..."
+            class="tree-search-input" />
+          <button id="refreshFindingsModalBtn" class="btn btn-secondary btn-sm">🔄 Refresh Findings</button>
+        </div>
+        <div class="port-filter-tags">
+          <button class="finding-modal-filter-pill active" data-fsev-filter="ALL">Semua Temuan</button>
+          <button class="finding-modal-filter-pill" data-fsev-filter="CRITICAL">Critical</button>
+          <button class="finding-modal-filter-pill" data-fsev-filter="HIGH">High</button>
+          <button class="finding-modal-filter-pill" data-fsev-filter="MEDIUM">Medium</button>
+          <button class="finding-modal-filter-pill" data-fsev-filter="LOW">Low</button>
+          <button class="finding-modal-filter-pill" data-fsev-filter="CONFIRMED">Confirmed (E3)</button>
+        </div>
+        <div id="findingsModalContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 7: MITRE ATT&CK Matrix & Threat Intelligence Modal   -->
+  <!-- ===================================================================== -->
+  <div id="mitreModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card" style="max-width: 1200px; width: 95%;">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🎯</span>
+          <div>
+            <h3>MITRE ATT&CK Enterprise Matrix Navigator</h3>
+            <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">ATT&CK v14.1 — Threat Behavioral
+              Modeling</span>
+          </div>
+        </div>
+        <button id="closeMitreModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('mitreModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex" style="margin-bottom: 12px;">
+          <div class="pill-muted" style="font-size: 12px;">
+            Memetakan kerentanan terkonfirmasi dan observasi reconnaissance ke taktik & teknik ATT&CK resmi.
+          </div>
+          <button id="refreshMitreModalBtn" class="btn btn-secondary btn-sm">🔄 Refresh Matriks</button>
+        </div>
+        <div id="mitreMatrixGrid"
+          style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 14px; min-height: 380px;">
+          <div class="loading-spinner">Memuat Matriks MITRE ATT&CK...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 8: Visual Proof Screenshot & Evidence Gallery Modal  -->
+  <!-- ===================================================================== -->
+  <div id="galleryModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card" style="max-width: 1100px; width: 95%;">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">📸</span>
+          <div>
+            <h3>Galeri Bukti Visual & Screenshot PoC</h3>
+            <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">FIRST-CLASS EVIDENCE — SHA-256
+              PROVENANCE</span>
+          </div>
+        </div>
+        <button id="closeGalleryModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup Modal" onclick="document.getElementById('galleryModal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex" style="margin-bottom: 14px;">
+          <div class="pill-muted" style="font-size: 12px;">
+            Seluruh tangkapan layar antarmuka web, portal login, dan PoC temuan dengan segel kriptografi.
+          </div>
+          <button id="refreshGalleryModalBtn" class="btn btn-secondary btn-sm">🔄 Refresh Galeri</button>
+        </div>
+        <div id="galleryGrid" class="gallery-grid"
+          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px;">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- ===================================================================== -->
+  <!-- Contextual Modal 9: Deep Artifact Intelligence & Database Dumps Modal -->
+  <!-- ===================================================================== -->
+  <div id="artifactsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card matrix-modal-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">📦</span>
+          <div>
+            <h3>Deep Artifact Intelligence & Database Schema Explorer (V9)</h3>
+            <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">ZERO-EXECUTION STATIC AST PARSER &
+              CREDENTIAL EXTRACTOR</span>
+          </div>
+        </div>
+        <button onclick="document.getElementById('artifactsModal').classList.add('hidden')" class="btn btn-ghost btn-sm"
+          title="Tutup Modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-toolbar-flex">
+          <input type="text" id="artifactSearchInput" oninput="renderArtifactsMatrix()"
+            placeholder="Cari nama file .sql, .csv, host, nama database, atau SHA-256..." class="tree-search-input" />
+          <button onclick="loadAllArtifacts()" class="btn btn-secondary btn-sm">🔄 Refresh Artifacts</button>
+        </div>
+        <div class="port-filter-tags">
+          <button class="artifact-filter-pill active"
+            onclick="state.currentArtifactFilter='ALL'; renderArtifactsMatrix()">Semua Artefak</button>
+          <button class="artifact-filter-pill" onclick="state.currentArtifactFilter='SQL'; renderArtifactsMatrix()">SQL
+            Dumps 🗄️</button>
+          <button class="artifact-filter-pill" onclick="state.currentArtifactFilter='CSV'; renderArtifactsMatrix()">CSV
+            / Tabular 📊</button>
+          <button class="artifact-filter-pill"
+            onclick="state.currentArtifactFilter='HASHES'; renderArtifactsMatrix()">Hashes & Creds 🔑</button>
+          <button class="artifact-filter-pill" onclick="state.currentArtifactFilter='PII'; renderArtifactsMatrix()">PII
+            Data 👤</button>
+        </div>
+        <div id="artifactsMatrixContainer" class="table-responsive-box modal-table-scroll">
+          <div class="empty-msg">Pilih atau jalankan scan aktif terlebih dahulu.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Artifact Detail & Schema Explorer Modal -->
+  <div id="artifactDetailModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card" style="max-width: 1050px; width: 95%;">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🗄️</span>
+          <div>
+            <h3 id="artifactDetailTitle">Detail Artefak Keamanan</h3>
+            <span id="artifactDetailMeta" class="pill-muted" style="font-size: 11px;">Memuat metadata...</span>
+          </div>
+        </div>
+        <button onclick="document.getElementById('artifactDetailModal').classList.add('hidden')"
+          class="btn btn-ghost btn-sm" title="Tutup">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="port-filter-tags" style="margin-bottom: 14px;">
+          <button class="art-tab-btn active" data-tab="schema" onclick="setArtifactTab('schema')">📋 Database Schema &
+            Tables</button>
+          <button class="art-tab-btn" data-tab="credentials" onclick="setArtifactTab('credentials')">🔑 Extracted Hashes
+            & Users</button>
+          <button class="art-tab-btn" data-tab="preview" onclick="setArtifactTab('preview')">👁️ Preview, Copy &
+            Export</button>
+        </div>
+        <div id="artifactDetailContent" class="artifact-detail-view"
+          style="max-height: 520px; overflow-y: auto; padding-right: 6px;">
+          <div class="empty-msg">Pilih artefak untuk melihat struktur skema.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Auth Modal (Login & Register Dialog)                                  -->
+  <!-- ===================================================================== -->
+  <div id="authModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card auth-modal-card">
+      <div class="modal-header">
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab-btn active" data-auth-tab="login" onclick="openAuthModal('login')">Masuk (Login)</button>
+          <button type="button" class="auth-tab-btn" data-auth-tab="register" onclick="openAuthModal('register')">Daftar Akun Baru</button>
+        </div>
+        <button id="closeAuthModalBtn" class="btn btn-ghost btn-sm modal-close-btn" title="Tutup" onclick="closeAuthModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Error / Info Alert -->
+        <div id="authAlert" class="auth-alert hidden"></div>
+
+        <!-- Login Form -->
+        <form id="loginForm" class="auth-form">
+          <div class="form-group">
+            <label for="loginUsername">Username atau Email</label>
+            <input type="text" id="loginUsername" class="custom-input" placeholder="Masukkan username atau email" required
+              autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input type="password" id="loginPassword" class="custom-input" placeholder="••••••••" required
+              autocomplete="current-password" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">🚀 Masuk ke Hunter Aja</button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" class="auth-form hidden">
+          <div class="form-group">
+            <label for="regUsername">Username</label>
+            <input type="text" id="regUsername" class="custom-input" placeholder="contoh: budi_security" required />
+          </div>
+          <div class="form-group">
+            <label for="regEmail">Email</label>
+            <input type="email" id="regEmail" class="custom-input" placeholder="budi@example.com" required />
+          </div>
+          <div class="form-group">
+            <label for="regPassword">Password (min. 6 karakter)</label>
+            <input type="password" id="regPassword" class="custom-input" placeholder="Minimal 6 karakter" required />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">✨ Buat Akun & Masuk</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
   <footer class="footer">
     <div class="container footer-container">
       <div class="footer-left">
@@ -355,6 +2261,404 @@
     </div>
   </footer>
 
-  <script src="js/app.js"></script>
+  <!-- Mobile App Bottom Navigation Bar -->
+  <nav id="bottomNav" class="bottom-navbar">
+    <div class="bottom-navbar-container">
+      <!-- Guest Bottom Tabs -->
+      <button class="bottom-nav-link active guest-tab" data-tab="home">
+        <span class="bnav-icon">🏠</span>
+        <span class="bnav-label">Home</span>
+      </button>
+      <button class="bottom-nav-link guest-tab" data-tab="trial">
+        <span class="bnav-icon">⚡</span>
+        <span class="bnav-label">Sandbox</span>
+      </button>
+      <button class="bottom-nav-link guest-tab" data-tab="features">
+        <span class="bnav-icon">⭐</span>
+        <span class="bnav-label">Fitur</span>
+      </button>
+
+      <!-- Authenticated User Bottom Tabs -->
+      <button class="bottom-nav-link user-tab hidden" data-tab="dashboard">
+        <span class="bnav-icon">🎯</span>
+        <span class="bnav-label">Dashboard</span>
+      </button>
+      <button class="bottom-nav-link user-tab hidden" data-tab="history">
+        <span class="bnav-icon">📜</span>
+        <span class="bnav-label">History</span>
+      </button>
+      <button class="bottom-nav-link user-tab hidden" data-tab="reports">
+        <span class="bnav-icon">📦</span>
+        <span class="bnav-label">Laporan</span>
+      </button>
+      <button class="bottom-nav-link user-tab hidden" data-tab="diff">
+        <span class="bnav-icon">⚖️</span>
+        <span class="bnav-label">Diff</span>
+      </button>
+
+      <!-- Admin-Only Bottom Tab -->
+      <button id="adminBottomTabBtn" class="bottom-nav-link admin-only-tab hidden" data-tab="admin">
+        <span class="bnav-icon">🛡️</span>
+        <span class="bnav-label">Admin</span>
+      </button>
+
+      <!-- API Docs External Link -->
+      <a class="bottom-nav-link" href="/docs" target="_blank" rel="noopener">
+        <span class="bnav-icon">📖</span>
+        <span class="bnav-label">Docs ↗</span>
+      </a>
+    </div>
+  </nav>
+
+  <!-- Trial Limit Exceeded Friendly Modal Dialog -->
+  <div id="trialLimitModal" class="modal-backdrop hidden">
+    <div class="card sketch-card modal-card trial-limit-card">
+      <div class="modal-header">
+        <div class="trial-limit-badge">🔒 Percobaan Selesai</div>
+        <button id="closeTrialLimitModalBtn" class="modal-close-btn">&times;</button>
+      </div>
+      <div class="trial-limit-body">
+        <div class="trial-limit-avatar">🐙</div>
+        <h3 class="trial-limit-title">Uji Coba Telah Digunakan</h3>
+        <p class="trial-limit-text">
+          Sesi uji coba pemindaian langsung pada perangkat ini telah selesai. Silakan masuk atau daftar akun Hunter Aja
+          (Gratis & Cepat) untuk melanjutkan pemindaian tanpa batas, mengekspor hasil temuan, dan menyimpan seluruh
+          riwayat aset.
+        </p>
+
+        <div class="trial-limit-actions">
+          <button id="trialLimitAuthBtn" class="btn btn-primary btn-block">
+            ✨ Masuk / Daftar Akun Baru (Gratis)
+          </button>
+          <button id="trialLimitCloseBtn" class="btn btn-ghost btn-block">
+            Nanti Saja
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-App System Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- In-App System Alert & Confirm Modal (§System Sketch Theme) -->
+  <div id="systemConfirmModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card system-dialog-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon" id="sysModalIcon">⚠️</span>
+          <h3 id="sysModalTitle">Konfirmasi Sistem</h3>
+        </div>
+        <button id="sysModalCloseBtn" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="sysModalMessage" class="sys-modal-text"></p>
+        <div class="modal-footer-actions">
+          <button id="sysModalCancelBtn" class="btn btn-secondary btn-sm">Batal</button>
+          <button id="sysModalConfirmBtn" class="btn btn-primary btn-sm">Ya, Lanjutkan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screenshot Lightbox Modal (§39) -->
+  <div id="screenshotLightboxModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card lightbox-dialog-card">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">📸</span>
+          <h3 id="lightboxTitle">Bukti Tangkapan Layar (Screenshot)</h3>
+        </div>
+        <button id="closeLightboxBtn" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="modal-body lightbox-body">
+        <div id="lightboxImageWrap" class="lightbox-img-wrap">
+          <img id="lightboxImg" src="" alt="Screenshot PoC" class="lightbox-img" />
+        </div>
+        <div id="lightboxMeta" class="lightbox-meta-bar"></div>
+      </div>
+    </div>
+  </div>
+  <!-- V4 Tool Registry Explorer Modal -->
+  <div id="toolRegistryModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card v4-tool-dialog">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">🛠️</span>
+          <div>
+            <h3>Security Tool Registry & Capabilities</h3>
+            <div class="pill-muted text-xs">Katalog 30+ tools keamanan, kategori, tingkat risiko, dan prakondisi.</div>
+          </div>
+        </div>
+        <button id="closeToolRegistryBtn" class="btn btn-ghost btn-sm" onclick="closeToolRegistryModal()">✕</button>
+      </div>
+      <div id="toolRegistryModalContent" class="modal-body v4-tool-modal-scroll">
+        <!-- Injected via JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Account Settings, Profile & Security Modal -->
+  <div id="accountSettingsModal" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card account-modal-dialog">
+      <div class="modal-header">
+        <div class="title-with-icon">
+          <span class="section-icon">⚙️</span>
+          <div>
+            <h3>Pengaturan Akun & Keamanan</h3>
+            <div class="pill-muted text-xs">Kelola profil, kata sandi, integrasi SSO, dan preferensi platform.</div>
+          </div>
+        </div>
+        <button id="closeAccountModalBtn" class="btn btn-ghost btn-sm" onclick="closeAccountSettingsModal()">✕</button>
+      </div>
+
+      <div class="account-settings-container">
+        <!-- Sidebar Tabs -->
+        <div class="account-tabs-sidebar">
+          <button class="acc-tab-btn active" data-acc-tab="password" onclick="switchAccountTab('password')">
+            <span class="acc-tab-icon">🔑</span>
+            <span>Ganti Password</span>
+          </button>
+          <button class="acc-tab-btn" data-acc-tab="linked" onclick="switchAccountTab('linked')">
+            <span class="acc-tab-icon">🔗</span>
+            <span>Akun Terhubung (SSO)</span>
+          </button>
+          <button class="acc-tab-btn" data-acc-tab="tokens" onclick="switchAccountTab('tokens')">
+            <span class="acc-tab-icon">⚡</span>
+            <span>API Token & Key</span>
+          </button>
+          <button class="acc-tab-btn" data-acc-tab="preferences" onclick="switchAccountTab('preferences')">
+            <span class="acc-tab-icon">🎛️</span>
+            <span>Preferensi Workspace</span>
+          </button>
+        </div>
+
+        <!-- Content Area -->
+        <div class="account-tab-content">
+          <!-- Alert Box -->
+          <div id="accountAlert" class="auth-alert hidden"></div>
+
+          <!-- TAB 1: Change Password -->
+          <div id="accTabPassword" class="acc-pane">
+            <div class="acc-pane-header">
+              <div class="acc-pane-badge">🔐 Keamanan Kredensial</div>
+              <h4 class="acc-pane-title">Perbarui Password Akun</h4>
+              <p class="acc-pane-desc">Pastikan menggunakan kombinasi password yang kuat dan unik untuk mengamankan data target dan temuan investigasi.</p>
+            </div>
+
+            <form id="changePasswordForm" class="account-profile-form">
+              <div class="form-field-group">
+                <label class="form-field-label" for="oldPasswordInput">
+                  <span>🔑 Password Saat Ini (Lama)</span>
+                  <span class="required-star">*</span>
+                </label>
+                <div class="input-with-action">
+                  <input type="password" id="oldPasswordInput" class="account-input" placeholder="Masukkan password lama saat ini..." required autocomplete="current-password" />
+                  <button type="button" class="pwd-toggle-btn" onclick="toggleInputVisibility('oldPasswordInput', this)" title="Tampilkan/Sembunyikan Password">👁️</button>
+                </div>
+              </div>
+
+              <div class="form-field-group">
+                <label class="form-field-label" for="newPasswordInput">
+                  <span>✨ Password Baru</span>
+                  <span class="required-star">* (minimal 6 karakter)</span>
+                </label>
+                <div class="input-with-action">
+                  <input type="password" id="newPasswordInput" class="account-input" placeholder="Masukkan password baru yang kuat..." required minlength="6" autocomplete="new-password" />
+                  <button type="button" class="pwd-toggle-btn" onclick="toggleInputVisibility('newPasswordInput', this)" title="Tampilkan/Sembunyikan Password">👁️</button>
+                </div>
+                
+                <div class="strength-meter-wrap">
+                  <div class="strength-meter-track"><div id="pwdStrengthFill" class="strength-meter-bar"></div></div>
+                  <span id="pwdStrengthLabel" class="strength-meter-text">Kekuatan: Belum diisi</span>
+                </div>
+              </div>
+
+              <div class="form-field-group">
+                <label class="form-field-label" for="confirmPasswordInput">
+                  <span>🛡️ Konfirmasi Password Baru</span>
+                  <span class="required-star">*</span>
+                </label>
+                <div class="input-with-action">
+                  <input type="password" id="confirmPasswordInput" class="account-input" placeholder="Ulangi kembali password baru..." required minlength="6" autocomplete="new-password" />
+                  <button type="button" class="pwd-toggle-btn" onclick="toggleInputVisibility('confirmPasswordInput', this)" title="Tampilkan/Sembunyikan Password">👁️</button>
+                </div>
+              </div>
+
+              <div class="form-action-row">
+                <button type="submit" id="savePasswordBtn" class="btn btn-primary btn-save-pwd">
+                  💾 Simpan Perubahan Password
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- TAB 2: Linked Accounts (SSO) -->
+          <div id="accTabLinked" class="acc-pane hidden">
+            <div class="acc-pane-header">
+              <div class="acc-pane-badge">🔗 Identitas & Akses</div>
+              <h4 class="acc-pane-title">Akun Terhubung (SSO)</h4>
+              <p class="acc-pane-desc">Hubungkan akun eksternal untuk proses autentikasi cepat (Single Sign-On).</p>
+            </div>
+
+            <div class="linked-accounts-list">
+              <!-- Google -->
+              <div class="linked-account-card">
+                <div class="linked-acc-info">
+                  <span class="linked-acc-icon">🌐</span>
+                  <div>
+                    <strong>Google Workspace / Identity</strong>
+                    <div class="text-xs text-muted" id="googleLinkedStatus">Belum terhubung</div>
+                  </div>
+                </div>
+                <button class="btn btn-secondary btn-xs" id="linkGoogleBtn" onclick="toggleSSOLink('google')">
+                  🔗 Hubungkan Google
+                </button>
+              </div>
+
+              <!-- GitHub -->
+              <div class="linked-account-card">
+                <div class="linked-acc-info">
+                  <span class="linked-acc-icon">🐙</span>
+                  <div>
+                    <strong>GitHub Account</strong>
+                    <div class="text-xs text-muted" id="githubLinkedStatus">Belum terhubung</div>
+                  </div>
+                </div>
+                <button class="btn btn-secondary btn-xs" id="linkGithubBtn" onclick="toggleSSOLink('github')">
+                  🔗 Hubungkan GitHub
+                </button>
+              </div>
+
+              <!-- SAML / OIDC Enterprise -->
+              <div class="linked-account-card">
+                <div class="linked-acc-info">
+                  <span class="linked-acc-icon">🛡️</span>
+                  <div>
+                    <strong>Enterprise SAML / OIDC</strong>
+                    <div class="text-xs text-muted">Akses korporasi & Zero Trust</div>
+                  </div>
+                </div>
+                <span class="pill-muted text-xs">PRO Enterprise</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 3: API Tokens -->
+          <div id="accTabTokens" class="acc-pane hidden">
+            <div class="acc-pane-header">
+              <div class="acc-pane-badge">⚡ Developer & Automation</div>
+              <h4 class="acc-pane-title">API Token & Automation Key</h4>
+              <p class="acc-pane-desc">Bearer Token otentikasi untuk integrasi REST API, skrip otomatisasi CLI, dan pipeline pengujian keamanan.</p>
+            </div>
+
+            <!-- Explanatory Box -->
+            <div class="info-callout-card">
+              <span class="info-callout-icon">💡</span>
+              <div>
+                <strong>Apa Fungsi API Bearer Token Ini?</strong>
+                <p class="text-xs text-muted" style="margin-top:3px; line-height:1.5;">
+                  Token ini adalah kredensial kriptografis (JWT) akun Anda. Anda dapat menggunakannya di terminal (cURL), skrip Python, atau CI/CD GitHub Actions untuk memulai pemindaian otomatis tanpa perlu login manual di web browser.
+                </p>
+              </div>
+            </div>
+
+            <div class="token-credential-card">
+              <div class="token-card-top">
+                <span class="token-label">Active Bearer JWT Token:</span>
+                <button type="button" class="btn btn-ghost btn-xs" onclick="toggleTokenMask()">👁️ Tampilkan / Sembunyikan</button>
+              </div>
+              <div class="token-input-wrapper">
+                <input type="password" id="userBearerTokenDisplay" class="token-input-field font-mono" readonly value="loading..." />
+                <button type="button" class="btn btn-primary btn-xs btn-copy-token" onclick="copyApiToken()">
+                  📋 Salin Token
+                </button>
+              </div>
+            </div>
+
+            <div class="token-example-container">
+              <strong class="text-xs">Contoh Request Otomasi via Terminal (cURL):</strong>
+              <pre class="code-box-mini font-mono"><code>curl -X GET "http://localhost:9001/api/scans" \
+  -H "Authorization: Bearer &lt;TOKEN_ANDA&gt;"</code></pre>
+            </div>
+          </div>
+
+          <!-- TAB 4: Workspace Preferences -->
+          <div id="accTabPreferences" class="acc-pane hidden">
+            <h4 class="acc-pane-title">🎛️ Preferensi Workspace & Notifikasi</h4>
+            <p class="acc-pane-desc">Sesuaikan pengalaman visual dan audio saat pemindaian berlangsung.</p>
+
+            <div class="pref-items-list">
+              <label class="pref-switch-row">
+                <div>
+                  <strong>🔔 Notifikasi Audio Temuan Kritis</strong>
+                  <div class="text-xs text-muted">Bunyikan alert audio saat temuan Critical atau High terdeteksi</div>
+                </div>
+                <input type="checkbox" id="prefAudioAlert" checked onchange="savePreference('audio', this.checked)" />
+              </label>
+
+              <label class="pref-switch-row">
+                <div>
+                  <strong>📜 Auto-Scroll Terminal Stream</strong>
+                  <div class="text-xs text-muted">Otomatis gulir ke log terbaru pada live stream console</div>
+                </div>
+                <input type="checkbox" id="prefAutoScroll" checked onchange="savePreference('autoscroll', this.checked)" />
+              </label>
+
+              <label class="pref-switch-row">
+                <div>
+                  <strong>⚡ Compact Tree Explorer</strong>
+                  <div class="text-xs text-muted">Gunakan tata letak pohon aset yang lebih rapat untuk layar kecil</div>
+                </div>
+                <input type="checkbox" id="prefCompactView" onchange="savePreference('compact', this.checked)" />
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Command Palette & Search Overlay (Ctrl+K / Cmd+K) (§19, §20) -->
+  <div id="globalSearchOverlay" class="modal-backdrop hidden">
+    <div class="modal-dialog sketch-card command-palette-dialog">
+      <div class="modal-header command-palette-header">
+        <div class="command-input-wrap">
+          <span class="command-search-icon">🔍</span>
+          <input id="globalSearchInput" type="text" placeholder="Cari aset, domain, IP, URL, parameter, kerentanan, atau ketik perintah (Ctrl+K)..." autocomplete="off" />
+          <span class="command-kbd-badge">ESC untuk menutup</span>
+        </div>
+        <button id="closeSearchOverlay" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="modal-body command-palette-body">
+        <div id="globalSearchResults" class="command-results-container">
+          <div class="search-hint">Ketik minimal 2 karakter untuk mencari atau pilih perintah cepat di bawah...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vendor Plugins (100% Local & Safe) -->
+  <script src="vendor/jquery.min.js"></script>
+  <script src="vendor/jstree/jstree.min.js"></script>
+
+  <!-- Modular Frontend Architecture -->
+  <script src="js/state.js?v=9.3.0"></script>
+  <script src="js/auth.js?v=9.3.0"></script>
+  <script src="js/navigation.js?v=9.3.0"></script>
+  <script src="js/stream.js?v=9.3.0"></script>
+  <script src="js/scan.js?v=9.3.0"></script>
+  <script src="js/tree.js?v=9.3.0"></script>
+  <script src="js/findings.js?v=9.3.0"></script>
+  <script src="js/modals.js?v=9.3.0"></script>
+  <script src="js/artifacts.js?v=9.3.0"></script>
+  <script src="js/history.js?v=9.3.0"></script>
+  <script src="js/reports.js?v=9.3.0"></script>
+  <script src="js/admin.js?v=9.3.0"></script>
+  <script src="js/search.js?v=9.3.0"></script>
+  <script src="js/mitre.js?v=9.3.0"></script>
+  <script src="js/v4_engine_ui.js?v=9.3.0"></script>
+  <script src="js/app.js?v=9.3.0"></script>
 </body>
+
 </html>

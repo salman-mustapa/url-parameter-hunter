@@ -26,8 +26,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 async def lifespan(app: FastAPI):
     await init_db()
     event_bus.set_persister(result_service.persist_event)
-    logger.info("Bug Hunter started. DB ready.")
+    # Connect EventBus to Redis (§9, §42) — falls back to in-memory if unavailable
+    await event_bus.connect_redis(settings.redis_url)
+    logger.info("Bug Hunter v%s started. DB ready.", settings.app_version)
     yield
+    await event_bus.close()
 
 
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -102,7 +105,7 @@ async def root():
 
 
 if frontend_path.exists():
-    for static_dir in ("css", "js"):
+    for static_dir in ("css", "js", "vendor", "views"):
         p = frontend_path / static_dir
         if p.exists():
             app.mount(f"/{static_dir}", StaticFiles(directory=p), name=f"frontend-{static_dir}")

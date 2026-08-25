@@ -1,0 +1,17 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+.git
+.gitignore
+.env
+.venv
+venv
+node_modules
+dist
+build
+.system_generated
+*.log

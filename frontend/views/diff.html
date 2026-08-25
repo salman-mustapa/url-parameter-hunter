@@ -1,0 +1,39 @@
+<!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
+<section id="viewDiff" class="tab-view hidden">
+  <!-- Diff Level Breadcrumb Navigation -->
+  <nav id="diffBreadcrumb" class="breadcrumb-nav">
+    <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+    <span class="breadcrumb-sep">›</span>
+    <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+    <span class="breadcrumb-sep">›</span>
+    <span class="breadcrumb-current">⚖️ Differential Scan Analyzer (Diff)</span>
+  </nav>
+
+  <div class="card sketch-card diff-card">
+    <div class="card-header-flex">
+      <div class="title-with-icon">
+        <span class="section-icon">⚖️</span>
+        <h2>Differential Scan Analyzer (Diff)</h2>
+      </div>
+    </div>
+    <p class="section-subtext">Bandingkan 2 scan pada domain yang sama untuk mendeteksi subdomain baru, IP yang berubah, port terbuka baru, dan temuan baru secara instan.</p>
+
+    <div class="diff-selector-grid">
+      <div class="diff-select-group">
+        <label>Scan Terbaru (Current):</label>
+        <select id="diffCurrentScanSelect" class="custom-select"></select>
+      </div>
+      <div class="diff-select-group">
+        <label>Scan Pembanding (Previous):</label>
+        <select id="diffPreviousScanSelect" class="custom-select"></select>
+      </div>
+      <div class="diff-action-group">
+        <button id="runDiffBtn" class="btn btn-primary">⚡ Bandingkan (Diff)</button>
+      </div>
+    </div>
+
+    <div id="diffResultsContainer" class="diff-results-box hidden">
+      <!-- Rendered by JS -->
+    </div>
+  </div>
+</section>

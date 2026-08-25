@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.core.sanitizer import sanitize_text
-from app.models.models import Asset, Certificate, Technology, URL
+from app.models.models import Asset, Certificate, Port, Service, Technology, URL
 from app.scanners.base import ScanContext
 from app.services.results import result_service
 
@@ -29,13 +29,22 @@ TECH_SIGNATURES: List[Tuple[str, str, str, str]] = [
     # (Tech Name, Version Regex / Pattern, Category, Evidence Location)
     ("Nginx", r"nginx(?:/([\d.]+))?", "Web Server", "Server Header"),
     ("Apache HTTP Server", r"Apache(?:/([\d.]+))?", "Web Server", "Server Header"),
-    ("Cloudflare", r"cloudflare", "CDN / WAF", "Server Header / Headers"),
+    ("Cloudflare", r"cloudflare|__cf_bm|_cfuvid|cf-ray", "CDN / WAF", "Server Header / Headers"),
+    ("Pure 360 / PureWeb WAF", r"pure360|pure-360|pureweb|pure_firewall", "WAF", "Headers / Body"),
+    ("Imperva / Incapsula WAF", r"incap_ses|_incap_|visid_incap|X-Iinfo", "WAF", "Headers / Cookies"),
+    ("ModSecurity WAF", r"Mod_Security|mod_security|NOYB", "WAF", "Headers / Server"),
+    ("F5 BIG-IP WAF / ADC", r"BigIP|BIGipServer|TS[a-zA-Z0-9]{8}", "WAF / ADC", "Headers / Cookies"),
+    ("AWS WAF", r"awswaf|aws-waf|x-amzn-waf", "WAF", "Headers"),
+    ("Fortinet FortiWeb", r"FORTIWAF|fortiweb", "WAF", "Cookies / Headers"),
+    ("Akamai Edge / Kona", r"akamai|AkamaiGHost", "CDN / WAF", "Server Header"),
+    ("Sucuri CloudProxy", r"Sucuri|X-Sucuri-ID", "WAF", "Headers"),
+    ("DDoS-Guard", r"ddos-guard|ddos_guard", "WAF / Anti-DDoS", "Headers / Body"),
     ("LiteSpeed", r"LiteSpeed", "Web Server", "Server Header"),
     ("Microsoft IIS", r"Microsoft-IIS(?:/([\d.]+))?", "Web Server", "Server Header"),
     ("Caddy", r"Caddy", "Web Server", "Server Header"),
     ("Envoy", r"envoy", "Proxy", "Server Header"),
     ("OpenResty", r"openresty(?:/([\d.]+))?", "Web Server", "Server Header"),
-    ("PHP", r"PHP(?:/([\d.]+))?|X-Powered-By: PHP", "Language", "Headers"),
+    ("PHP", r"PHP/([\d.]+)|(?:X-Powered-By|Server):\s*PHP/([\d.]+)|PHP", "Language", "Headers"),
     ("WordPress", r"wp-content|wp-includes|generator[\"']\s+content=[\"']WordPress\s*([\d.]*)", "CMS", "HTML Body"),
     ("Laravel", r"laravel|X-Powered-By:.*Laravel", "Framework", "Headers / Cookies"),
     ("Django", r"csrftoken|django", "Framework", "Cookies / HTML"),
@@ -54,6 +63,8 @@ TECH_SIGNATURES: List[Tuple[str, str, str, str]] = [
     ("Google Analytics / GTM", r"gtag\(|googletagmanager\.com", "Analytics", "HTML Body"),
     ("Fastly", r"Fastly|X-Fastly", "CDN", "Headers"),
     ("Amazon S3 / CloudFront", r"AmazonS3|CloudFront|X-Amz-", "Cloud CDN", "Headers"),
+    ("Suspended / Inactive Site", r"this site is currently suspended|account suspended|cgi-sys/suspendedpage|this account has been suspended", "Hosting Status", "HTML Body"),
+    ("Parked Domain", r"domain is parked|parkingcrew|sedoparking|domain expired", "Hosting Status", "HTML Body"),
 ]
 
 SSL_CTX = ssl.create_default_context()
@@ -134,8 +145,18 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
     if not host or not ctx.scope.host_allowed(host):
         return
 
-    for scheme in ("https", "http"):
-        url = f"{scheme}://{host}/"
+    # Standard and Extended Web Endpoint Candidates
+    candidate_endpoints = [("https", 443), ("http", 80)]
+    if ctx.profile == "deep":
+        candidate_endpoints.extend([
+            ("https", 8443), ("http", 8080), ("http", 8000),
+            ("https", 2083), ("https", 2087), ("http", 8888),
+            ("http", 3000), ("http", 5000), ("https", 9443), ("https", 10443)
+        ])
+
+    for scheme, port_num in candidate_endpoints:
+        port_suffix = f":{port_num}" if port_num not in (80, 443) else ""
+        url = f"{scheme}://{host}{port_suffix}/"
         t0 = time.time()
         resp = await fetch_http(url, timeout=settings.http_timeout_seconds)
         latency_ms = int((time.time() - t0) * 1000)
@@ -152,7 +173,7 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
         if resp.is_redirect:
             loc = resp.headers.get("location", "")
             if loc.startswith("/"):
-                loc = f"{scheme}://{host}{loc}"
+                loc = f"{scheme}://{host}{port_suffix}{loc}"
             if loc and not ctx.scope.url_allowed(loc):
                 await ctx.emit(
                     "scope.denied",
@@ -164,8 +185,6 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
 
         # Upsert URL Asset
         parsed = urlparse(url)
-
-        port_num = parsed.port or (443 if scheme == "https" else 80)
         clean_url_str = sanitize_text(url)
         clean_title = sanitize_text(title)
         clean_ct = sanitize_text(content_type)
@@ -187,12 +206,57 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
                 title=clean_title,
             ))
 
+        # Guarantee open Port & Service are persisted in database
+        existing_port = (await db.execute(
+            select(Port).where(
+                Port.asset_id == asset.id,
+                Port.port == port_num,
+                Port.protocol == "tcp",
+            )
+        )).scalar_one_or_none()
+
+        if not existing_port:
+            new_port = Port(
+                asset_id=asset.id,
+                ip=asset.ip,
+                port=port_num,
+                protocol="tcp",
+                state="open",
+                service=scheme,
+                banner=server_header or None,
+            )
+            db.add(new_port)
+            await db.flush()
+            port_record_id = new_port.id
+        else:
+            if server_header and not existing_port.banner:
+                existing_port.banner = server_header
+            if not existing_port.service or existing_port.service == "unknown":
+                existing_port.service = scheme
+            port_record_id = existing_port.id
+
+        existing_svc = (await db.execute(
+            select(Service).where(Service.asset_id == asset.id, Service.port_id == port_record_id)
+        )).scalar_one_or_none()
+
+        if not existing_svc:
+            db.add(Service(
+                asset_id=asset.id,
+                port_id=port_record_id,
+                name=scheme,
+                protocol="tcp",
+                tls_enabled=(scheme == "https"),
+                banner=server_header or None,
+                metadata_={"port": port_num, "server": server_header, "title": clean_title},
+            ))
+
         await ctx.emit(
             "http.available",
             f"HTTP [{status}] {clean_url_str}" + (f" — \"{clean_title}\"" if clean_title else "") + f" ({latency_ms}ms)",
             url=clean_url_str,
             status_code=status,
             host=host,
+            port=port_num,
             title=clean_title,
             content_type=clean_ct,
             latency_ms=latency_ms,
@@ -257,15 +321,39 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
             # Match against headers
             m_hdr = re.search(pattern, headers_combined, re.IGNORECASE)
             if m_hdr:
-                ver = m_hdr.group(1) if m_hdr.groups() and m_hdr.group(1) else None
+                ver = next((g for g in m_hdr.groups() if g), None) if m_hdr.groups() else None
                 detected_tech[tech_name] = {"version": ver, "category": category, "evidence": f"{location}: {m_hdr.group(0)}"}
 
             # Match against HTML body
             if resp.text and len(resp.text) < 1_000_000:
                 m_body = re.search(pattern, resp.text, re.IGNORECASE)
                 if m_body and tech_name not in detected_tech:
-                    ver = m_body.group(1) if m_body.groups() and m_body.group(1) else None
+                    ver = next((g for g in m_body.groups() if g), None) if m_body.groups() else None
                     detected_tech[tech_name] = {"version": ver, "category": category, "evidence": f"HTML Body match"}
+
+        # Specialized CMS & WordPress Intelligence (§75-78)
+        if resp.text:
+            from app.intelligence.cms import CmsDetector
+            cms_res = CmsDetector.detect(resp.text, dict(resp.headers))
+            if cms_res:
+                cms_name = cms_res["cms"]
+                detected_tech[cms_name] = {
+                    "version": cms_res.get("version"),
+                    "category": "CMS",
+                    "evidence": f"CMS Detector: {cms_name}",
+                }
+                for plugin in cms_res.get("plugins", []):
+                    detected_tech[f"WordPress Plugin: {plugin}"] = {
+                        "version": None,
+                        "category": "CMS Plugin",
+                        "evidence": f"Plugin path /wp-content/plugins/{plugin}/",
+                    }
+                if cms_res.get("theme"):
+                    detected_tech[f"WordPress Theme: {cms_res['theme']}"] = {
+                        "version": None,
+                        "category": "CMS Theme",
+                        "evidence": f"Theme path /wp-content/themes/{cms_res['theme']}/",
+                    }
 
         for tech_name, t_meta in detected_tech.items():
             existing_tech = (await db.execute(

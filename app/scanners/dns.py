@@ -58,6 +58,16 @@ async def _query_dns_records(host: str) -> dict[str, list[str]]:
         return {"A": [], "AAAA": [], "CNAME": [], "MX": [], "TXT": [], "NS": []}
 
 
+async def _reverse_dns(ip: str) -> str | None:
+    """Reverse DNS PTR lookup."""
+    loop = asyncio.get_running_loop()
+    try:
+        host, _, _ = await loop.run_in_executor(None, socket.gethostbyaddr, ip)
+        return host
+    except Exception:
+        return None
+
+
 async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     """DNS Enrichment & DNS Asset Mapping."""
     await ctx.emit("scan.dns", f"Enriching DNS records and mapping IPs for {root_domain}", severity="info")
@@ -95,7 +105,6 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         # Check CNAME Scope & potential takeover observation
         if cname:
             if not ctx.scope.host_allowed(cname):
-                # CNAME points out of scope (e.g. AWS S3, Cloudflare, Github Pages, Heroku)
                 await ctx.emit(
                     "observation.recorded",
                     f"External CNAME detected: {asset.hostname} -> {cname}",
@@ -105,7 +114,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                     severity="info",
                 )
 
-        # Update Asset metadata
+        # Update Asset metadata & IP
         meta = dict(asset.metadata_ or {})
         meta.update({
             "dns_a": a_records,
@@ -114,6 +123,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             "dns_mx": dns_data.get("MX", []),
             "dns_txt": dns_data.get("TXT", []),
             "dns_ns": dns_data.get("NS", []),
+            "ips": all_ips,
             "cname": cname,
             "active": bool(all_ips or cname),
         })
@@ -147,18 +157,23 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             if not ctx.scope.ip_allowed(ip) and ctx.options.get("strict_scope"):
                 continue
 
+            ptr_host = await _reverse_dns(ip)
             await result_service.upsert_asset(
                 db,
                 scan_id=ctx.scan_id,
                 asset_type="ip",
                 fingerprint=ip,
+                hostname=ptr_host or ip,
+                fqdn=ptr_host or ip,
                 ip=ip,
                 depth=asset.depth + 1,
                 parent_id=asset.id,
                 discovered_from=["dns_resolution"],
                 metadata={
                     "associated_host": asset.hostname,
+                    "reverse_dns": ptr_host,
                     "is_ipv6": ":" in ip,
+                    "active": True,
                 },
             )
             await db.commit()

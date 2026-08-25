@@ -42,6 +42,13 @@ class ScanContext:
     async def emit(self, event_type: str, message: str, **data) -> None:
         ev = result_service.make_event(self.scan_id, event_type, message, **data)
         await event_bus.publish(ev)
+        # Feed discovery events into Adaptive Orchestrator for real-time opportunity escalation
+        try:
+            from app.orchestration.adaptive_orchestrator import adaptive_orchestrator
+            event_payload = {"scan_id": self.scan_id, "message": message, **data}
+            asyncio.create_task(adaptive_orchestrator.ingest_event(event_type, event_payload))
+        except Exception:
+            pass
 
 
 class Scanner(Protocol):

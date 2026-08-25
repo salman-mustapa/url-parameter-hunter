@@ -10,3 +10,7 @@ dnspython
 tldextract
 cryptography
 python-multipart
+jinja2
+redis
+reportlab
+Pillow

@@ -1,270 +1,300 @@
-# 🐙 Hunter Aja — Attack Surface & Parameter Intelligence Platform
+# 🐙 Hunter Aja — Bug Hunting Platform (V7.1)
+### Evidence-First Deep Validation & Professional Disclosure Architecture
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Version-7.1_V5-7C3AED?style=for-the-badge&logo=shield&logoColor=white" alt="Version 7.1" />
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/Realtime-SSE_Stream-FF6B6B?style=for-the-badge" alt="SSE" />
-  <img src="https://img.shields.io/badge/Database-PostgreSQL_%2F_SQLite-336791?style=for-the-badge&logo=postgresql&logoColor=white" alt="Database" />
-  <img src="https://img.shields.io/badge/Architecture-Asynchronous_Pipeline-10B981?style=for-the-badge" alt="Async" />
+  <img src="https://img.shields.io/badge/Evidence-SHA--256_Integrity-10B981?style=for-the-badge" alt="Integrity" />
   <img src="https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge" alt="License" />
 </p>
 
 ---
 
-## 🎯 Overview
+## 🎯 1. Filosofi & Prinsip Utama (V7.1 Architecture)
 
-**Hunter Aja** adalah platform *Continuous Attack Surface Discovery*, *Dynamic Subdomain Intelligence*, dan *Web Parameter Hunting* berbasis web modern. Dirancang dengan filosofi **Single-Menu Operation**, platform ini memungkinkan *security researcher*, *bug bounty hunter*, dan *DevSecOps engineer* untuk cukup memasukkan **root domain** target, dan secara otomatis menjalankan seluruh alur *reconnaissance* multi-tahap secara paralel di background.
+**Hunter Aja V7.1** mengubah paradigma platform keamanan dari sekadar pemindai pasif (*Scanner ➔ Finding ➔ Report*) menjadi sistem validasi mendalam berorientasi bukti (**Evidence-First Deep Validation Architecture**). 
 
-Hasil pemindaian disajikan secara **real-time melalui Server-Sent Events (SSE)** ke antarmuka web bergaya *Neo-Brutalist Sketch* yang bersih, interaktif, dan responsif.
-
----
-
-## ✨ Fitur Utama
-
-- 🌐 **Dynamic & Active Subdomain Discovery**
-  - Menggabungkan sumber pasif (*Certificate Transparency* crt.sh, AlienVault OTX, HackerTarget) dan enumerasi aktif *wordlist*.
-  - **Active Reachability Verification**: Melakukan resolusi DNS konkuren untuk memastikan hanya subdomain yang **benar-benar aktif/resolvable** yang dimasukkan ke dalam graf aset (menghilangkan *noise* domain mati).
-  - Pembentukan hierarki parent-child otomatis (`root` ➔ `subdomain` ➔ `child subdomain`).
-
-- 🔒 **Strict Scope Enforcement Engine**
-  - Normalisasi domain berbasis *Public Suffix List* (`tldextract`).
-  - Pencegahan pemindaian aset di luar scope resmi (validasi target redirect, CNAME eksternal, dan batasan CIDR).
-
-- 📡 **Multi-Record DNS Resolution & IP Mapping**
-  - Resolusi otomatis untuk `A`, `AAAA`, `CNAME`, `MX`, `TXT`, dan `NS`.
-  - Pemetaan hubungan aset IP ke Hostname secara dinamis.
-
-- 🔌 **Adaptive TCP Port Scanner**
-  - Pemindaian port non-blocking dengan *rate-limiter* adaptif (mencegah kelebihan beban jaringan).
-  - *Banner grabbing* ringan untuk identifikasi versi service (HTTP, SSH, SMTP, MySQL, Redis, dll).
-  - Profil fleksibel: `Standard` (Port umum) & `Deep` (1-1024 + extended ports).
-
-- 🌐 **HTTP/HTTPS Probing & TLS Inspection**
-  - Deteksi otomatis respons HTTP/HTTPS, kode status, waktu latensi, dan judul halaman.
-  - Ekstraksi sertifikat TLS: Subject CN, Issuer, Subject Alternative Names (SAN), tanggal masa berlaku, serta algoritma tanda tangan.
-  - Audit *Security Headers* (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy).
-
-- ⚙️ **Technology Fingerprinting Engine**
-  - Mengidentifikasi Web Server (Nginx, Apache, IIS, Caddy), CMS (WordPress), Framework (Laravel, Django, Spring Boot, Express, Rails, Next.js, Nuxt), dan CDN/WAF (Cloudflare, Fastly).
-
-- 🕷️ **Endpoint Crawler & Parameter Hunter**
-  - Ekstraksi endpoint otomatis dari `robots.txt`, `sitemap.xml`, jalur API umum, dan *shallow link crawling*.
-  - Pemetakan parameter query URL dan input form HTML (`query`, `body`, `header`).
-
-- 🛡️ **Non-Destructive Security Audit Engine**
-  - Pemisahan ketat antara *Observation* dan *Finding* untuk meminimalkan *false positive*.
-  - Deteksi eksposur file sensitif (`.env`, `.git/HEAD`, arsip cadangan `.zip`/`.sql`, phpinfo).
-  - Deteksi sertifikat SSL/TLS yang kedaluwarsa atau mendekati masa kedaluwarsa.
-  - Deteksi portal administrasi publik dan dokumentasi API interaktif (Swagger/OpenAPI).
-
-- 📊 **Riwayat Persistent & Differential Scan (Diff Analyzer)**
-  - Semua aset dan event tersimpan secara persisten.
-  - **Diff Analyzer**: Membandingkan 2 scan pada domain yang sama untuk menemukan subdomain baru (+), subdomain mati (-), port baru, dan temuan baru.
-
-- 🎨 **Neo-Brutalist Sketch UI**
-  - Estetika modern, bersih, dan playful terinspirasi dari gaya *sketch-doodle*.
-  - Live terminal stream dengan filter kategori (Discovery, DNS, Port, HTTP, URL, Param, Tech, Finding).
-  - Interactive Expandable Asset Tree dan panel inspeksi detail aset.
-  - Fitur triaging temuan (*Open*, *Confirmed*, *False Positive*, *Fixed*).
-  - Ekspor laporan pemindaian instan dalam format JSON.
-
----
-
-## 🏛️ Arsitektur Sistem
+Tujuan utamanya adalah mentransformasikan observasi mentah scanner menjadi **temuan terverifikasi, dapat direproduksi, tahan bantahan (defensible), dengan evidence package berkualitas tinggi dan laporan disclosure profesional**.
 
 ```text
-                             Browser Web Client
-                                     │
-                     ┌───────────────┴───────────────┐
-                     │ REST API & Realtime SSE Stream │
-                     └───────────────┬───────────────┘
-                                     │
-                             FastAPI Gateway
-                                     │
-                 ┌───────────────────┼───────────────────┐
-                 │                   │                   │
-                 ▼                   ▼                   ▼
-           Scope Engine        Scan Manager         Event Bus
-                 │                   │                   │
-                 │         ┌─────────┴─────────┐         │
-                 ▼         ▼                   ▼         ▼
-             Validated   Task Pipeline      Task Pipeline
-              Domain       (Phase 1-3)        (Phase 4-5)
-                           ┌─────────┐        ┌─────────┐
-                           │Discovery│        │Crawler &│
-                           │  & DNS  │        │ Params  │
-                           └────┬────┘        └────┬────┘
-                                │                  │
-                           ┌────┴────┐        ┌────┴────┐
-                           │Port Scan│        │Security │
-                           │ & HTTP  │        │ Engine  │
-                           └────┬────┘        └────┬────┘
-                                │                  │
-                                └─────────┬────────┘
-                                          │
-                                    Result Engine
-                                          │
-                       ┌──────────────────┴──────────────────┐
-                       ▼                                     ▼
-             PostgreSQL / SQLite Database              Live SSE Clients
-              (Persistent Graph & History)          (Realtime Browser Logs)
+DISCOVER
+   ↓
+CORRELATE
+   ↓
+TRIAGE
+   ↓
+APPLICABILITY
+   ↓
+CONTROLLED VALIDATION
+   ↓
+IMPACT PROOF
+   ↓
+EVIDENCE PACKAGE (SHA-256 Sealed)
+   ↓
+PROOF QUALITY GATE (12 Checks)
+   ↓
+PROFESSIONAL DISCLOSURE (PDF / Bug Bounty / CVE / Markdown)
+   ↓
+LIVE RETEST (Before vs After Diff)
+```
+
+Setiap temuan yang dihasilkan sistem harus mampu menjawab 5 pertanyaan kunci:
+1. **What was found?** (Apa yang ditemukan?)
+2. **Why is it actually vulnerable?** (Mengapa ini benar-benar rentan?)
+3. **What can an authorized attacker achieve?** (Apa dampak konkret yang dapat dicapai?)
+4. **What evidence proves that impact?** (Bukti apa yang memvalidasi dampak tersebut?)
+5. **How can the owner reproduce, understand, and fix it?** (Bagaimana pemilik sistem mereproduksi dan memperbaikinya?)
+
+---
+
+## 💎 2. Model Kualitas Bukti (Evidence Quality Model: E0 – E4)
+
+Setiap temuan diklasifikasikan ke dalam tingkatan bukti yang ketat. **Status code 200, open port, atau error 500 semata BUKAN merupakan temuan CONFIRMED**:
+
+| Level | Klasifikasi | Status | Kriteria Bukti |
+|---|---|---|---|
+| **E0** | **Observation** | `OBSERVED` | Port terbuka, respon HTTP 200, banner versi, teknologi terdeteksi, atau kandidat CVE (belum diverifikasi). |
+| **E1** | **Technical Indicator** | `CANDIDATE` | Respon anomali diferensial, parameter terefleksi, potensi kelemahan otentikasi. |
+| **E2** | **Reproducible Vulnerability** | `VALIDATED` | Kondisi keamanan dapat direproduksi secara terkontrol dan non-destruktif. |
+| **E3** | **Demonstrated Security Impact** | `CONFIRMED` | Dampak keamanan terbukti nyata dengan bukti minimal yang diperlukan (*Minimum Necessary Proof*). |
+| **E4** | **Full Impact Evidence** | `CONFIRMED` | Pembuktian dampak menyeluruh terotorisasi dengan audit trail lengkap dan sanitasi data sensitif. |
+
+### Formula Skor Bukti (Evidence Score: 0 – 100):
+- **Base Level:** `E0` = 10 · `E1` = 30 · `E2` = 55 · `E3` = 75 · `E4` = 85
+- **Bonus Kualitas:** Corroboration (+10) · Screenshot/Payload (+5) · Controlled Reproduction (+10)
+- **Maksimum:** 100 poin (Metrik kualitas bukti, terpisah dari Severity keparahan).
+
+---
+
+## ⚡ 3. Fitur Unggulan (Core Capabilities)
+
+### 🌐 A. Dynamic Subdomain & Active Reconnaissance
+- **Multi-Source Passive Harvesting:** Mengintegrasikan Certificate Transparency (crt.sh), AlienVault OTX, HackerTarget, Anubis Dataset, dan Archive.org Wayback DNS.
+- **Wildcard DNS Detection & Filter:** Menguji token canary acak untuk memetakan IP catch-all wildcard DNS, mencegah ribuan subdomain palsu masuk ke graf aset.
+- **Smart Permutation Engine (Alter-DNS):** Menghasilkan mutasi prefiks/sufiks dinamis (`dev-`, `staging-`, `-api`, `-v1`, `-internal`, `-auth`) berdasarkan aset aktif yang ditemukan.
+- **Active Reachability Verification:** Resolusi DNS konkuren multi-record (`A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`) untuk memvalidasi host yang benar-benar aktif.
+
+### 🕷️ B. Intelligent Dynamic Web Crawler & JavaScript Route Miner
+- **Multi-Depth Recursive Crawler:** Menjelajahi tautan HTML (`<a>`, `<form>`, `<iframe src>`, `<button formaction>`) secara rekursif hingga kedalaman terkonfigurasi.
+- **JavaScript Route & Endpoint Scraper (`extract_js_endpoints`):** Membedah berkas `.js` dan webpack chunks untuk mengekstrak route REST API (`/api/v1/...`), GraphQL queries, dan endpoint `fetch()` / `axios`.
+- **Passive URL Harvester:** Mengambil daftar endpoint historis dari AlienVault OTX dan Archive.org Wayback CDX API.
+- **Recursive Sitemap & Robots Parser:** Membaca `sitemap.xml`, `sitemap_index.xml`, `.well-known/`, dan `robots.txt` secara otomatis.
+- **Dynamic Parameter Mining (Heuristic Differential Analysis):** Fuzzing parameter cerdas pada endpoint fungsional untuk menemukan parameter tersembunyi (`id`, `file`, `redirect`, `token`, `next`, `debug`, dll) berbasis refleksi nilai dan anomali ukuran respons.
+
+### 🛡️ C. Anti-Noise Rules & Strict Content Signature Verification (§40, §44)
+- **Soft-404 Baseline Detector:** Mengirim token acak (`/_hunter_canary_404_<uuid>`) untuk mengukur baseline status code, content-length, dan body hash. Menghilangkan false positive pada server SPA / custom 404 handler yang mengembalikan status 200 OK.
+- **Content Signature & Magic Byte Verification:**
+  - `/.git/HEAD` & `/.git/config`: Wajib berformat ref git asli (`ref: refs/heads/` atau hash SHA commit 40-karakter / `[core]`). Menolak semua respons berformat HTML webpage.
+  - `/.env`: Wajib memuat pasangan key-value konfigurasi (`APP_KEY=`, `DB_PASSWORD=`, `SECRET=`).
+  - `/backup.sql`: Wajib memuat sintaks DDL/DML SQL dump (`CREATE TABLE`, `INSERT INTO`, `-- MySQL dump`).
+  - `/phpinfo.php`: Wajib memuat tabel diagnostik PHP resmi (`PHP Version`, `phpinfo()`).
+  - `/swagger.json` & `/openapi.json`: Wajib lolos validasi skema JSON OpenAPI/Swagger.
+
+### 🔬 D. Deep Validation Adapters & Proof Quality Gate (§38, §40)
+- **Vulnerability Adapters:** Modul validasi mendalam untuk SQL Injection (Error/Time/Union-based), Reflected XSS, Server-Side Request Forgery (SSRF), Path Traversal, Open Redirect, dan Information Exposure.
+- **12-Point Proof Quality Gate Checklist:**
+  1. `Scope authorized`
+  2. `Target identified`
+  3. `Vulnerability reproducible`
+  4. `Impact demonstrated (Impact Matrix: C/I/A/Auth/DataExposure)`
+  5. `Evidence payload captured`
+  6. `ISO timestamp recorded`
+  7. `SHA-256 cryptographic hash generated`
+  8. `Cleanup verified`
+  9. `False-positive anti-noise checks passed`
+  10. `Severity calculated`
+  11. `CWE mapping assigned`
+  12. `CVE applicability checked`
+
+### 🔄 E. Live Non-Destructive Retest Engine (§34, §42)
+- Menjalankan retest langsung ke endpoint target menggunakan parameter dan payload PoC asli.
+- Membandingkan **Before Evidence** vs **After Evidence** secara komparatif.
+- Mengubah lifecycle status secara otomatis menjadi `FIXED` (Passed) atau `REOPENED` (Failed) disertai catatan putusan verifikasi.
+
+### 📄 F. Multi-Format Professional Disclosure Reporting (§24, §31, §32, §33)
+- **Executive PDF Report:** Laporan resmi berstandar audit dengan kop, ringkasan telemetri, matriks port, inventaris teknologi, dan PoC terstruktur.
+- **Bug Bounty Disclosure Report (.md):** Format terstruktur siap-kirim untuk platform HackerOne dan Bugcrowd.
+- **CVE-Ready Research Report (.md):** Format pelaporan riset kerentanan baru untuk koordinasi CNA / vendor disclosure.
+- **Reproduction Bundle (`reproduction.md`):** Panduan reproduksi langkah-demi-langkah terisolasi untuk tim pengembang.
+- **Cryptographic Evidence Package (`.json`):** Berkas paket bukti terenkapsulasi dengan hash integritas SHA-256.
+
+---
+
+## 🏛️ 4. Arsitektur Teknis Sistem
+
+```text
+                                  Client Browser UI (Dark Theme)
+                                                │
+                                ┌───────────────┴───────────────┐
+                                │ REST API & Realtime SSE Stream │
+                                └───────────────┬───────────────┘
+                                                │
+                                        FastAPI Gateway
+                                                │
+                 ┌──────────────────────────────┼──────────────────────────────┐
+                 ▼                              ▼                              ▼
+           Scope Engine                   Scan Manager                     Event Bus
+          (ScopeGuard §5)               (Orchestrator)                 (Realtime SSE)
+                 │                              │                              │
+                 ▼                              ▼                              │
+         Target Normalization          Pipeline Lifecycle                      │
+                                       ┌─────────────────┐                     │
+                                       │ 1. Subdomain    │ ➔ CT/OTX/DNS        │
+                                       │    Discovery    │ ➔ Wildcard Filter   │
+                                       ├─────────────────┤                     │
+                                       │ 2. DNS & Ports  │ ➔ TCP Banner        │
+                                       │    Probing      │ ➔ TLS Cert Audit    │
+                                       ├─────────────────┤                     │
+                                       │ 3. Dynamic Web  │ ➔ JS Route Scraper  │
+                                       │    Crawler      │ ➔ Parameter Miner   │
+                                       ├─────────────────┤                     │
+                                       │ 4. Validation   │ ➔ Content Signature │
+                                       │    & Proof Gate │ ➔ Anti-Noise Check  │
+                                       ├─────────────────┤                     │
+                                       │ 5. Evidence     │ ➔ SHA-256 Hashes    │
+                                       │    Packaging    │ ➔ Evidence Package  │
+                                       ├─────────────────┤                     │
+                                       │ 6. Reporting &  │ ➔ PDF / Bug Bounty  │
+                                       │    Live Retest  │ ➔ Before/After Diff │
+                                       └─────────────────┘                     │
+                                                │                              │
+                                                ▼                              ▼
+                                     PostgreSQL / SQLite ◀─────────────────────┘
 ```
 
 ---
 
-## 🚀 Panduan Instalasi & Menjalankan
+## 🚀 5. Panduan Instalasi & Menjalankan
 
-### Opsi 1: Menjalankan Lokal (Development Cepat dengan SQLite)
+### Prasyarat
+- Python 3.12+
+- Git
 
-Hunter Aja memiliki dukungan *zero-configuration* bawaan untuk SQLite lokal:
-
-1. **Clone Repository & Siapkan Virtualenv**:
-   ```bash
-   git clone <repository_url>
-   cd url-parameter-hunter
-   python -m venv .venv
-   
-   # Windows:
-   .venv\Scripts\activate
-   # Linux/macOS:
-   source .venv/bin/activate
-   ```
-
-2. **Instal Dependensi**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Jalankan Server Aplikasi**:
-   ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 9001 --reload
-   ```
-
-4. **Buka Aplikasi**:
-   Akses antarmuka browser di **[http://localhost:9001](http://localhost:9001)**.
-   Dokumentasi Swagger API interaktif tersedia di **[http://localhost:9001/docs](http://localhost:9001/docs)**.
-
----
-
-### Opsi 2: Menjalankan dengan Docker Compose (Production Ready)
-
-Untuk skalabilitas penuh dengan PostgreSQL:
-
-1. **Salin Environment Template**:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Jalankan Multi-Container**:
-   ```bash
-   docker compose up -d --build
-   ```
-
-3. **Periksa Status Container**:
-   ```bash
-   docker compose ps
-   ```
-
-4. Buka **[http://localhost:9001](http://localhost:9001)**.
-
----
-
-## ⚙️ Konfigurasi Environment (`.env`)
-
-| Variabel | Default | Keterangan |
-|---|---|---|
-| `DATABASE_URL` | `sqlite+aiosqlite:///storage/bughunter.db` | URL koneksi basis data (PostgreSQL atau SQLite) |
-| `CORS_ORIGINS` | `*` | Alamat domain yang diizinkan untuk CORS |
-| `RATE_LIMIT_RPS` | `15` | Batas maksimum request per detik per target |
-| `MAX_CONCURRENT_HOSTS` | `12` | Jumlah probe host simultan |
-| `MAX_ASSETS_PER_SCAN` | `2500` | Batas maksimum aset per satu kali scan |
-| `MAX_URLS_PER_SCAN` | `20000` | Batas maksimum URL yang dicrawl per scan |
-| `MAX_RUNTIME_MINUTES` | `45` | Batas waktu timeout pemindaian (menit) |
-| `PORT_TIMEOUT_SECONDS` | `1.5` | Timeout probe TCP socket (detik) |
-| `HTTP_TIMEOUT_SECONDS` | `8.0` | Timeout request HTTP (detik) |
-| `SECURITY_MODE` | `SAFE` | Mode pengujian keamanan (`SAFE` / `STANDARD`) |
-
----
-
-## 📡 Ringkasan REST API
-
-| Method | Endpoint | Deskripsi |
-|---|---|---|
-| `POST` | `/api/scans?target={domain}&profile={p}` | Memulai pemindaian baru |
-| `GET` | `/api/scans` | Menampilkan seluruh riwayat scan |
-| `GET` | `/api/scans/{scan_id}` | Mengambil informasi status scan |
-| `POST` | `/api/scans/{scan_id}/pause` | Menjeda proses scan yang berjalan |
-| `POST` | `/api/scans/{scan_id}/resume` | Melanjutkan scan yang dijeda |
-| `POST` | `/api/scans/{scan_id}/stop` | Menghentikan scan secara permanen |
-| `GET` | `/api/scans/{scan_id}/events` | Stream realtime event SSE (`text/event-stream`) |
-| `GET` | `/api/assets/tree?scan_id={id}` | Struktur hierarki pohon aset (Parent-Child) |
-| `GET` | `/api/assets/{asset_id}` | Rincian lengkap aset (Port, URL, Param, Tech, Cert) |
-| `GET` | `/api/findings?scan_id={id}` | Daftar temuan keamanan pada scan |
-| `PATCH` | `/api/findings/{id}?status={s}` | Mengubah status triaging temuan |
-| `GET` | `/api/domains` | Daftar domain yang pernah discan terkelompok |
-| `GET` | `/api/domains/{domain}/history` | Riwayat kronologis scan pada domain tertentu |
-| `GET` | `/api/diff?current={id}&previous={id}` | Perbandingan diferensial antara 2 scan |
-| `GET` | `/api/scans/{scan_id}/export` | Unduh laporan lengkap scan (JSON) |
-| `GET` | `/api/metrics` | Metrik agregasi sistem dan aset |
-
----
-
-## 📂 Struktur Direktori Proyek
-
-```text
-url-parameter-hunter/
-├── app/
-│   ├── api/
-│   │   └── router.py             # Router REST API & SSE Endpoints
-│   ├── core/
-│   │   ├── config.py             # Pengaturan Pydantic & Defaults
-│   │   ├── db.py                 # Engine Async SQLAlchemy (Postgres/SQLite)
-│   │   ├── events.py             # In-memory Event Bus & Pub/Sub
-│   │   ├── logging.py            # Konfigurasi Structured Logging
-│   │   ├── rate_limit.py         # Leaky-Bucket Rate Limiter
-│   │   ├── retry.py              # Exponential Backoff Decorator
-│   │   └── scope.py              # Scope Enforcement & PSL Normalizer
-│   ├── models/
-│   │   └── models.py             # Skema Tabel Database (Asset, Port, URL, Finding, dll)
-│   ├── scanners/
-│   │   ├── base.py               # Interface ScanContext & Kontrak Scanner
-│   │   ├── subdomain.py          # Dynamic Active Subdomain Discovery
-│   │   ├── dns.py                # Multi-Record DNS Resolver & IP Graph
-│   │   ├── port.py               # Async TCP Socket Port Scanner
-│   │   ├── http.py               # HTTP Probe, TLS Analyzer & Tech Detection
-│   │   ├── web.py                # Web Crawler & Parameter Hunter
-│   │   └── security.py           # Non-destructive Security Engine
-│   ├── services/
-│   │   ├── assets.py             # Query Builder Pohon Aset Hierarkis
-│   │   ├── results.py            # Result Engine, Normalizer & Deduplicator
-│   │   └── scan_manager.py       # Orchestrator Siklus Hidup Scan
-│   └── main.py                   # Entrypoint FastAPI & SPA Static Mounter
-├── frontend/
-│   ├── css/
-│   │   └── styles.css            # Desain Neo-Brutalist Sketch System
-│   ├── js/
-│   │   └── app.js                # Frontend Reactive SPA & SSE Handler
-│   └── index.html                # Antarmuka Dashboard Satu Pintu
-├── wordlists/
-│   └── subdomains.txt            # Wordlist Subdomain Terpilih
-├── storage/                      # Direktori Basis Data SQLite Lokal
-├── logs/                         # Direktori Berkas Log Sistem
-├── docker-compose.yml            # Konfigurasi Multi-Container Docker
-├── Dockerfile                    # Docker Image Build
-├── pyproject.toml                # Project Metadata
-├── requirements.txt              # Daftar Dependensi Python
-└── README.md                     # Dokumentasi Resmi Platform
+### Langkah 1: Clone Repository
+```bash
+git clone https://github.com/salman-mustapa/url-parameter-hunter.git
+cd url-parameter-hunter
 ```
 
+### Langkah 2: Buat Virtual Environment & Install Dependencies
+```bash
+python -m venv venv
+
+# Windows:
+venv\Scripts\activate
+
+# Linux/macOS:
+source venv/bin/activate
+
+# Install dependencies:
+pip install -r requirements.txt
+```
+
+### Langkah 3: Konfigurasi Environment (`.env`)
+Salin berkas konfigurasi template:
+```bash
+copy .env.example .env   # Windows
+cp .env.example .env     # Linux/macOS
+```
+
+Isi variabel konfigurasi di `.env`:
+```ini
+APP_NAME=Hunter Aja
+APP_ENV=development
+SECRET_KEY=super_secret_jwt_key_change_in_production
+DATABASE_URL=sqlite+aiosqlite:///./storage/hunter.db
+PORT=9001
+RATE_LIMIT_RPS=15
+MAX_WEB_HOSTS=25
+MAX_URLS_PER_SCAN=300
+HTTP_TIMEOUT_SECONDS=8.0
+```
+
+### Langkah 4: Jalankan Server
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 9001 --reload
+```
+
+Buka antarmuka web di browser: **`http://localhost:9001`**
+
 ---
 
-## 🛡️ Etika & Disclaimer Keamanan
+## 🐳 6. Menjalankan dengan Docker Compose
 
-> [!IMPORTANT]
-> Platform ini dibangun secara khusus untuk **tujuan riset keamanan yang beretika (*Authorized Penetration Testing*)**, pengujian sistem milik sendiri, dan program *Bug Bounty* yang sah. Dilarang keras menggunakan instrumen ini untuk melakukan pemindaian atau pengujian terhadap aset digital tanpa izin tertulis dari pemilik sah sistem target. Penulis dan kontributor tidak bertanggung jawab atas segala bentuk penyalahgunaan atau kerusakan yang ditimbulkan.
+Untuk deployment instan berbasis container:
+
+```bash
+docker-compose up -d --build
+```
+Akses platform di `http://localhost:9001`.
 
 ---
 
-## 📜 Lisensi
+## 🧪 7. Menjalankan Test Suite V5
 
-Didistribusikan di bawah lisensi **MIT License**. Silakan gunakan, modifikasi, dan kembangkan untuk kebutuhan riset keamanan Anda.
+Hunter Aja dilengkapi dengan test suite lengkap untuk memverifikasi seluruh komponen pipeline arsitektur V7.1:
+
+```bash
+python scratch/test_v5_full_pipeline.py
+```
+
+Output pengujian:
+```text
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.689s
+
+OK
+```
+
+Komponen yang diuji:
+1. `test_01_sensitive_file_signature_validation`: Memastikan soft-404 HTML ditolak dan tanda tangan asli (.git, .env, .sql) lolos.
+2. `test_02_proof_quality_gate`: Evaluasi 12 kriteria checklist Proof Quality Gate.
+3. `test_03_evidence_package_builder`: Pembentukan evidence package dan integritas hash SHA-256.
+4. `test_04_evidence_score_calculation`: Kalkulasi skor bukti (0–100) berbasis level E0-E4 dan bonus pembuktian.
+5. `test_05_report_engine_generation`: Pembuatan laporan Markdown, HTML, PDF resmi, Bug Bounty, CVE research, dan Reproduction bundle.
+
+---
+
+## 📡 8. Ringkasan API Endpoints Utama
+
+### Otentikasi & Pengguna
+- `POST /api/auth/register` — Pendaftaran akun pengguna baru.
+- `POST /api/auth/login` — Autentikasi dan penerbitan JWT token.
+- `GET /api/auth/me` — Profil pengguna aktif & status role.
+
+### Scan Management
+- `POST /api/scans` — Memulai sesi scan baru (Target domain, Profile, Recursive toggle).
+- `GET /api/scans` — Daftar seluruh riwayat scan pengguna.
+- `GET /api/scans/{id}` — Detail status & progres scan.
+- `GET /api/scans/{id}/events` — Real-time Server-Sent Events (SSE) log stream.
+- `POST /api/scans/{id}/pause` / `resume` / `stop` — Kontrol status scan aktif.
+
+### Asset Graph & Explorers
+- `GET /api/assets/tree?scan_id={id}` — Graf hierarki aset pohon (Root ➔ Subdomain ➔ IP).
+- `GET /api/scans/{id}/ports/all` — Matriks port & layanan global seluruh subdomain.
+- `GET /api/scans/{id}/parameters/all` — Explorer parameter terdeteksi & hasil mining.
+- `GET /api/diff?current={id}&previous={id}` — Analisis diferensial perbandingan 2 scan.
+
+### Findings, Evidence & Reporting
+- `GET /api/findings?scan_id={id}` — Daftar temuan keamanan terverifikasi.
+- `GET /api/findings/{id}/detail` — Detail temuan mendalam, Impact Matrix, dan Root Cause.
+- `GET /api/findings/{id}/evidence-package` — Unduh Evidence Package terenkapsulasi (.json).
+- `GET /api/findings/{id}/bugbounty` — Unduh laporan format Bug Bounty HackerOne (.md).
+- `GET /api/findings/{id}/cve-ready` — Unduh laporan format CVE Research Disclosure (.md).
+- `GET /api/findings/{id}/reproduction` — Unduh panduan reproduksi PoC (`reproduction.md`).
+- `POST /api/findings/{id}/retest` — Jalankan Live Retest non-destruktif ke target aktual.
+- `GET /api/scans/{id}/report/pdf` — Unduh laporan eksekutif resmi format PDF.
+- `GET /api/scans/{id}/report/html` — Buka laporan web HTML interaktif.
+- `GET /api/scans/{id}/report/markdown` — Unduh laporan teknis format Markdown.
+
+---
+
+## 📄 9. Lisensi & Penafian Keamanan (Disclaimer)
+
+Didistribusikan di bawah lisensi **MIT License**.
+
+> [!CAUTION]
+> **Peringatan Penggunaan Terotorisasi:** Platform Hunter Aja dirancang khusus untuk pengujian keamanan defensif, audit internal organisasi, dan program Bug Bounty terotorisasi. Selalu pastikan Anda memiliki izin tertulis yang sah sebelum memindai sistem atau domain pihak ketiga. Penggunaan tanpa izin melanggar hukum yang berlaku.

@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import AsyncSessionLocal
+from app.core.sanitizer import sanitize_text
+from app.findings.dedup import FindingDedup
 from app.models.models import Asset, AuditLog, Finding, Observation, Scan, ScanEvent
 
-
-from app.core.sanitizer import sanitize_text
+logger = logging.getLogger("services.results")
 
 
 class ResultService:
@@ -22,6 +22,72 @@ class ResultService:
         self.dialect = dialect
         self._asset_cache: dict[tuple[str, str, str], str] = {}
         self._lock = asyncio.Lock()
+        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
+        self._flush_task: Optional[asyncio.Task] = None
+
+    def _ensure_worker(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            if self._flush_task is None or self._flush_task.done():
+                self._flush_task = loop.create_task(self._event_flusher())
+        except RuntimeError:
+            pass
+
+    async def _event_flusher(self) -> None:
+        """Background worker that batches scan events to prevent DB pool exhaustion."""
+        while True:
+            batch = []
+            try:
+                # Wait for at least one item
+                item = await self._event_queue.get()
+                batch.append(item)
+                self._event_queue.task_done()
+
+                # Grab any additional items available up to 50
+                while len(batch) < 50:
+                    try:
+                        extra = self._event_queue.get_nowait()
+                        batch.append(extra)
+                        self._event_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
+
+                if batch:
+                    await self._flush_batch(batch)
+            except asyncio.CancelledError:
+                while not self._event_queue.empty():
+                    try:
+                        batch.append(self._event_queue.get_nowait())
+                        self._event_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
+                if batch:
+                    await self._flush_batch(batch)
+                break
+            except Exception as e:
+                logger.debug("Error in event flusher: %s", e)
+                await asyncio.sleep(0.5)
+
+    async def _flush_batch(self, events: list[dict]) -> None:
+        if not events:
+            return
+        try:
+            async with AsyncSessionLocal() as db:
+                for ev_dict in events:
+                    scan_id = ev_dict.get("scan_id")
+                    if not scan_id:
+                        continue
+                    ev = ScanEvent(
+                        scan_id=scan_id,
+                        event_type=ev_dict.get("event_type", "system.event"),
+                        severity=ev_dict.get("severity", "info"),
+                        message=sanitize_text(ev_dict.get("message", "")),
+                        data=sanitize_text(ev_dict.get("data", {})),
+                    )
+                    db.add(ev)
+                await db.commit()
+        except Exception as err:
+            logger.debug("Batch event flush error: %s", err)
 
     def make_event(self, scan_id: str, event_type: str, message: str, **data) -> dict:
         cat = event_type.split(".")[0].upper() if "." in event_type else event_type.upper()
@@ -36,17 +102,33 @@ class ResultService:
         }
 
     async def persist_event(self, event: dict) -> None:
-        async with AsyncSessionLocal() as db:
-            ev = ScanEvent(
-                scan_id=event["scan_id"],
-                event_type=event["event_type"],
-                severity=event.get("severity", "info"),
-                message=sanitize_text(event.get("message", "")),
-                data=sanitize_text(event.get("data", {})),
-            )
-            db.add(ev)
-            await db.commit()
+        if not isinstance(event, dict):
+            return
 
+        scan_id = event.get("scan_id")
+        if not scan_id:
+            data = event.get("data")
+            if isinstance(data, dict):
+                scan_id = data.get("scan_id")
+        if not scan_id:
+            return  # Ignore events that do not belong to a specific scan table record
+
+        event_type = event.get("event_type") or event.get("type") or "system.event"
+        severity = event.get("severity") or (event.get("status", "info").lower() if isinstance(event.get("status"), str) else "info")
+        message = event.get("message") or ""
+        event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+
+        self._ensure_worker()
+        try:
+            self._event_queue.put_nowait({
+                "scan_id": scan_id,
+                "event_type": event_type,
+                "severity": severity,
+                "message": message,
+                "data": event_data,
+            })
+        except asyncio.QueueFull:
+            pass
 
     async def upsert_asset(
         self,
@@ -62,6 +144,7 @@ class ResultService:
         depth: int = 0,
         discovered_from: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> Asset:
         clean_fp = sanitize_text(fingerprint)
         clean_host = sanitize_text(hostname)
@@ -108,25 +191,141 @@ class ResultService:
         return asset
 
     async def upsert_finding(
-        self, db: AsyncSession, *, scan_id: str, asset_id: Optional[str], finding_type: str, title: str,
-        severity: str = "INFO", confidence: float = 0.5, description: str | None = None, evidence: dict | None = None,
+        self,
+        db: AsyncSession,
+        *,
+        scan_id: str,
+        asset_id: Optional[str],
+        finding_type: str,
+        title: str,
+        severity: str = "INFO",
+        confidence: str = "CONFIRMED",
+        cwe_id: Optional[str] = None,
+        cve_id: Optional[str] = None,
+        cvss_score: Optional[float] = None,
+        description: str | None = None,
+        impact: str | None = None,
+        technical_details: str | None = None,
+        remediation: str | None = None,
+        business_impact: str | None = None,
+        root_cause: str | None = None,
+        preconditions: list | None = None,
+        expected_result: str | None = None,
+        actual_result: str | None = None,
+        executive_explanation: str | None = None,
+        evidence_level: str = "E0",
+        evidence_score: int = 10,
+        exploitability_state: str = "CANDIDATE",
+        priority: str = "P2",
+        rule_version: str = "v8.0.0",
+        impact_matrix: dict | None = None,
+        validation_status: str = "DISCOVERED",
+        evidence: dict | None = None,
+        reproducibility_meta: dict | None = None,
         status: str = "OPEN",
+        **kwargs: Any,
     ) -> Finding | None:
         clean_title = sanitize_text(title)
         clean_desc = sanitize_text(description)
         clean_ev = sanitize_text(evidence or {})
+        clean_impact = sanitize_text(impact)
+        clean_tech = sanitize_text(technical_details)
+        clean_remed = sanitize_text(remediation)
+        clean_biz = sanitize_text(business_impact)
+        clean_root = sanitize_text(root_cause)
+        clean_exp = sanitize_text(expected_result)
+        clean_act = sanitize_text(actual_result)
+        clean_exec = sanitize_text(executive_explanation)
+
+        dedup_key = FindingDedup.generate_dedup_key(
+            asset_identifier=asset_id or scan_id,
+            vulnerability_type=finding_type,
+            location=clean_title,
+        )
+
         existing = (await db.execute(
             select(Finding).where(
-                Finding.scan_id == scan_id, Finding.asset_id == asset_id, Finding.finding_type == finding_type, Finding.title == clean_title,
+                Finding.scan_id == scan_id,
+                Finding.asset_id == asset_id,
+                Finding.finding_type == finding_type,
+                Finding.title == clean_title,
             )
         )).scalar_one_or_none()
         if existing:
             existing.last_seen = datetime.now(timezone.utc)
+            if clean_ev:
+                cur_ev = dict(existing.evidence or {})
+                cur_ev.update(clean_ev)
+                existing.evidence = cur_ev
+            if clean_impact:
+                existing.impact = clean_impact
+            if clean_tech:
+                existing.technical_details = clean_tech
+            if clean_remed:
+                existing.remediation = clean_remed
+            if clean_root:
+                existing.root_cause = clean_root
+            if clean_exec:
+                existing.executive_explanation = clean_exec
+            if clean_biz:
+                existing.business_impact = clean_biz
+            if clean_exp:
+                existing.expected_result = clean_exp
+            if clean_act:
+                existing.actual_result = clean_act
+            if impact_matrix:
+                existing.impact_matrix = impact_matrix
+            if validation_status:
+                existing.validation_status = validation_status
+            if cvss_score:
+                existing.cvss_score = cvss_score
+            if evidence_level and existing.evidence_level in ("E0", "E1") and evidence_level in ("E2", "E3", "E4"):
+                existing.evidence_level = evidence_level
+            if evidence_score > (existing.evidence_score or 0):
+                existing.evidence_score = evidence_score
+            if exploitability_state:
+                existing.exploitability_state = exploitability_state
+            if priority:
+                existing.priority = priority
             return existing
+
+        count = (await db.execute(
+            select(func.count()).select_from(Finding).where(Finding.scan_id == scan_id)
+        )).scalar() or 0
+        finding_code = f"BH-{count + 1:03d}"
+
         finding = Finding(
-            scan_id=scan_id, asset_id=asset_id, finding_type=finding_type, title=clean_title,
-            severity=severity, confidence=confidence, description=clean_desc,
-            evidence=clean_ev, status=status,
+            scan_id=scan_id,
+            asset_id=asset_id,
+            finding_code=finding_code,
+            finding_type=finding_type,
+            title=clean_title,
+            severity=severity,
+            confidence=str(confidence),
+            evidence_level=evidence_level,
+            evidence_score=evidence_score,
+            exploitability_state=exploitability_state,
+            priority=priority,
+            rule_version=rule_version,
+            impact_matrix=impact_matrix or {},
+            validation_status=validation_status,
+            root_cause=clean_root,
+            preconditions=preconditions or [],
+            expected_result=clean_exp,
+            actual_result=clean_act,
+            executive_explanation=clean_exec,
+            business_impact=clean_biz,
+            cwe_id=cwe_id,
+            cve_id=cve_id,
+            cvss_score=cvss_score,
+            dedup_key=dedup_key,
+            description=clean_desc,
+            impact=clean_impact,
+            technical_details=clean_tech,
+            remediation=clean_remed,
+            evidence=clean_ev,
+            reproducibility_meta=reproducibility_meta or {},
+            status=status,
         )
         db.add(finding)
         try:
@@ -137,22 +336,36 @@ class ResultService:
         return finding
 
     async def upsert_observation(
-        self, db: AsyncSession, *, scan_id: str, asset_id: Optional[str], observation_type: str, title: str,
-        evidence: dict | None = None, confidence: float = 0.5,
+        self,
+        db: AsyncSession,
+        *,
+        scan_id: str,
+        asset_id: Optional[str],
+        observation_type: str,
+        title: str,
+        evidence: dict | None = None,
+        confidence: float = 0.5,
+        **kwargs: Any,
     ) -> Observation | None:
         clean_title = sanitize_text(title)
         clean_ev = sanitize_text(evidence or {})
         existing = (await db.execute(
             select(Observation).where(
-                Observation.scan_id == scan_id, Observation.asset_id == asset_id,
-                Observation.observation_type == observation_type, Observation.title == clean_title,
+                Observation.scan_id == scan_id,
+                Observation.asset_id == asset_id,
+                Observation.observation_type == observation_type,
+                Observation.title == clean_title,
             )
         )).scalar_one_or_none()
         if existing:
             return existing
         obs = Observation(
-            scan_id=scan_id, asset_id=asset_id, observation_type=observation_type, title=clean_title,
-            evidence=clean_ev, confidence=confidence,
+            scan_id=scan_id,
+            asset_id=asset_id,
+            observation_type=observation_type,
+            title=clean_title,
+            evidence=clean_ev,
+            confidence=confidence,
         )
         db.add(obs)
         try:
@@ -162,7 +375,15 @@ class ResultService:
             return None
         return obs
 
-    async def audit(self, db: AsyncSession, scan_id: str, action: str, actor: str = "system", target: str | None = None, details: dict | None = None):
+    async def audit(
+        self,
+        db: AsyncSession,
+        scan_id: str,
+        action: str,
+        actor: str = "system",
+        target: str | None = None,
+        details: dict | None = None,
+    ):
         db.add(AuditLog(
             scan_id=scan_id,
             actor=sanitize_text(actor),

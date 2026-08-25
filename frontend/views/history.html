@@ -1,0 +1,84 @@
+<!-- VIEW 3: SCAN HISTORY (TARGET WORKSPACE & SCAN SESSIONS) -->
+<section id="viewHistory" class="tab-view hidden">
+  <!-- History Level Breadcrumb Navigation -->
+  <nav id="historyBreadcrumb" class="breadcrumb-nav">
+    <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+    <span class="breadcrumb-sep">›</span>
+    <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
+    <span class="breadcrumb-sep">›</span>
+    <span class="breadcrumb-current">📜 Riwayat Scan & Target Intelligence</span>
+  </nav>
+
+  <div class="history-header-block">
+    <div class="history-header-title">
+      <span class="section-icon">📜</span>
+      <div>
+        <h2>Riwayat Scan & Target Intelligence</h2>
+        <div class="pill-muted text-xs">Semua sesi pemindaian tersimpan secara persisten dan terorganisir per domain target.</div>
+      </div>
+    </div>
+    <button id="refreshHistoryBtn" class="btn btn-secondary btn-sm">🔄 Refresh Riwayat</button>
+  </div>
+
+  <!-- Global History Overview Telemetry Bar -->
+  <div class="history-telemetry-grid">
+    <div class="hist-stat-card">
+      <span class="hist-stat-icon">🌐</span>
+      <div>
+        <span class="hist-stat-val" id="histTotalDomains">0</span>
+        <span class="hist-stat-label">Domain Dipantau</span>
+      </div>
+    </div>
+    <div class="hist-stat-card">
+      <span class="hist-stat-icon">🎯</span>
+      <div>
+        <span class="hist-stat-val" id="histTotalScans">0</span>
+        <span class="hist-stat-label">Total Sesi Scan</span>
+      </div>
+    </div>
+    <div class="hist-stat-card">
+      <span class="hist-stat-icon">🌳</span>
+      <div>
+        <span class="hist-stat-val" id="histTotalSubdomains">0</span>
+        <span class="hist-stat-label">Subdomain Aktif</span>
+      </div>
+    </div>
+    <div class="hist-stat-card">
+      <span class="hist-stat-icon">🛡️</span>
+      <div>
+        <span class="hist-stat-val text-danger" id="histTotalFindings">0</span>
+        <span class="hist-stat-label">Temuan Kritis & Tinggi</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search, Filter & Sort Toolbar -->
+  <div class="history-filter-toolbar">
+    <div class="search-input-wrap flex-1">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="historySearchInput" class="custom-input"
+        placeholder="Cari domain target, IP host, ID scan (#scan_...), atau profil..." />
+    </div>
+    <div class="history-filter-pills">
+      <button class="hist-filter-pill active" data-hist-filter="ALL">Semua Target</button>
+      <button class="hist-filter-pill" data-hist-filter="HIGH_RISK">🔥 High / Critical</button>
+      <button class="hist-filter-pill" data-hist-filter="COMPLETED">🟢 Selesai</button>
+      <button class="hist-filter-pill" data-hist-filter="RUNNING">⚡ Running</button>
+      <button class="hist-filter-pill" data-hist-filter="HAS_FINDINGS">🛡️ Has Findings</button>
+    </div>
+    <div class="history-sort-wrap">
+      <label class="text-xs font-bold">Urutkan:</label>
+      <select id="historySortSelect" class="custom-select custom-select-sm">
+        <option value="LATEST">Terbaru Di-scan</option>
+        <option value="HIGHEST_RISK">Risiko Tertinggi</option>
+        <option value="MOST_ASSETS">Aset Terbanyak</option>
+        <option value="MOST_FINDINGS">Temuan Terbanyak</option>
+        <option value="ALPHABETICAL">Nama Domain (A-Z)</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="historyListContainer" class="history-domain-list">
+    <div class="empty-msg">Memuat riwayat scan...</div>
+  </div>
+</section>

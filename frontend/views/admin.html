@@ -1,0 +1,124 @@
+<!-- VIEW 6: ADMIN OVERSIGHT DASHBOARD -->
+<section id="viewAdmin" class="tab-view hidden">
+  <!-- Admin Level Breadcrumb Navigation -->
+  <nav id="adminBreadcrumb" class="breadcrumb-nav">
+    <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
+    <span class="breadcrumb-sep">›</span>
+    <span class="breadcrumb-current">🛡️ Admin Oversight & Analytics</span>
+  </nav>
+
+  <div class="card sketch-card admin-dashboard-card">
+    <div class="card-header-flex">
+      <div class="title-with-icon">
+        <span class="section-icon">🛡️</span>
+        <h2>Admin Oversight — Domain & User Scrapping Analytics</h2>
+      </div>
+      <button id="refreshAdminBtn" class="btn btn-secondary btn-sm">🔄 Refresh Admin Data</button>
+    </div>
+    <p class="section-subtext">Pusat pengawasan platform: memantau aktivitas scrapping setiap pengguna, pemetaan domain ke pengguna, dan agregasi aset seluruh sistem.</p>
+
+    <!-- Admin Global Metric Cards -->
+    <div class="admin-metrics-grid">
+      <div class="telemetry-card admin-metric">
+        <div class="telemetry-icon">👥</div>
+        <div class="telemetry-data">
+          <span class="telemetry-label">Total Pengguna</span>
+          <span id="admTotalUsers" class="telemetry-value">0</span>
+        </div>
+      </div>
+      <div class="telemetry-card admin-metric">
+        <div class="telemetry-icon">🎯</div>
+        <div class="telemetry-data">
+          <span class="telemetry-label">Total Scans Dijalankan</span>
+          <span id="admTotalScans" class="telemetry-value">0</span>
+        </div>
+      </div>
+      <div class="telemetry-card admin-metric">
+        <div class="telemetry-icon">🌐</div>
+        <div class="telemetry-data">
+          <span class="telemetry-label">Root Domain Dipantau</span>
+          <span id="admTotalDomains" class="telemetry-value">0</span>
+        </div>
+      </div>
+      <div class="telemetry-card admin-metric">
+        <div class="telemetry-icon">🌳</div>
+        <div class="telemetry-data">
+          <span class="telemetry-label">Subdomain Aktif</span>
+          <span id="admTotalSubdomains" class="telemetry-value">0</span>
+        </div>
+      </div>
+      <div class="telemetry-card admin-metric">
+        <div class="telemetry-icon">📡</div>
+        <div class="telemetry-data">
+          <span class="telemetry-label">Discovered Host IPs</span>
+          <span id="admTotalIps" class="telemetry-value">0</span>
+        </div>
+      </div>
+      <div class="telemetry-card admin-metric">
+        <div class="telemetry-icon">🛡️</div>
+        <div class="telemetry-data">
+          <span class="telemetry-label">Security Findings</span>
+          <span id="admTotalFindings" class="telemetry-value count-finding">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Sub-Navigation -->
+    <div class="admin-subtabs">
+      <button class="admin-subtab active" data-admin-view="users">👥 Aktivitas Scrapping Pengguna</button>
+      <button class="admin-subtab" data-admin-view="domains">🌐 Audit Pemetaan Domain</button>
+    </div>
+
+    <!-- Admin View 1: User Scrapping Analytics Table -->
+    <div id="adminUsersView" class="admin-view-content">
+      <div class="table-responsive-box">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Total Scans</th>
+              <th>Root Domains</th>
+              <th>Subdomain Aktif</th>
+              <th>Discovered IPs</th>
+              <th>Security Findings</th>
+              <th>Terakhir Aktif</th>
+            </tr>
+          </thead>
+          <tbody id="adminUsersTbody">
+            <tr>
+              <td colspan="9" class="table-loading">Memuat data pengguna...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Admin View 2: Domain Scrapping Audit Table -->
+    <div id="adminDomainsView" class="admin-view-content hidden">
+      <div class="table-responsive-box">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Root Domain</th>
+              <th>Total Scans</th>
+              <th>Discrapped Oleh (Users)</th>
+              <th>Subdomain Aktif</th>
+              <th>Discovered IPs</th>
+              <th>Security Findings</th>
+              <th>Pertama Ditemukan</th>
+              <th>Terakhir Di-scan</th>
+            </tr>
+          </thead>
+          <tbody id="adminDomainsTbody">
+            <tr>
+              <td colspan="8" class="table-loading">Memuat data audit domain...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</section>

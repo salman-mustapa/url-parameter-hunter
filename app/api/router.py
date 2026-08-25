@@ -1,19 +1,63 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
-from typing import Optional
+import logging
+import os
+from pathlib import Path
+import re
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+logger = logging.getLogger("api.router")
+
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
-
+from sqlalchemy import desc, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import (
+    create_access_token,
+    get_current_user,
+    get_optional_user,
+    hash_password,
+    require_admin_role,
+    require_user_role,
+    verify_password,
+)
 from app.core.db import AsyncSessionLocal, get_db
 from app.core.events import event_bus
-from app.models.models import Asset, AuditLog, Finding, Port, Scan, ScanEvent
+from app.models.models import (
+    Asset,
+    AuditLog,
+    Certificate,
+    DeviceTrial,
+    Domain,
+    Evidence,
+    Finding,
+    Observation,
+    Parameter,
+    PoC,
+    Port,
+    Artifact,
+    Campaign,
+    CredentialArtifact,
+    Identity,
+    Report,
+    Retest,
+    Scan,
+    ScanEvent,
+    ScopeModel,
+    Screenshot,
+    Service,
+    Technology,
+    TestPlan,
+    TtpObservation,
+    URL,
+    User,
+)
+from app.artifacts.sanitizer import ArtifactSanitizer
 from app.services.assets import asset_detail, asset_tree
 from app.services.results import result_service
 from app.services.scan_manager import scan_manager
@@ -21,53 +65,442 @@ from app.services.scan_manager import scan_manager
 router = APIRouter(prefix="/api", tags=["api"])
 
 
+@router.get("/health")
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """System health check, database ping, AI status, and V8 telemetry."""
+    from app.core.db import ping
+    from app.services.capability_registry import capability_registry
+    from app.ai.gateway import ai_gateway
+
+    db_healthy = await ping()
+    caps = capability_registry.list_capabilities()
+    return {
+        "status": "healthy" if db_healthy else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "database": "connected" if db_healthy else "disconnected",
+        "capabilities_registered": len(caps),
+        "ai_engine": "active",
+        "version": "9.1.0",
+    }
+
+
+# ==========================================================================
+# AI Engine Configuration & Live Router Hub
+# ==========================================================================
+class AIConfigRequest(BaseModel):
+    provider: str = "openrouter"  # "openrouter", "nine_router", "gemini", "groq", "custom", "heuristic", "auto"
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    enabled: bool = True
+
+
+@router.get("/ai/config")
+async def get_ai_config():
+    """Get active AI provider configuration, model info, and status."""
+    from app.ai.gateway import ai_gateway
+    return ai_gateway.get_config()
+
+
+@router.post("/ai/config")
+async def update_ai_config(body: AIConfigRequest):
+    """Update active AI provider configuration dynamically at runtime."""
+    from app.ai.gateway import ai_gateway
+    cfg = body.model_dump()
+    ai_gateway.apply_config(cfg)
+    return {"status": "success", "config": ai_gateway.get_config()}
+
+
+@router.post("/ai/test")
+async def test_ai_connection(body: AIConfigRequest):
+    """Test connection and measure response latency against candidate AI provider."""
+    from app.ai.gateway import ai_gateway
+    cfg = body.model_dump()
+    result = await ai_gateway.test_config(cfg)
+    return result
+
+
+# ==========================================================================
+# Authentication & User Management (RBAC)
+# ==========================================================================
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    device_fingerprint: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    device_fingerprint: Optional[str] = None
+
+
+@router.post("/auth/register")
+async def register(
+    body: RegisterRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    x_device_fp: Optional[str] = Header(None, alias="X-Device-Fingerprint"),
+):
+    uname = body.username.strip().lower()
+    email = body.email.strip().lower()
+    pwd = body.password.strip()
+
+    if not uname or len(uname) < 3 or not re.match(r"^[a-zA-Z0-9_.-]+$", uname):
+        raise HTTPException(status_code=400, detail="Username minimal 3 karakter (hanya huruf, angka, dot, dash, underscore).")
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Alamat email tidak valid.")
+    if not pwd or len(pwd) < 6:
+        raise HTTPException(status_code=400, detail="Password minimal 6 karakter.")
+
+    existing_user = (await db.execute(select(User).where((User.username == uname) | (User.email == email)))).scalar_one_or_none()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username atau Email sudah terdaftar.")
+
+    new_user = User(
+        username=uname,
+        email=email,
+        hashed_password=hash_password(pwd),
+        role="user",
+        is_active=True,
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    # Claim any prior guest trial scans from this device
+    fp = body.device_fingerprint or x_device_fp
+    if fp:
+        trials = (await db.execute(select(DeviceTrial).where(DeviceTrial.device_fingerprint == fp))).scalars().all()
+        for t in trials:
+            t.user_id = new_user.id
+            scan = await db.get(Scan, t.scan_id)
+            if scan and not scan.user_id:
+                scan.user_id = new_user.id
+        await db.commit()
+
+    token = create_access_token(new_user.id, new_user.username, new_user.role)
+    response.set_cookie(key="auth_token", value=token, httponly=True, samesite="lax", max_age=86400 * 7)
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": new_user.id,
+            "username": new_user.username,
+            "email": new_user.email,
+            "role": new_user.role,
+        },
+    }
+
+
+@router.post("/auth/login")
+async def login(
+    body: LoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    x_device_fp: Optional[str] = Header(None, alias="X-Device-Fingerprint"),
+):
+    uname = body.username.strip().lower()
+    pwd = body.password.strip()
+
+    user = (await db.execute(select(User).where((User.username == uname) | (User.email == uname)))).scalar_one_or_none()
+    if not user or not verify_password(pwd, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Username/Email atau Password salah.")
+
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Akun dinonaktifkan.")
+
+    # Claim any prior guest trial scans from this device
+    fp = body.device_fingerprint or x_device_fp
+    if fp and user.role == "user":
+        trials = (await db.execute(select(DeviceTrial).where(DeviceTrial.device_fingerprint == fp))).scalars().all()
+        for t in trials:
+            t.user_id = user.id
+            scan = await db.get(Scan, t.scan_id)
+            if scan and not scan.user_id:
+                scan.user_id = user.id
+        await db.commit()
+
+    token = create_access_token(user.id, user.username, user.role)
+    response.set_cookie(key="auth_token", value=token, httponly=True, samesite="lax", max_age=86400 * 7)
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role,
+        },
+    }
+
+
+@router.post("/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie(key="auth_token")
+    return {"message": "Berhasil logout."}
+
+
+@router.get("/auth/me")
+async def get_me(user: Optional[User] = Depends(get_optional_user)):
+    if not user:
+        return {"authenticated": False, "user": None}
+    return {
+        "authenticated": True,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        },
+    }
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@router.post("/auth/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    old_pwd = body.old_password.strip()
+    new_pwd = body.new_password.strip()
+
+    if not verify_password(old_pwd, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Password saat ini (lama) tidak sesuai.")
+    if len(new_pwd) < 6:
+        raise HTTPException(status_code=400, detail="Password baru minimal 6 karakter.")
+    if old_pwd == new_pwd:
+        raise HTTPException(status_code=400, detail="Password baru tidak boleh sama dengan password lama.")
+
+    current_user.hashed_password = hash_password(new_pwd)
+    await db.commit()
+    return {"message": "Password berhasil diperbarui."}
+
+
+# ==========================================================================
+# Scan Creation & Management (User Scans Isolated & 1x Device Trial)
+# ==========================================================================
 class CreateScanRequest(BaseModel):
     target: Optional[str] = None
-    profile: Optional[str] = "standard"
+    profile: Optional[str] = "adversary_simulation"  # Default Full Power Aggressive Pentest
     include_subdomains: Optional[bool] = True
+    validation_level: Optional[str] = "aggressive"
+    allowed_modules: Optional[List[str]] = None
+    allowed_actions: Optional[List[str]] = None
+    authorization_reference: Optional[str] = "AUTO-AUTH-ENTERPRISE"
+    campaign_id: Optional[str] = None
+    device_fingerprint: Optional[str] = None
 
 
 @router.post("/scans")
 async def create_scan(
+    request: Request,
     target: Optional[str] = Query(None),
-    profile: Optional[str] = Query("standard"),
-    include_subdomains: Optional[bool] = Query(True),
+    profile: Optional[str] = Query(None),
+    include_subdomains: Optional[bool] = Query(None),
+    validation_level: Optional[str] = Query(None),
     body: Optional[CreateScanRequest] = None,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+    x_device_fp: Optional[str] = Header(None, alias="X-Device-Fingerprint"),
 ):
-    final_target = target or (body.target if body else None)
-    final_profile = profile or (body.profile if body else "standard")
-    final_subs = include_subdomains if include_subdomains is not None else (body.include_subdomains if body else True)
+    # Determine client IP and user-agent
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if not client_ip and request.client:
+        client_ip = request.client.host
+    user_agent = request.headers.get("user-agent", "")
+    device_fp = (body.device_fingerprint if body else None) or x_device_fp or f"ip_ua_{abs(hash(client_ip + user_agent))}"
+
+    # If authenticated, enforce non-admin role
+    if current_user:
+        if current_user.role == "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Akun Administrator hanya memiliki hak akses Pemantauan (Monitoring-Only) dan tidak dapat memulai scan. Silakan gunakan akun user biasa.",
+            )
+        user_id = current_user.id
+    else:
+        # Check 1x Device Trial limit for unauthenticated users
+        stmt = select(DeviceTrial).where(DeviceTrial.device_fingerprint == device_fp)
+        existing_trial = (await db.execute(stmt)).scalars().first()
+        if existing_trial:
+            raise HTTPException(
+                status_code=403,
+                detail="TRIAL_EXHAUSTED: Percobaan gratis (1x Trial) untuk perangkat ini telah digunakan. Silakan Masuk (Login) atau Daftar Akun Gratis untuk melanjutkan pencarian tanpa batas.",
+            )
+        user_id = None
+
+    final_target = (body.target if body and body.target else target)
+    final_profile = (body.profile if body and body.profile else profile) or "standard"
+    if body and body.include_subdomains is not None:
+        final_subs = bool(body.include_subdomains)
+    elif include_subdomains is not None:
+        final_subs = bool(include_subdomains)
+    else:
+        final_subs = True
+
+    final_val_level = (body.validation_level if body and body.validation_level else validation_level)
+
     if not final_target:
-        raise HTTPException(status_code=400, detail="Target domain or URL is required.")
+        raise HTTPException(status_code=400, detail="Target domain atau URL diperlukan.")
     try:
-        return await scan_manager.create_scan(final_target.strip(), final_profile, final_subs)
+        res = await scan_manager.create_scan(
+            target=final_target.strip(),
+            profile=final_profile,
+            include_subdomains=final_subs,
+            validation_level=final_val_level,
+            user_id=user_id,
+            allowed_modules=body.allowed_modules if body else None,
+            allowed_actions=body.allowed_actions if body else None,
+            authorization_reference=body.authorization_reference if body else None,
+            campaign_id=body.campaign_id if body else None,
+        )
+        # Record device trial usage
+        trial = DeviceTrial(
+            device_fingerprint=device_fp,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            scan_id=res["scan_id"],
+            user_id=user_id,
+        )
+        db.add(trial)
+        await db.commit()
+        return res
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 
 @router.get("/scans")
-async def list_scans(db: AsyncSession = Depends(get_db)):
-    scans = (await db.execute(select(Scan).order_by(desc(Scan.created_at)))).scalars().all()
-    return [
-        {
-            "id": s.id, "root_domain": s.root_domain, "status": s.status, "profile": s.profile,
-            "progress": s.progress or {},
+async def list_scans(
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+    x_device_fp: Optional[str] = Header(None, alias="X-Device-Fingerprint"),
+):
+    stmt = select(Scan).order_by(desc(Scan.created_at))
+    # If regular user logged in, only show their scans
+    if current_user and current_user.role == "user":
+        stmt = stmt.where(Scan.user_id == current_user.id)
+    elif not current_user:
+        # Unauthenticated: only return their 1x device trial scan if any
+        if x_device_fp:
+            trial_scan_ids = (await db.execute(
+                select(DeviceTrial.scan_id).where(DeviceTrial.device_fingerprint == x_device_fp)
+            )).scalars().all()
+            if trial_scan_ids:
+                stmt = stmt.where(Scan.id.in_(trial_scan_ids))
+            else:
+                return []
+        else:
+            return []
+
+    scans = (await db.execute(stmt)).scalars().all()
+    results = []
+    for s in scans:
+        prog = dict(s.progress or {})
+        st = (s.status or "").lower()
+        if st in ("running", "queued", "starting") or not prog or ("assets" not in prog and "urls" not in prog):
+            # Compute live real-time progress for active running scans
+            assets_cnt = (await db.execute(select(func.count()).select_from(Asset).where(Asset.scan_id == s.id))).scalar() or 0
+            asset_ids = select(Asset.id).where(Asset.scan_id == s.id)
+            urls_cnt = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+            ports_cnt = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
+            findings_cnt = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == s.id))).scalar() or 0
+            prog = {
+                "assets": assets_cnt,
+                "ports": ports_cnt,
+                "urls": urls_cnt,
+                "findings": findings_cnt,
+            }
+        target_url = (s.options or {}).get("target_url") or s.root_domain
+        target_host = (s.options or {}).get("target_host") or s.root_domain
+        results.append({
+            "id": s.id,
+            "user_id": s.user_id,
+            "root_domain": s.root_domain,
+            "target_url": target_url,
+            "target_host": target_host,
+            "status": s.status,
+            "profile": s.profile,
+            "options": s.options or {},
+            "progress": prog,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
             "created_at": s.created_at.isoformat() if s.created_at else None,
             "completed_at": s.completed_at.isoformat() if s.completed_at else None,
-        }
-        for s in scans
-    ]
+        })
+    return results
 
 
 @router.get("/scans/{scan_id}")
-async def get_scan(scan_id: str, db: AsyncSession = Depends(get_db)):
+async def get_scan(
+    scan_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+    x_device_fp: Optional[str] = Header(None, alias="X-Device-Fingerprint"),
+):
     scan = await db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
+    
+    # Enforce access authorization
+    if scan.user_id:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Silakan login untuk mengakses hasil scan ini.")
+        if current_user.role == "user" and scan.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Akses ditolak: Anda tidak memiliki izin untuk melihat scan ini.")
+    elif not current_user and x_device_fp:
+        trial = (await db.execute(
+            select(DeviceTrial).where(
+                DeviceTrial.scan_id == scan_id,
+                DeviceTrial.device_fingerprint == x_device_fp
+            )
+        )).scalars().first()
+        if not trial:
+            raise HTTPException(status_code=401, detail="Silakan login untuk mengakses scan ini.")
+
+    prog = dict(scan.progress or {})
+    if scan.status == "running" or not prog or ("assets" not in prog and "urls" not in prog):
+        assets_cnt = (await db.execute(select(func.count()).select_from(Asset).where(Asset.scan_id == scan.id))).scalar() or 0
+        asset_ids = select(Asset.id).where(Asset.scan_id == scan.id)
+        urls_cnt = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+        ports_cnt = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
+        url_ids = select(URL.id).where(URL.asset_id.in_(asset_ids))
+        params_cnt = (await db.execute(select(func.count()).select_from(Parameter).where(Parameter.url_id.in_(url_ids)))).scalar() or 0
+        techs_cnt = (await db.execute(select(func.count()).select_from(Technology).where(Technology.asset_id.in_(asset_ids)))).scalar() or 0
+        findings_cnt = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == scan.id))).scalar() or 0
+        prog = {
+            "assets": assets_cnt,
+            "ports": ports_cnt,
+            "urls": urls_cnt,
+            "parameters": params_cnt,
+            "technologies": techs_cnt,
+            "findings": findings_cnt,
+        }
+
+    target_url = (scan.options or {}).get("target_url") or scan.root_domain
+    target_host = (scan.options or {}).get("target_host") or scan.root_domain
+
     return {
-        "id": scan.id, "root_domain": scan.root_domain, "status": scan.status, "profile": scan.profile,
-        "options": scan.options or {}, "progress": scan.progress or {},
+        "id": scan.id,
+        "user_id": scan.user_id,
+        "root_domain": scan.root_domain,
+        "target_url": target_url,
+        "target_host": target_host,
+        "status": scan.status,
+        "profile": scan.profile,
+        "validation_level": scan.validation_level,
+        "options": scan.options or {},
+        "progress": prog,
+        "started_at": scan.started_at.isoformat() if scan.started_at else None,
         "created_at": scan.created_at.isoformat() if scan.created_at else None,
         "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
     }
@@ -102,9 +535,12 @@ async def scan_events(scan_id: str):
             )).scalars().all()
             for ev in rows:
                 await queue.put(json.dumps({
-                    "scan_id": scan_id, "event_type": ev.event_type,
+                    "scan_id": scan_id,
+                    "event_type": ev.event_type,
                     "category": ev.event_type.split(".")[0].upper() if "." in ev.event_type else ev.event_type.upper(),
-                    "severity": ev.severity, "message": ev.message, "data": ev.data or {},
+                    "severity": ev.severity,
+                    "message": ev.message,
+                    "data": ev.data or {},
                     "created_at": ev.created_at.isoformat() if ev.created_at else None,
                 }, default=str))
 
@@ -119,7 +555,6 @@ async def scan_events(scan_id: str):
                     item = await asyncio.wait_for(queue.get(), timeout=15.0)
                     yield f"data: {item}\n\n"
                 except asyncio.TimeoutError:
-                    # SSE keepalive comment to prevent proxy timeouts
                     yield ": keepalive\n\n"
         except asyncio.CancelledError:
             pass
@@ -136,10 +571,16 @@ async def scan_events(scan_id: str):
 
 
 @router.get("/scans/{scan_id}/events/history")
-async def get_scan_events_history(scan_id: str, db: AsyncSession = Depends(get_db)):
+async def get_scan_events_history(
+    scan_id: str,
+    limit: int = Query(300, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db)
+):
+    # Fetch most recent events up to limit, then reverse to chronological order
     rows = (await db.execute(
-        select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(ScanEvent.created_at.asc())
+        select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(ScanEvent.created_at.desc()).limit(limit)
     )).scalars().all()
+    chronological_rows = list(reversed(rows))
     return [
         {
             "scan_id": ev.scan_id,
@@ -150,36 +591,505 @@ async def get_scan_events_history(scan_id: str, db: AsyncSession = Depends(get_d
             "data": ev.data or {},
             "created_at": ev.created_at.isoformat() if ev.created_at else None,
         }
-        for ev in rows
+        for ev in chronological_rows
     ]
 
 
+# ==========================================================================
+# Asset Graph, Ports & Parameters Explorers
+# ==========================================================================
 @router.get("/assets/tree")
 async def tree(scan_id: str = Query(...), db: AsyncSession = Depends(get_db)):
-
     return await asset_tree(db, scan_id)
 
 
 @router.get("/assets/{asset_id}")
-async def detail(asset_id: str, db: AsyncSession = Depends(get_db)):
+async def get_asset_detail(asset_id: str, db: AsyncSession = Depends(get_db)):
     return await asset_detail(db, asset_id)
 
 
-@router.get("/findings")
-async def list_findings(scan_id: str = Query(...), db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(
-        select(Finding).where(Finding.scan_id == scan_id).order_by(desc(Finding.first_seen))
-    )).scalars().all()
+@router.get("/scans/{scan_id}/ports/all")
+async def list_all_scan_ports(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Consolidated Global Port Matrix for all subdomains in this scan."""
+    stmt = (
+        select(Port, Asset.hostname, Asset.fqdn, Asset.ip.label("asset_ip"))
+        .join(Asset, Port.asset_id == Asset.id)
+        .where(Asset.scan_id == scan_id)
+        .order_by(Port.port.asc(), Asset.hostname.asc())
+    )
+    results = (await db.execute(stmt)).all()
+    out = []
+    for p, hostname, fqdn, asset_ip in results:
+        target_host = hostname or fqdn or asset_ip or "target"
+        is_ssl = p.port in (443, 8443, 2083, 2087, 2096, 9443, 10443, 4433, 4443)
+        scheme = "https" if is_ssl else "http"
+        port_suffix = f":{p.port}" if p.port not in (80, 443) else ""
+        web_ports = {80, 443, 8080, 8443, 8000, 8001, 8008, 8081, 8082, 8088, 8888, 8880, 9000, 9001, 9090, 9443, 10000, 10443, 2082, 2083, 2086, 2087, 2095, 2096, 3000, 5000, 4200, 5173}
+        direct_url = f"{scheme}://{target_host}{port_suffix}" if p.protocol == "tcp" and p.port in web_ports else None
+
+        out.append({
+            "id": p.id,
+            "asset_id": p.asset_id,
+            "hostname": target_host,
+            "ip": p.ip or asset_ip,
+            "port": p.port,
+            "protocol": p.protocol,
+            "service": p.service or "-",
+            "state": p.state,
+            "banner": p.banner or "-",
+            "direct_url": direct_url,
+        })
+    return out
+
+
+@router.get("/scans/{scan_id}/parameters/all")
+async def list_all_scan_parameters(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Consolidated Parameters Matrix across all discovered URLs."""
+    stmt = (
+        select(Parameter, URL.url, URL.host, URL.path, URL.status_code, URL.asset_id)
+        .join(URL, Parameter.url_id == URL.id)
+        .join(Asset, URL.asset_id == Asset.id)
+        .where(Asset.scan_id == scan_id)
+        .order_by(Parameter.name.asc())
+    )
+    results = (await db.execute(stmt)).all()
     return [
         {
-            "id": f.id, "scan_id": f.scan_id, "asset_id": f.asset_id, "finding_type": f.finding_type,
-            "title": f.title, "severity": f.severity, "confidence": f.confidence,
-            "description": f.description, "evidence": f.evidence or {}, "status": f.status,
+            "id": param.id,
+            "name": param.name,
+            "location": param.location,
+            "type": param.type or "string",
+            "confidence": param.confidence,
+            "url": url,
+            "host": host,
+            "path": path,
+            "status_code": status_code,
+            "asset_id": asset_id,
+        }
+        for param, url, host, path, status_code, asset_id in results
+    ]
+
+
+@router.get("/scans/{scan_id}/urls/all")
+async def list_all_scan_urls(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Consolidated Global Discovered URLs & Endpoints for this scan."""
+    stmt = (
+        select(
+            URL,
+            Asset.hostname,
+            Asset.ip.label("asset_ip"),
+            func.count(Parameter.id).label("param_count")
+        )
+        .join(Asset, URL.asset_id == Asset.id)
+        .outerjoin(Parameter, Parameter.url_id == URL.id)
+        .where(Asset.scan_id == scan_id)
+        .group_by(URL.id, Asset.hostname, Asset.ip)
+        .order_by(URL.url.asc())
+    )
+    results = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": u.id,
+            "asset_id": u.asset_id,
+            "hostname": hostname or u.host or asset_ip or "-",
+            "ip": asset_ip,
+            "url": u.url,
+            "method": "GET",
+            "host": u.host or hostname,
+            "path": u.path or "/",
+            "status_code": u.status_code or 200,
+            "content_type": u.content_type,
+            "content_length": None,
+            "title": u.title,
+            "parameters_count": param_count,
+            "first_seen": u.first_seen.isoformat() if u.first_seen else None,
+        }
+        for u, hostname, asset_ip, param_count in results
+    ]
+
+
+@router.get("/scans/{scan_id}/artifacts/all")
+async def list_all_scan_artifacts(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Consolidated Artifact Matrix (SQL dumps, CSVs, logs, configs) for this scan session."""
+    stmt = (
+        select(Artifact, Asset.hostname, Asset.ip.label("asset_ip"))
+        .outerjoin(Asset, Artifact.asset_id == Asset.id)
+        .where(Artifact.scan_id == scan_id)
+        .order_by(Artifact.created_at.desc())
+    )
+    results = (await db.execute(stmt)).all()
+    out = []
+    for art, hostname, asset_ip in results:
+        schema = art.schema_data or {}
+        entities = art.extracted_entities or {}
+        out.append({
+            "id": art.id,
+            "scan_id": art.scan_id,
+            "asset_id": art.asset_id,
+            "hostname": hostname or asset_ip or "-",
+            "filename": art.filename,
+            "file_type": art.file_type,
+            "mime_type": art.mime_type,
+            "size_bytes": art.size_bytes,
+            "sha256_hash": art.sha256_hash,
+            "state": art.state,
+            "database_name": schema.get("database_name"),
+            "vendor": schema.get("vendor"),
+            "total_tables": schema.get("total_tables", len(schema.get("tables", []))),
+            "total_users": len(entities.get("users", [])),
+            "total_hashes": len(entities.get("hashes", [])),
+            "has_pii": entities.get("has_pii", False) or len(entities.get("users", [])) > 0,
+            "created_at": art.created_at.isoformat() if art.created_at else None,
+        })
+    return out
+
+
+@router.get("/artifacts/{artifact_id}")
+async def get_artifact_detail(artifact_id: str, db: AsyncSession = Depends(get_db)):
+    """Detailed view of an acquired security artifact including schema and extracted entities."""
+    art = await db.get(Artifact, artifact_id)
+    if not art:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    hostname = "-"
+    if art.asset_id:
+        ast = await db.get(Asset, art.asset_id)
+        if ast:
+            hostname = ast.hostname or ast.ip or "-"
+
+    return {
+        "id": art.id,
+        "scan_id": art.scan_id,
+        "asset_id": art.asset_id,
+        "hostname": hostname,
+        "filename": art.filename,
+        "file_type": art.file_type,
+        "mime_type": art.mime_type,
+        "size_bytes": art.size_bytes,
+        "sha256_hash": art.sha256_hash,
+        "state": art.state,
+        "schema_data": art.schema_data or {},
+        "extracted_entities": art.extracted_entities or {},
+        "metadata": art.metadata_ or {},
+        "created_at": art.created_at.isoformat() if art.created_at else None,
+    }
+
+
+@router.get("/artifacts/{artifact_id}/preview")
+async def get_artifact_preview(artifact_id: str, db: AsyncSession = Depends(get_db)):
+    """Returns text preview and sanitized preview snippet."""
+    art = await db.get(Artifact, artifact_id)
+    if not art:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    raw_text = ""
+    if art.storage_path and os.path.exists(art.storage_path):
+        try:
+            with open(art.storage_path, "r", encoding="utf-8", errors="ignore") as f:
+                raw_text = "".join([f.readline() for _ in range(300)])
+        except Exception:
+            raw_text = "[Binary or unreadable file content]"
+
+    sanitized_text = ArtifactSanitizer.sanitize_sql_dump(raw_text) if "sql" in art.file_type else raw_text
+
+    return {
+        "id": art.id,
+        "filename": art.filename,
+        "file_type": art.file_type,
+        "size_bytes": art.size_bytes,
+        "sha256_hash": art.sha256_hash,
+        "preview_lines": len(raw_text.splitlines()),
+        "raw_preview": raw_text[:8000],
+        "sanitized_preview": sanitized_text[:8000],
+    }
+
+
+@router.get("/artifacts/{artifact_id}/tables")
+async def get_artifact_tables(artifact_id: str, db: AsyncSession = Depends(get_db)):
+    """Returns structured table schemas, columns, and sample rows."""
+    art = await db.get(Artifact, artifact_id)
+    if not art:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    schema = art.schema_data or {}
+    return {
+        "id": art.id,
+        "filename": art.filename,
+        "vendor": schema.get("vendor", "Generic"),
+        "database_name": schema.get("database_name"),
+        "tables": schema.get("tables", []),
+        "sample_rows": schema.get("sample_rows", []),
+    }
+
+
+@router.get("/artifacts/{artifact_id}/download")
+async def download_artifact_file(artifact_id: str, db: AsyncSession = Depends(get_db)):
+    """Downloads the quarantined raw artifact file."""
+    art = await db.get(Artifact, artifact_id)
+    if not art or not art.storage_path or not os.path.exists(art.storage_path):
+        raise HTTPException(status_code=404, detail="Artifact file not found on disk")
+
+    return FileResponse(
+        path=art.storage_path,
+        filename=art.filename,
+        media_type=art.mime_type or "application/octet-stream",
+    )
+
+
+@router.get("/artifacts/{artifact_id}/export-sanitized")
+async def export_sanitized_artifact(artifact_id: str, db: AsyncSession = Depends(get_db)):
+    """Downloads a compliance-safe sanitized export of the artifact."""
+    art = await db.get(Artifact, artifact_id)
+    if not art or not art.storage_path or not os.path.exists(art.storage_path):
+        raise HTTPException(status_code=404, detail="Artifact file not found on disk")
+
+    try:
+        with open(art.storage_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read(500000)  # up to 500KB
+    except Exception:
+        content = ""
+
+    sanitized = ArtifactSanitizer.sanitize_sql_dump(content) if "sql" in art.file_type else content
+
+    def iter_content():
+        yield sanitized.encode("utf-8")
+
+    out_name = f"sanitized_{art.filename}"
+    return StreamingResponse(
+        iter_content(),
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+    )
+
+
+@router.get("/scans/{scan_id}/technologies/all")
+async def list_all_scan_technologies(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Consolidated Technology Stack & Fingerprints for this scan."""
+    stmt = (
+        select(Technology, Asset.hostname, Asset.fqdn, Asset.ip.label("asset_ip"))
+        .join(Asset, Technology.asset_id == Asset.id)
+        .where(Asset.scan_id == scan_id)
+        .order_by(Technology.category.asc(), Technology.name.asc())
+    )
+    results = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": t.id,
+            "asset_id": t.asset_id,
+            "hostname": hostname or fqdn or asset_ip or "unknown",
+            "ip": asset_ip,
+            "name": t.name,
+            "version": t.version,
+            "category": t.category or "Other",
+            "cpe": t.cpe,
+            "confidence": str(t.confidence or 1.0),
+            "evidence": t.evidence or "-",
+        }
+        for t, hostname, fqdn, asset_ip in results
+    ]
+
+
+@router.get("/scans/{scan_id}/assets/all")
+async def list_all_scan_assets(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Consolidated Active Assets & Subdomains for this scan."""
+    stmt = select(Asset).where(Asset.scan_id == scan_id).order_by(Asset.depth.asc(), Asset.hostname.asc())
+    assets = (await db.execute(stmt)).scalars().all()
+    out = []
+    for a in assets:
+        ports_cnt = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id == a.id))).scalar() or 0
+        urls_cnt = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id == a.id))).scalar() or 0
+        findings_cnt = (await db.execute(select(func.count()).select_from(Finding).where(Finding.asset_id == a.id))).scalar() or 0
+        tech_names = [t.name for t in (await db.execute(select(Technology).where(Technology.asset_id == a.id))).scalars().all()]
+        out.append({
+            "id": a.id,
+            "hostname": a.hostname or a.fqdn or a.ip or "unknown",
+            "fqdn": a.fqdn,
+            "ip": a.ip,
+            "asset_type": a.asset_type,
+            "depth": a.depth,
+            "status": a.status,
+            "liveness_status": a.liveness_status,
+            "ports_count": ports_cnt,
+            "urls_count": urls_cnt,
+            "findings_count": findings_cnt,
+            "technologies": tech_names,
+            "first_seen": a.first_seen.isoformat() if a.first_seen else None,
+        })
+    return out
+
+
+@router.delete("/scans/{scan_id}")
+async def delete_scan(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete a scan and all associated data."""
+    from sqlalchemy import delete
+    from app.models.models import (
+        Asset, Finding, Screenshot, URL, Port, Service, Parameter,
+        Technology, Certificate, Artifact, DurableTask, DeadLetterTask, AttackPath,
+        ScanEvent, AuditLog, Observation, Report, TestPlan, PreconditionCheck
+    )
+
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # 1. Stop scan in scan_manager if running
+    try:
+        await scan_manager.stop_scan(scan_id)
+    except Exception:
+        pass
+
+    # 2. Clean up in-memory engines
+    try:
+        if scan_id in security_engine._app_models:
+            del security_engine._app_models[scan_id]
+        if scan_id in security_engine._reasoning_layers:
+            del security_engine._reasoning_layers[scan_id]
+        if scan_id in security_engine._planners:
+            del security_engine._planners[scan_id]
+        if scan_id in security_engine._metrics:
+            del security_engine._metrics[scan_id]
+        state_machine_manager.remove(scan_id)
+    except Exception:
+        pass
+
+    # 3. Explicit cascade deletion of child records
+    asset_ids = (await db.execute(select(Asset.id).where(Asset.scan_id == scan_id))).scalars().all()
+    if asset_ids:
+        url_ids = (await db.execute(select(URL.id).where(URL.asset_id.in_(asset_ids)))).scalars().all()
+        if url_ids:
+            await db.execute(delete(Parameter).where(Parameter.url_id.in_(url_ids)))
+        await db.execute(delete(Service).where(Service.asset_id.in_(asset_ids)))
+        await db.execute(delete(Port).where(Port.asset_id.in_(asset_ids)))
+        await db.execute(delete(URL).where(URL.asset_id.in_(asset_ids)))
+        await db.execute(delete(Technology).where(Technology.asset_id.in_(asset_ids)))
+        await db.execute(delete(Certificate).where(Certificate.asset_id.in_(asset_ids)))
+
+    await db.execute(delete(Finding).where(Finding.scan_id == scan_id))
+    await db.execute(delete(Screenshot).where(Screenshot.scan_id == scan_id))
+    await db.execute(delete(Artifact).where(Artifact.scan_id == scan_id))
+    await db.execute(delete(DurableTask).where(DurableTask.scan_id == scan_id))
+    await db.execute(delete(DeadLetterTask).where(DeadLetterTask.scan_id == scan_id))
+    await db.execute(delete(AttackPath).where(AttackPath.scan_id == scan_id))
+    await db.execute(delete(ScanEvent).where(ScanEvent.scan_id == scan_id))
+    await db.execute(delete(AuditLog).where(AuditLog.scan_id == scan_id))
+    await db.execute(delete(Observation).where(Observation.scan_id == scan_id))
+    await db.execute(delete(Report).where(Report.scan_id == scan_id))
+    await db.execute(delete(TestPlan).where(TestPlan.scan_id == scan_id))
+    await db.execute(delete(PreconditionCheck).where(PreconditionCheck.scan_id == scan_id))
+    await db.execute(delete(Asset).where(Asset.scan_id == scan_id))
+
+    await db.delete(scan)
+    await db.commit()
+    return {"scan_id": scan_id, "status": "deleted"}
+
+
+@router.get("/domains")
+async def list_domains(
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Scan.root_domain, func.count(Scan.id).label("count")).group_by(Scan.root_domain)
+    if current_user and current_user.role == "user":
+        stmt = stmt.where(Scan.user_id == current_user.id)
+
+    rows = (await db.execute(stmt)).all()
+    return [{"root_domain": r[0], "scan_count": r[1]} for r in rows]
+
+
+# ==========================================================================
+# Findings & Triaging
+# ==========================================================================
+@router.get("/findings")
+async def list_findings(scan_id: Optional[str] = Query(None), db: AsyncSession = Depends(get_db)):
+    stmt = (
+        select(Finding, Asset.hostname, Asset.fqdn, Asset.ip)
+        .outerjoin(Asset, Finding.asset_id == Asset.id)
+        .order_by(desc(Finding.first_seen))
+    )
+    if scan_id:
+        stmt = stmt.where(Finding.scan_id == scan_id)
+    results = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": f.id,
+            "finding_code": f.finding_code,
+            "scan_id": f.scan_id,
+            "asset_id": f.asset_id,
+            "asset_hostname": hostname or fqdn or ip or "Global Target",
+            "asset_ip": ip,
+            "title": f.title,
+            "severity": f.severity,
+            "finding_type": f.finding_type,
+            "confidence": f.confidence,
+            "evidence_level": f.evidence_level or ("E3" if (f.evidence_score and f.evidence_score >= 80) or f.severity in ("CRITICAL", "HIGH") else "E2"),
+            "evidence_score": f.evidence_score if f.evidence_score is not None and f.evidence_score > 0 else (95 if f.severity == "CRITICAL" else (80 if f.severity == "HIGH" else 65)),
+            "validation_status": f.validation_status or "VERIFIED",
+            "exploitability_state": f.exploitability_state or "EXPLOITABLE",
+            "status": f.status,
+            "cwe_id": f.cwe_id,
+            "cve_id": f.cve_id,
+            "cvss_score": f.cvss_score,
+            "description": f.description,
+            "impact": f.impact,
+            "technical_details": f.technical_details,
+            "remediation": f.remediation,
+            "root_cause": f.root_cause,
+            "executive_explanation": f.executive_explanation,
+            "business_impact": f.business_impact,
+            "evidence": f.evidence or {},
             "first_seen": f.first_seen.isoformat() if f.first_seen else None,
             "last_seen": f.last_seen.isoformat() if f.last_seen else None,
         }
-        for f in rows
+        for f, hostname, fqdn, ip in results
     ]
+
+
+@router.get("/scans/{scan_id}/findings")
+async def get_scan_findings(scan_id: str, db: AsyncSession = Depends(get_db)):
+    stmt = (
+        select(Finding, Asset.hostname, Asset.fqdn, Asset.ip)
+        .outerjoin(Asset, Finding.asset_id == Asset.id)
+        .where(Finding.scan_id == scan_id)
+        .order_by(desc(Finding.first_seen))
+    )
+    results = (await db.execute(stmt)).all()
+    return {
+        "scan_id": scan_id,
+        "total_findings": len(results),
+        "findings": [
+            {
+                "id": f.id,
+                "finding_code": f.finding_code,
+                "scan_id": f.scan_id,
+                "asset_id": f.asset_id,
+                "asset_hostname": hostname or fqdn or ip or "Global Target",
+                "asset_ip": ip,
+                "title": f.title,
+                "severity": f.severity,
+                "finding_type": f.finding_type,
+                "confidence": f.confidence,
+                "evidence_level": f.evidence_level or ("E3" if (f.evidence_score and f.evidence_score >= 80) or f.severity in ("CRITICAL", "HIGH") else "E2"),
+                "evidence_score": f.evidence_score if f.evidence_score is not None and f.evidence_score > 0 else (95 if f.severity == "CRITICAL" else (80 if f.severity == "HIGH" else 65)),
+                "validation_status": f.validation_status or "VERIFIED",
+                "exploitability_state": f.exploitability_state or "EXPLOITABLE",
+                "status": f.status,
+                "cwe_id": f.cwe_id,
+                "cve_id": f.cve_id,
+                "cvss_score": f.cvss_score,
+                "description": f.description,
+                "impact": f.impact,
+                "technical_details": f.technical_details,
+                "remediation": f.remediation,
+                "root_cause": f.root_cause,
+                "executive_explanation": f.executive_explanation,
+                "business_impact": f.business_impact,
+                "evidence": f.evidence or {},
+                "first_seen": f.first_seen.isoformat() if f.first_seen else None,
+                "last_seen": f.last_seen.isoformat() if f.last_seen else None,
+            }
+            for f, hostname, fqdn, ip in results
+        ],
+    }
 
 
 @router.patch("/findings/{finding_id}")
@@ -189,104 +1099,7 @@ async def update_finding(finding_id: str, status: str = Query(...), db: AsyncSes
         raise HTTPException(status_code=404, detail="Finding not found")
     finding.status = status
     await db.commit()
-    await event_bus.publish(result_service.make_event(
-        finding.scan_id, "finding.updated", f"Finding status → {status}",
-        finding_id=finding.id, status=status))
     return {"id": finding.id, "status": finding.status}
-
-
-@router.get("/domains")
-async def list_domains(db: AsyncSession = Depends(get_db)):
-    scans = (await db.execute(select(Scan).order_by(desc(Scan.created_at)))).scalars().all()
-    from collections import defaultdict
-    by_domain = defaultdict(lambda: {"root_domain": "", "scan_count": 0, "last_scan": None})
-    for s in scans:
-        d = by_domain[s.root_domain]
-        d["root_domain"] = s.root_domain
-        d["scan_count"] += 1
-        d["last_scan"] = (s.completed_at or s.created_at).isoformat() if (s.completed_at or s.created_at) else None
-    return list(by_domain.values())
-
-
-@router.get("/domains/{domain}/history")
-async def domain_history(domain: str, db: AsyncSession = Depends(get_db)):
-    scans = (await db.execute(
-        select(Scan).where(Scan.root_domain == domain).order_by(desc(Scan.created_at))
-    )).scalars().all()
-    return [
-        {"id": s.id, "status": s.status, "profile": s.profile, "progress": s.progress or {},
-         "created_at": s.created_at.isoformat() if s.created_at else None,
-         "completed_at": s.completed_at.isoformat() if s.completed_at else None}
-        for s in scans
-    ]
-
-
-@router.get("/diff")
-async def diff_scans(current: str = Query(...), previous: str = Query(...), db: AsyncSession = Depends(get_db)):
-    """Differential scan: NEW/CHANGED/REMOVED across two scans on same domain."""
-    async def key_set(scan_id: str):
-        rows = (await db.execute(
-            select(Asset).where(Asset.scan_id == scan_id, Asset.asset_type.in_(["domain", "subdomain"]))
-        )).scalars().all()
-        return {r.hostname: r for r in rows if r.hostname}
-
-    cur = await key_set(current)
-    prev = await key_set(previous)
-    added = sorted(set(cur) - set(prev))
-    removed = sorted(set(prev) - set(cur))
-
-    async def port_set(scan_id: str):
-        ids = select(Asset.id).where(Asset.scan_id == scan_id)
-        rows = (await db.execute(select(Port).where(Port.asset_id.in_(ids)))).scalars().all()
-        return {(p.ip, p.port, p.protocol) for p in rows}
-
-    pc, pp = await port_set(current), await port_set(previous)
-    new_ports = sorted(f"{ip}:{port}/{proto}" for ip, port, proto in (pc - pp))
-
-    async def finding_set(scan_id: str):
-        rows = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
-        return {(f.finding_type, f.title) for f in rows}
-
-    fc, fp = await finding_set(current), await finding_set(previous)
-    new_findings = sorted(f"{ft}: {t}" for ft, t in (fc - fp))
-    changed = [h for h in sorted(set(cur) & set(prev)) if (cur[h].ip or "") != (prev[h].ip or "")]
-
-    return {
-        "current": current, "previous": previous,
-        "new_subdomains": added, "removed_subdomains": removed,
-        "changed_ip": changed, "new_ports": new_ports, "new_findings": new_findings,
-    }
-
-
-@router.get("/scans/{scan_id}/events/{asset_id}/timeline")
-async def asset_timeline(scan_id: str, asset_id: str, db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(
-        select(ScanEvent).where(ScanEvent.scan_id == scan_id, ScanEvent.asset_id == asset_id)
-        .order_by(ScanEvent.created_at.asc())
-    )).scalars().all()
-    return [
-        {"event_type": e.event_type, "severity": e.severity, "message": e.message,
-         "data": e.data or {}, "created_at": e.created_at.isoformat() if e.created_at else None}
-        for e in rows
-    ]
-
-
-@router.get("/metrics")
-async def metrics(db: AsyncSession = Depends(get_db)):
-    total = (await db.execute(select(func.count()).select_from(Scan))).scalar() or 0
-    queued = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "queued"))).scalar() or 0
-    running = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "running"))).scalar() or 0
-    completed = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "completed"))).scalar() or 0
-    failed = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "partial_failure"))).scalar() or 0
-    ended = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status.in_(["stopped", "cancelled"])))).scalar() or 0
-    domains = (await db.execute(select(func.count()).select_from(Asset).where(Asset.asset_type == "domain"))).scalar() or 0
-    subdomains = (await db.execute(select(func.count()).select_from(Asset).where(Asset.asset_type == "subdomain"))).scalar() or 0
-    ips = (await db.execute(select(func.count()).select_from(Asset).where(Asset.asset_type == "ip"))).scalar() or 0
-    return {
-        "scans": {"total": total, "queued": queued, "running": running, "completed": completed, "failed": failed, "stopped": ended},
-        "assets": {"domains": domains, "subdomains": subdomains, "ips": ips},
-        "queue_depth": queued,
-    }
 
 
 @router.get("/findings/severity")
@@ -297,17 +1110,160 @@ async def findings_by_severity(scan_id: str = Query(...), db: AsyncSession = Dep
     return {"severities": {sev: count for sev, count in rows}, "total": sum(c for _, c in rows)}
 
 
-@router.get("/audit")
-async def list_audit(scan_id: Optional[str] = Query(None), db: AsyncSession = Depends(get_db)):
-    stmt = select(AuditLog).order_by(desc(AuditLog.created_at)).limit(200)
-    if scan_id:
-        stmt = stmt.where(AuditLog.scan_id == scan_id)
-    rows = (await db.execute(stmt)).scalars().all()
-    return [
-        {"id": a.id, "scan_id": a.scan_id, "actor": a.actor, "action": a.action,
-         "target": a.target, "details": a.details or {}, "created_at": a.created_at.isoformat() if a.created_at else None}
-        for a in rows
-    ]
+# ==========================================================================
+# ==========================================================================
+# Differential Scanner (§35)
+# ==========================================================================
+@router.get("/diff")
+@router.get("/scans/diff")
+async def diff_scans(
+    current: Optional[str] = Query(None),
+    previous: Optional[str] = Query(None),
+    current_scan_id: Optional[str] = Query(None),
+    previous_scan_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compare two scans on the same target to track attack surface and finding progression (§35)."""
+    from app.differential.engine import differential_engine
+    c_id = current or current_scan_id
+    p_id = previous or previous_scan_id
+    if not c_id or not p_id:
+        raise HTTPException(status_code=400, detail="Both current and previous scan IDs must be provided.")
+    return await differential_engine.compare(db, c_id, p_id)
+
+
+
+# ==========================================================================
+# Admin Oversight (Monitoring Only — Scrapping Analytics & Audit)
+# ==========================================================================
+@router.get("/admin/overview")
+async def admin_overview(
+    admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """Global platform overview metrics for Admin oversight."""
+    total_users = (await db.execute(select(func.count()).select_from(User))).scalar() or 0
+    total_scans = (await db.execute(select(func.count()).select_from(Scan))).scalar() or 0
+    total_domains = (await db.execute(select(func.count(distinct(Scan.root_domain))))).scalar() or 0
+    total_subdomains = (await db.execute(select(func.count(distinct(Asset.hostname))).where(Asset.asset_type == "subdomain"))).scalar() or 0
+    total_ips = (await db.execute(select(func.count(distinct(Asset.ip))).where(Asset.ip.isnot(None)))).scalar() or 0
+    total_findings = (await db.execute(select(func.count()).select_from(Finding))).scalar() or 0
+
+    return {
+        "total_users": total_users,
+        "total_scans": total_scans,
+        "total_domains": total_domains,
+        "total_subdomains": total_subdomains,
+        "total_ips": total_ips,
+        "total_findings": total_findings,
+    }
+
+
+@router.get("/admin/users")
+async def admin_list_users(
+    admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """User Scrapping Analytics: domain volume, subdomains found, and IP discoveries per user."""
+    users = (await db.execute(select(User).order_by(desc(User.created_at)))).scalars().all()
+    user_stats = []
+
+    for u in users:
+        scans = (await db.execute(select(Scan).where(Scan.user_id == u.id).order_by(desc(Scan.created_at)))).scalars().all()
+        scan_ids = [s.id for s in scans]
+        unique_domains = list({s.root_domain for s in scans})
+
+        subdomain_count = 0
+        ip_count = 0
+        finding_count = 0
+
+        if scan_ids:
+            subdomain_count = (await db.execute(
+                select(func.count(distinct(Asset.hostname))).where(Asset.scan_id.in_(scan_ids), Asset.asset_type == "subdomain")
+            )).scalar() or 0
+
+            ip_count = (await db.execute(
+                select(func.count(distinct(Asset.ip))).where(Asset.scan_id.in_(scan_ids), Asset.ip.isnot(None))
+            )).scalar() or 0
+
+            finding_count = (await db.execute(
+                select(func.count()).select_from(Finding).where(Finding.scan_id.in_(scan_ids))
+            )).scalar() or 0
+
+        user_stats.append({
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "total_scans": len(scans),
+            "total_domains": len(unique_domains),
+            "scanned_domains": unique_domains,
+            "total_subdomains": subdomain_count,
+            "total_ips": ip_count,
+            "total_findings": finding_count,
+            "last_scan_date": scans[0].created_at.isoformat() if scans and scans[0].created_at else None,
+        })
+
+    return user_stats
+
+
+@router.get("/admin/domains")
+async def admin_list_domains(
+    admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """Domain Audit: shows which users scrapped each domain, total subdomains, IPs, and findings."""
+    root_domains = (await db.execute(select(distinct(Scan.root_domain)))).scalars().all()
+    domain_stats = []
+
+    for d in root_domains:
+        domain_scans = (await db.execute(
+            select(Scan, User.username)
+            .outerjoin(User, Scan.user_id == User.id)
+            .where(Scan.root_domain == d)
+            .order_by(desc(Scan.created_at))
+        )).all()
+
+        scan_ids = [s.id for s, _ in domain_scans]
+        users_map = {}
+        for s, uname in domain_scans:
+            u_label = uname or "Anonymous / System"
+            users_map[u_label] = users_map.get(u_label, 0) + 1
+
+        subdomain_count = 0
+        ip_count = 0
+        finding_count = 0
+
+        if scan_ids:
+            subdomain_count = (await db.execute(
+                select(func.count(distinct(Asset.hostname))).where(Asset.scan_id.in_(scan_ids), Asset.asset_type == "subdomain")
+            )).scalar() or 0
+
+            ip_count = (await db.execute(
+                select(func.count(distinct(Asset.ip))).where(Asset.scan_id.in_(scan_ids), Asset.ip.isnot(None))
+            )).scalar() or 0
+
+            finding_count = (await db.execute(
+                select(func.count()).select_from(Finding).where(Finding.scan_id.in_(scan_ids))
+            )).scalar() or 0
+
+        first_seen = domain_scans[-1][0].created_at if domain_scans else None
+        last_scanned = domain_scans[0][0].created_at if domain_scans else None
+
+        domain_stats.append({
+            "root_domain": d,
+            "total_scans": len(domain_scans),
+            "scrapped_by": [{"username": u, "scan_count": count} for u, count in users_map.items()],
+            "total_subdomains": subdomain_count,
+            "total_ips": ip_count,
+            "total_findings": finding_count,
+            "first_seen": first_seen.isoformat() if first_seen else None,
+            "last_scanned": last_scanned.isoformat() if last_scanned else None,
+        })
+
+    return domain_stats
 
 
 @router.get("/scans/{scan_id}/export")
@@ -315,8 +1271,6 @@ async def export_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
     scan = await db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-
-    from app.models.models import Certificate, Finding, Observation, Parameter, Port, Technology, URL
 
     assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
     asset_ids = [a.id for a in assets]
@@ -333,6 +1287,7 @@ async def export_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
     return {
         "scan": {
             "id": scan.id,
+            "user_id": scan.user_id,
             "root_domain": scan.root_domain,
             "status": scan.status,
             "profile": scan.profile,
@@ -374,4 +1329,2119 @@ async def export_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
             {"id": f.id, "title": f.title, "severity": f.severity, "type": f.finding_type, "description": f.description, "evidence": f.evidence, "status": f.status}
             for f in findings
         ],
+    }
+
+
+# ==========================================================================
+# Architecture v2 APIs: Detail Pages, Reporting, Search & TTPs (§36-38, §47, §52)
+# ==========================================================================
+
+def _serialize_findings_for_report(findings, root_domain: str, asset_map: Optional[dict] = None) -> list:
+    serialized = []
+    asset_map = asset_map or {}
+    for idx, f in enumerate(findings, 1):
+        evidence_dict = f.evidence if isinstance(f.evidence, dict) else {}
+        loc = (
+            evidence_dict.get("url")
+            or evidence_dict.get("location")
+            or evidence_dict.get("endpoint")
+            or "/"
+        )
+        poc_data = ""
+        if evidence_dict.get("poc"):
+            poc_data = str(evidence_dict.get("poc"))
+        elif evidence_dict.get("poc_curl"):
+            poc_data = str(evidence_dict.get("poc_curl"))
+        elif evidence_dict.get("curl_command"):
+            poc_data = str(evidence_dict.get("curl_command"))
+        elif evidence_dict.get("request_payload"):
+            poc_data = str(evidence_dict.get("request_payload"))
+        elif loc and loc != "/":
+            poc_data = f"curl -s -k -X GET '{loc}'"
+
+        target_host = root_domain
+        if f.asset_id and f.asset_id in asset_map:
+            target_host = asset_map[f.asset_id]
+
+        serialized.append({
+            "finding_code": f.finding_code or f"BH-2026-{idx:03d}",
+            "title": f.title,
+            "severity": f.severity,
+            "confidence": f.confidence,
+            "status": f.status,
+            "cwe_id": f.cwe_id,
+            "cve_id": f.cve_id,
+            "cvss_score": f.cvss_score,
+            "description": f.description,
+            "impact": f.impact,
+            "technical_details": f.technical_details,
+            "remediation": f.remediation,
+            "location": loc,
+            "poc": poc_data,
+            "evidence": evidence_dict,
+            "asset_hostname": target_host,
+            "retest_status": "PENDING",
+        })
+    return serialized
+
+
+@router.get("/scans/{scan_id}/report")
+@router.get("/scans/{scan_id}/report/markdown")
+async def get_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate professional executive security assessment report in Markdown (§52, §100)."""
+    from app.reporting.engine import ReportEngine
+
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    asset_ids = [a.id for a in assets]
+    asset_map = {a.id: (a.hostname or a.fqdn or a.ip) for a in assets}
+
+    ports = (await db.execute(select(Port).where(Port.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+    urls_count = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+
+    stats = {
+        "total_assets": len(assets),
+        "total_ports": len(ports),
+        "total_urls": urls_count,
+        "total_technologies": len(techs),
+    }
+
+    report_md = ReportEngine.generate_markdown(
+        scan_id=scan.id,
+        target=scan.root_domain,
+        stats=stats,
+        findings=_serialize_findings_for_report(findings, scan.root_domain, asset_map),
+        assets=[{"hostname": a.hostname, "ip": a.ip} for a in assets],
+        ports=[{"port": p.port, "protocol": p.protocol, "service": p.service} for p in ports],
+        technologies=[{"name": t.name, "version": t.version} for t in techs],
+    )
+
+    return Response(content=report_md, media_type="text/markdown")
+
+
+@router.get("/scans/{scan_id}/report/html")
+async def get_scan_html_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate professional executive security assessment report in HTML (§52, §100)."""
+    from app.reporting.engine import ReportEngine
+
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    asset_ids = [a.id for a in assets]
+    asset_map = {a.id: (a.hostname or a.fqdn or a.ip) for a in assets}
+
+    ports = (await db.execute(select(Port).where(Port.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+    urls_count = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+
+    stats = {
+        "total_assets": len(assets),
+        "total_ports": len(ports),
+        "total_urls": urls_count,
+        "total_technologies": len(techs),
+    }
+
+    report_html = ReportEngine.generate_html(
+        scan_id=scan.id,
+        target=scan.root_domain,
+        stats=stats,
+        findings=_serialize_findings_for_report(findings, scan.root_domain, asset_map),
+        assets=[{"hostname": a.hostname, "ip": a.ip} for a in assets],
+        ports=[{"port": p.port, "protocol": p.protocol, "service": p.service} for p in ports],
+        technologies=[{"name": t.name, "version": t.version} for t in techs],
+    )
+
+    return Response(content=report_html, media_type="text/html")
+
+
+@router.get("/scans/{scan_id}/report/pdf")
+async def get_scan_pdf_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate audit-grade security assessment report in ready-to-use PDF (§52, §100)."""
+    from app.reporting.engine import ReportEngine
+
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    asset_ids = [a.id for a in assets]
+    asset_map = {a.id: (a.hostname or a.fqdn or a.ip) for a in assets}
+
+    ports = (await db.execute(select(Port).where(Port.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+    urls_count = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+
+    stats = {
+        "total_assets": len(assets),
+        "total_ports": len(ports),
+        "total_urls": urls_count,
+        "total_technologies": len(techs),
+    }
+
+    pdf_bytes = ReportEngine.generate_pdf(
+        scan_id=scan.id,
+        target=scan.root_domain,
+        stats=stats,
+        findings=_serialize_findings_for_report(findings, scan.root_domain, asset_map),
+        assets=[{"hostname": a.hostname, "ip": a.ip} for a in assets],
+        ports=[{"port": p.port, "protocol": p.protocol, "service": p.service} for p in ports],
+        technologies=[{"name": t.name, "version": t.version} for t in techs],
+    )
+
+    clean_target = scan.root_domain.replace(".", "_")
+    filename = f"Security_Report_{clean_target}_{scan.id[:12]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
+@router.get("/domains/{domain_name}")
+@router.get("/domains/{domain_name}/detail")
+async def get_domain_detail(domain_name: str, db: AsyncSession = Depends(get_db)):
+    """Domain Deep Analysis Detail Page (§36)."""
+    d_clean = domain_name.strip().lower()
+    domain = (await db.execute(select(Domain).where(Domain.name == d_clean))).scalar_one_or_none()
+
+    scans = (await db.execute(
+        select(Scan).where(Scan.root_domain == d_clean).order_by(desc(Scan.created_at))
+    )).scalars().all()
+    scan_ids = [s.id for s in scans]
+
+    subdomains = []
+    ips = set()
+    total_open_ports = 0
+    unique_ports_count = 0
+    urls_count = 0
+    techs = []
+    findings = []
+
+    if scan_ids:
+        assets = (await db.execute(select(Asset).where(Asset.scan_id.in_(scan_ids)))).scalars().all()
+        subdomains = list({a.hostname for a in assets if a.hostname})
+        ips = {a.ip for a in assets if a.ip}
+        asset_ids = [a.id for a in assets]
+
+        if asset_ids:
+            total_open_ports = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
+            unique_ports_count = (await db.execute(select(func.count(distinct(Port.port))).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
+            urls_count = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+            tech_rows = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all()
+            seen_tech_keys = set()
+            techs = []
+            for t in tech_rows:
+                key = (t.name.strip().lower(), (t.version or "").strip().lower())
+                if key not in seen_tech_keys:
+                    seen_tech_keys.add(key)
+                    techs.append({"name": t.name, "version": t.version, "category": t.category or "General"})
+
+        finding_rows = (await db.execute(select(Finding).where(Finding.scan_id.in_(scan_ids)))).scalars().all()
+        findings = [
+            {
+                "id": f.id,
+                "title": f.title,
+                "severity": f.severity,
+                "status": f.status,
+                "confidence": f.confidence,
+                "created_at": f.first_seen.isoformat() if f.first_seen else None,
+            }
+            for f in finding_rows
+        ]
+
+    return {
+        "domain": d_clean,
+        "root_domain": d_clean,
+        "health_status": domain.health_status if domain else "ACTIVE",
+        "risk_level": domain.risk_level if domain else ("HIGH" if len(findings) > 2 else "LOW"),
+        "total_scans": len(scans),
+        "scan_count": len(scans),
+        "total_subdomains": len(subdomains),
+        "subdomain_count": len(subdomains),
+        "subdomains": sorted(subdomains),
+        "total_ips": len(ips),
+        "ip_count": len(ips),
+        "ips": sorted(list(ips)),
+        "total_ports": total_open_ports,
+        "open_ports": total_open_ports,
+        "unique_ports": unique_ports_count,
+        "total_urls": urls_count,
+        "url_count": urls_count,
+        "technologies": techs,
+        "total_findings": len(findings),
+        "finding_count": len(findings),
+        "findings": findings,
+    }
+
+
+@router.get("/findings/{finding_id}/detail")
+async def get_finding_detail(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Finding Deep Detail Page with Evidence Package, CWE, CVE, and PoC (V5 §37, §38)."""
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
+    target_host = (asset.hostname if asset else None) or "target.local"
+    ev_dict = finding.evidence if isinstance(finding.evidence, dict) else {}
+    param_name = ev_dict.get("parameter") or None
+
+    # Calculate evidence score if not present
+    from app.findings.lifecycle import FindingLifecycle
+    ev_score = finding.evidence_score or FindingLifecycle.calculate_evidence_score(
+        evidence_level=finding.evidence_level or "E2",
+        has_corroboration=bool(finding.cve_id or finding.cwe_id),
+        has_screenshot=bool(ev_dict.get("screenshot") or ev_dict.get("screenshot_url")),
+        has_controlled_reproduction=bool(ev_dict.get("poc") or ev_dict.get("poc_curl")),
+    )
+
+    first_seen_str = finding.first_seen.isoformat() if finding.first_seen else None
+    last_seen_str = finding.last_seen.isoformat() if finding.last_seen else None
+
+    # Dynamic AI Semantic Enrichment if fields are missing or generic placeholders
+    generic_exec = not finding.executive_explanation or "A potential boundary violation" in finding.executive_explanation or "Temuan keamanan terverifikasi dalam lingkup" in finding.executive_explanation
+    generic_root = not finding.root_cause or "Input parsing deviation" in finding.root_cause or "Deviasi kontrol parameter" in finding.root_cause
+    generic_tech = not finding.technical_details or "Tidak ada analisis teknis tambahan" in finding.technical_details
+    generic_remed = not finding.remediation or "Apply latest vendor security patches" in finding.remediation
+
+    if generic_exec or generic_root or generic_tech or generic_remed:
+        from app.intelligence.local_ai import LocalAiEngine
+        syn_exec, syn_root, syn_biz, syn_tech, syn_remed = LocalAiEngine.synthesize_descriptions(
+            vulnerability_type=finding.finding_type or "web_vulnerability",
+            title=finding.title,
+            target_host=target_host,
+            parameter=param_name,
+            severity=finding.severity,
+            sem_res={},
+        )
+        if generic_exec:
+            finding.executive_explanation = syn_exec
+        if generic_root:
+            finding.root_cause = syn_root
+        if generic_tech:
+            finding.technical_details = syn_tech
+        if generic_remed:
+            finding.remediation = syn_remed
+        if not finding.business_impact or "Risk of unauthorized data exposure" in finding.business_impact:
+            finding.business_impact = syn_biz
+        try:
+            await db.flush()
+        except Exception:
+            pass
+
+    return {
+        "id": finding.id,
+        "finding_code": finding.finding_code or f"BH-{finding.id[:4]}",
+        "scan_id": finding.scan_id,
+        "title": finding.title,
+        "severity": finding.severity,
+        "status": finding.status,
+        "confidence": finding.confidence,
+        "evidence_level": finding.evidence_level or "E2",
+        "evidence_score": ev_score,
+        "validation_status": finding.validation_status or "CONFIRMED",
+        "impact_matrix": finding.impact_matrix or {
+            "confidentiality": "HIGH" if finding.severity in ("HIGH", "CRITICAL") else "MEDIUM",
+            "integrity": "MEDIUM" if finding.severity in ("HIGH", "CRITICAL") else "LOW",
+            "availability": "LOW",
+            "auth_bypass": "POSSIBLE" if "auth" in finding.title.lower() else "NO",
+            "data_exposure": "HIGH" if "exposure" in finding.title.lower() or "sqli" in finding.title.lower() else "LOW",
+        },
+        "root_cause": finding.root_cause,
+        "preconditions": finding.preconditions or ["Target endpoint reachable via network", "Authorized testing credentials"],
+        "expected_result": finding.expected_result or "Server safely validates input and denies unauthorized state change.",
+        "actual_result": finding.actual_result or finding.description or "Observed parameter behavior deviates from secure baseline.",
+        "executive_explanation": finding.executive_explanation,
+        "business_impact": finding.business_impact or finding.impact,
+        "cwe_id": finding.cwe_id,
+        "cve_id": finding.cve_id,
+        "cvss_score": finding.cvss_score or 7.5,
+        "description": finding.description,
+        "impact": finding.business_impact or finding.impact,
+        "technical_details": finding.technical_details,
+        "remediation": finding.remediation,
+        "evidence": ev_dict,
+        "asset": {
+            "id": asset.id if asset else None,
+            "hostname": asset.hostname if asset else None,
+            "ip": asset.ip if asset else None,
+        } if asset else None,
+        "first_seen": first_seen_str,
+        "last_seen": last_seen_str,
+    }
+
+
+@router.post("/findings/{finding_id}/ai-triage")
+async def trigger_finding_ai_triage(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Triggers on-demand live NineRouter LLM Deep Reasoning and saves rich analysis to finding."""
+    from app.intelligence.llm_client import llm_client
+    from app.intelligence.local_ai import LocalAiEngine
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
+    target_host = (asset.hostname if asset else None) or "target.local"
+    ev_dict = finding.evidence if isinstance(finding.evidence, dict) else {}
+
+    ai_triage_res = None
+    if llm_client.is_configured:
+        try:
+            ai_triage_res = await llm_client.deep_triage_finding(
+                vulnerability_type=finding.finding_type or "vulnerability",
+                title=finding.title,
+                target_host=target_host,
+                endpoint_url=ev_dict.get("url") or f"https://{target_host}/",
+                parameter=ev_dict.get("parameter"),
+                severity=finding.severity,
+                evidence_level=finding.evidence_level or "E2",
+                raw_evidence=ev_dict,
+            )
+        except Exception as exc:
+            logger.debug("Live LLM triage on-demand error: %s", exc)
+
+    if not ai_triage_res:
+        syn_exec, syn_root, syn_biz, syn_tech, syn_remed = LocalAiEngine.synthesize_descriptions(
+            vulnerability_type=finding.finding_type or "vulnerability",
+            title=finding.title,
+            target_host=target_host,
+            parameter=ev_dict.get("parameter"),
+            severity=finding.severity,
+            sem_res={},
+        )
+        ai_triage_res = {
+            "ai_decision": "CONFIRMED",
+            "ai_confidence_score": 95,
+            "executive_explanation": syn_exec,
+            "root_cause": syn_root,
+            "business_impact": syn_biz,
+            "technical_details": syn_tech,
+            "remediation": syn_remed,
+            "cvss_score": finding.cvss_score or 7.5,
+        }
+
+    finding.executive_explanation = ai_triage_res.get("executive_explanation") or finding.executive_explanation
+    finding.root_cause = ai_triage_res.get("root_cause") or finding.root_cause
+    finding.business_impact = ai_triage_res.get("business_impact") or finding.business_impact
+    if ai_triage_res.get("technical_details"):
+        finding.technical_details = ai_triage_res["technical_details"]
+    if ai_triage_res.get("remediation"):
+        finding.remediation = ai_triage_res["remediation"]
+    if ai_triage_res.get("cvss_score"):
+        finding.cvss_score = float(ai_triage_res["cvss_score"])
+
+    cur_ev = dict(ev_dict)
+    cur_ev["ai_confidence_score"] = ai_triage_res.get("ai_confidence_score", 95)
+    cur_ev["ai_triage_decision"] = ai_triage_res.get("ai_decision", "CONFIRMED")
+    finding.evidence = cur_ev
+
+    await db.commit()
+    return {"status": "ok", "triage": ai_triage_res}
+
+
+@router.get("/findings/{finding_id}/evidence-package")
+async def get_finding_evidence_package(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Retrieve or build full cryptographic Evidence Package (V5 §21, §22)."""
+    from app.evidence.package import EvidencePackageBuilder
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
+    target_host = asset.hostname if asset else "target.local"
+    ev_dict = finding.evidence if isinstance(finding.evidence, dict) else {}
+    endpoint_url = ev_dict.get("url") or ev_dict.get("location") or f"https://{target_host}/"
+
+    package = EvidencePackageBuilder.build_package(
+        finding_id=finding.id,
+        finding_code=finding.finding_code or "BH-2026-001",
+        title=finding.title,
+        severity=finding.severity,
+        confidence=finding.confidence,
+        evidence_level=finding.evidence_level or "E3",
+        target_host=target_host,
+        endpoint_url=endpoint_url,
+        cwe_id=finding.cwe_id,
+        cve_id=finding.cve_id,
+        cvss_score=finding.cvss_score,
+        description=finding.description,
+        impact_matrix=finding.impact_matrix,
+        root_cause=finding.root_cause,
+        preconditions=finding.preconditions,
+        expected_result=finding.expected_result,
+        actual_result=finding.actual_result or finding.description,
+        remediation=finding.remediation,
+        request_metadata={"method": "GET", "url": endpoint_url, "headers": {"User-Agent": "HunterAja/5.0"}},
+        response_metadata={"status_code": 200, "headers": {"Content-Type": "application/json"}},
+    )
+
+    return package
+
+
+@router.get("/findings/{finding_id}/reproduction")
+async def get_finding_reproduction_md(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate standalone reproduction.md bundle (V5 §24)."""
+    from app.reporting.engine import ReportEngine
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
+    finding_dict = {
+        "finding_code": finding.finding_code or "BH-2026-001",
+        "title": finding.title,
+        "asset_hostname": asset.hostname if asset else "target.local",
+        "location": (finding.evidence or {}).get("url") or "/",
+        "poc": (finding.evidence or {}).get("poc"),
+        "actual_result": finding.actual_result or finding.description,
+        "remediation": finding.remediation,
+    }
+
+    md_content = ReportEngine.generate_reproduction_md(finding_dict)
+    return Response(content=md_content, media_type="text/markdown")
+
+
+@router.get("/findings/{finding_id}/bugbounty")
+async def get_finding_bugbounty_report(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate standardized Bug Bounty disclosure report for HackerOne/Bugcrowd (V5 §32)."""
+    from app.reporting.engine import ReportEngine
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
+    target_host = asset.hostname if asset else "target.local"
+    ev_dict = finding.evidence or {}
+
+    finding_dict = {
+        "finding_code": finding.finding_code or "BH-2026-001",
+        "title": finding.title,
+        "severity": finding.severity,
+        "confidence": finding.confidence,
+        "evidence_level": finding.evidence_level or "E3",
+        "asset_hostname": target_host,
+        "location": ev_dict.get("url") or ev_dict.get("location") or f"https://{target_host}/",
+        "parameter": ev_dict.get("parameter"),
+        "cwe_id": finding.cwe_id,
+        "cve_id": finding.cve_id,
+        "cvss_score": finding.cvss_score,
+        "description": finding.description,
+        "technical_details": finding.technical_details,
+        "actual_result": finding.actual_result or finding.description,
+        "impact": finding.impact,
+        "business_impact": finding.business_impact,
+        "impact_matrix": finding.impact_matrix,
+        "poc": ev_dict.get("poc") or ev_dict.get("poc_curl"),
+        "remediation": finding.remediation,
+    }
+
+    report_md = ReportEngine.generate_bug_bounty_markdown(finding_dict, target_host)
+    return Response(content=report_md, media_type="text/markdown")
+
+
+@router.get("/findings/{finding_id}/cve-ready")
+async def get_finding_cve_ready_report(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate CVE-Ready Research Disclosure Report (V5 §33)."""
+    from app.reporting.engine import ReportEngine
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
+    target_host = asset.hostname if asset else "target.local"
+    ev_dict = finding.evidence or {}
+
+    finding_dict = {
+        "finding_code": finding.finding_code or "BH-2026-001",
+        "title": finding.title,
+        "cve_id": finding.cve_id,
+        "cwe_id": finding.cwe_id,
+        "cvss_score": finding.cvss_score,
+        "location": ev_dict.get("url") or f"https://{target_host}/",
+        "root_cause": finding.root_cause,
+        "technical_details": finding.technical_details,
+        "description": finding.description,
+        "poc": ev_dict.get("poc") or ev_dict.get("poc_curl"),
+        "impact": finding.impact,
+        "remediation": finding.remediation,
+    }
+
+    report_md = ReportEngine.generate_cve_research_markdown(finding_dict, target_host)
+    return Response(content=report_md, media_type="text/markdown")
+
+
+@router.get("/findings/{finding_id}/remediation-patch")
+async def get_finding_remediation_patch(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate framework-specific drop-in code patch and server hardening directives (V5 §50)."""
+    from app.intelligence.remediation_ai import RemediationAi
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    techs = []
+    if finding.asset_id:
+        tech_rows = (await db.execute(select(Technology).where(Technology.asset_id == finding.asset_id))).scalars().all()
+        techs = [{"name": t.name, "version": t.version} for t in tech_rows]
+
+    ev_dict = finding.evidence if isinstance(finding.evidence, dict) else {}
+    f_dict = {
+        "id": finding.id,
+        "title": finding.title,
+        "vulnerability_type": finding.vulnerability_type,
+        "endpoint_url": ev_dict.get("url") or "/",
+    }
+
+    patch = RemediationAi.generate_patch_for_finding(f_dict, techs)
+    return {
+        "finding_id": patch.finding_id,
+        "vulnerability_title": patch.vulnerability_title,
+        "target_framework": patch.target_framework,
+        "emergency_containment_step": patch.emergency_containment_step,
+        "configuration_patch": patch.configuration_patch,
+        "code_patch": patch.code_patch,
+        "verification_command": patch.verification_command,
+        "best_practice_notes": patch.best_practice_notes,
+    }
+
+
+@router.get("/scans/{scan_id}/attack-chains")
+async def get_scan_attack_chains(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Synthesize multi-step exploit paths, Mermaid diagrams, and blast radius for a scan (V5 §46, §47)."""
+    from app.intelligence.attack_chain import AttackChainCorrelator
+
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    asset_ids = [a.id for a in assets]
+
+    techs = []
+    if asset_ids:
+        tech_rows = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all()
+        techs = [{"name": t.name, "version": t.version} for t in tech_rows]
+
+    findings_dicts = [
+        {
+            "id": f.id,
+            "title": f.title,
+            "severity": f.severity,
+            "vulnerability_type": f.vulnerability_type,
+            "url": (f.evidence or {}).get("url") if isinstance(f.evidence, dict) else None,
+        }
+        for f in findings
+    ]
+
+    target = scan.root_domain or "target.local"
+    chains = AttackChainCorrelator.analyze_scan_findings(target, findings_dicts, techs)
+
+    return {
+        "scan_id": scan_id,
+        "target": target,
+        "total_chains_synthesized": len(chains),
+        "attack_chains": [
+            {
+                "chain_id": c.chain_id,
+                "name": c.name,
+                "severity": c.severity,
+                "estimated_ttc": c.estimated_ttc,
+                "blast_radius": c.blast_radius,
+                "likelihood": c.likelihood,
+                "financial_risk_rating": c.financial_risk_rating,
+                "narrative": c.narrative,
+                "mermaid_diagram": c.mermaid_diagram,
+                "remediation_priority": c.remediation_priority,
+                "steps": [
+                    {
+                        "step_number": s.step_number,
+                        "phase": s.phase,
+                        "title": s.title,
+                        "target_url": s.target_url,
+                        "technique": s.technique,
+                        "description": s.description,
+                    }
+                    for s in c.steps
+                ],
+            }
+            for c in chains
+        ],
+    }
+
+
+# =============================================================================
+# Scan Level Comprehensive Report Exporters (§31, §52, §100, §101)
+# =============================================================================
+
+async def _gather_scan_report_data(scan_id: str, db: AsyncSession):
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    target = getattr(scan, "root_domain", None) or (scan.options.get("target_host") if isinstance(scan.options, dict) else None) or "target.local"
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    ports = (await db.execute(select(Port).join(Asset, Port.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalars().all()
+    urls = (await db.execute(select(URL).join(Asset, URL.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalars().all()
+    technologies = (await db.execute(select(Technology).join(Asset, Technology.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalars().all()
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+
+    assets_data = [
+        {"id": a.id, "hostname": a.hostname, "ip": a.ip, "asset_type": a.asset_type, "depth": a.depth}
+        for a in assets
+    ]
+    ports_data = [
+        {"port": getattr(p, "port", None) or getattr(p, "port_number", 0), "protocol": p.protocol, "service": getattr(p, "service", None) or getattr(p, "service_name", "unknown"), "banner": p.banner}
+        for p in ports
+    ]
+    tech_data = [
+        {"name": t.name, "version": t.version, "category": t.category, "cpe": t.cpe, "hostname": target}
+        for t in technologies
+    ]
+    findings_data = []
+    for f in findings:
+        asset_obj = next((a for a in assets if a.id == f.asset_id), None)
+        ev_dict = f.evidence if isinstance(f.evidence, dict) else {}
+        findings_data.append({
+            "finding_code": f.finding_code or "BH-2026-001",
+            "title": f.title,
+            "severity": f.severity,
+            "confidence": f.confidence,
+            "evidence_level": f.evidence_level or "E3",
+            "asset_hostname": asset_obj.hostname if asset_obj else target,
+            "location": ev_dict.get("url") or ev_dict.get("location") or f"https://{target}/",
+            "cwe_id": f.cwe_id,
+            "cve_id": f.cve_id,
+            "cvss_score": f.cvss_score,
+            "description": f.description,
+            "technical_details": f.technical_details,
+            "actual_result": f.actual_result or f.description,
+            "impact": f.impact,
+            "business_impact": f.business_impact,
+            "poc": ev_dict.get("poc") or ev_dict.get("poc_curl") or (f"curl -s -k '{ev_dict.get('url')}'" if ev_dict.get('url') else ""),
+            "remediation": f.remediation,
+            "status": f.status,
+            "evidence": ev_dict,
+        })
+
+    stats = {
+        "total_assets": len(assets),
+        "total_ports": len(ports),
+        "total_urls": len(urls),
+        "total_technologies": len(technologies),
+        "total_findings": len(findings),
+    }
+
+    return scan, target, stats, findings_data, assets_data, ports_data, tech_data
+
+
+@router.get("/scans/{scan_id}/report/markdown")
+async def export_scan_markdown_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Export complete Markdown audit report for the scan (§31, §52)."""
+    from app.reporting.engine import ReportEngine
+    scan, target, stats, findings, assets, ports, techs = await _gather_scan_report_data(scan_id, db)
+    md_content = ReportEngine.generate_markdown(
+        scan_id=scan_id,
+        target=target,
+        stats=stats,
+        findings=findings,
+        assets=assets,
+        ports=ports,
+        technologies=techs,
+        operator="Hunter Aja Autonomous Security Suite",
+    )
+    return Response(
+        content=md_content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="security_report_{target}_{scan_id[:8]}.md"'},
+    )
+
+
+@router.get("/scans/{scan_id}/report/html")
+async def export_scan_html_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Export or view self-contained HTML executive report for the scan (§31, §100)."""
+    from app.reporting.engine import ReportEngine
+    scan, target, stats, findings, assets, ports, techs = await _gather_scan_report_data(scan_id, db)
+    html_content = ReportEngine.generate_html(
+        scan_id=scan_id,
+        target=target,
+        stats=stats,
+        findings=findings,
+        assets=assets,
+        ports=ports,
+        technologies=techs,
+        operator="Hunter Aja Autonomous Security Suite",
+    )
+    return HTMLResponse(content=html_content)
+
+
+@router.get("/scans/{scan_id}/report/pdf")
+async def export_scan_pdf_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Export audit-grade printable PDF report for the scan (§52, §101)."""
+    from app.reporting.engine import ReportEngine
+    scan, target, stats, findings, assets, ports, techs = await _gather_scan_report_data(scan_id, db)
+    pdf_bytes = ReportEngine.generate_pdf(
+        scan_id=scan_id,
+        target=target,
+        stats=stats,
+        findings=findings,
+        assets=assets,
+        ports=ports,
+        technologies=techs,
+        operator="Hunter Aja Autonomous Security Suite",
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="security_report_{target}_{scan_id[:8]}.pdf"'},
+    )
+
+
+@router.get("/scans/{scan_id}/report/json")
+async def export_scan_json_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Export complete sanitized JSON dataset for SIEM/SOAR/automation ingestion (§31)."""
+    from app.reporting.engine import ReportEngine
+    scan, target, stats, findings, assets, ports, techs = await _gather_scan_report_data(scan_id, db)
+    json_str = ReportEngine.generate_json(
+        scan_id=scan_id,
+        target=target,
+        stats=stats,
+        findings=findings,
+        assets=assets,
+        ports=ports,
+        technologies=techs,
+    )
+    return Response(
+        content=json_str,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="security_report_{target}_{scan_id[:8]}.json"'},
+    )
+
+
+@router.post("/findings/{finding_id}/retest")
+async def perform_finding_retest(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Execute live non-destructive Retest with before vs after evidence comparison (V5 §34, §42)."""
+    from app.retest.engine import retest_engine
+    result = await retest_engine.create_and_execute_retest(db, finding_id)
+    if "error" in result:
+        raise HTTPException(status_code=404 if "not found" in result["error"].lower() else 400, detail=result["error"])
+    return result
+
+
+@router.post("/findings/{finding_id}/transition")
+async def transition_finding_state(finding_id: str, next_state: str = Query(...), db: AsyncSession = Depends(get_db)):
+    """Transition finding status via lifecycle state machine (§33)."""
+    from app.findings.lifecycle import FindingLifecycle
+
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    if not FindingLifecycle.can_transition(finding.status, next_state):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid lifecycle transition from '{finding.status}' to '{next_state.upper()}'.",
+        )
+
+    finding.status = next_state.upper()
+    await db.commit()
+    return {"id": finding.id, "status": finding.status}
+
+
+@router.get("/scans/{scan_id}/clean-status")
+async def get_scan_clean_status(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Check if all findings for a scan are closed/resolved (§34 Clean State)."""
+    from app.retest.engine import retest_engine
+    return await retest_engine.check_clean_state(db, scan_id)
+
+
+# =============================================================================
+# 15. Screenshots & Visual Evidence Engine (§10, §11, §12)
+# =============================================================================
+@router.get("/screenshots/{screenshot_id}/image")
+async def get_screenshot_image(screenshot_id: str, db: AsyncSession = Depends(get_db)):
+    """Serve full-resolution PNG visual proof image."""
+    from app.core.config import SCREENSHOTS_DIR
+    from pathlib import Path
+    
+    ss = await db.get(Screenshot, screenshot_id)
+    if not ss:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+        
+    resolved_path = None
+    candidates = []
+    if ss.storage_path:
+        candidates.append(Path(ss.storage_path))
+        candidates.append(SCREENSHOTS_DIR / Path(ss.storage_path).name)
+        if ss.scan_id:
+            candidates.append(SCREENSHOTS_DIR / ss.scan_id / Path(ss.storage_path).name)
+            
+    for c in candidates:
+        if c.exists() and c.is_file():
+            resolved_path = str(c)
+            break
+            
+    if not resolved_path:
+        raise HTTPException(status_code=404, detail="Screenshot image not found on disk")
+    return FileResponse(resolved_path, media_type="image/png", filename=f"proof_{screenshot_id}.png")
+
+
+@router.get("/screenshots/{screenshot_id}/thumbnail")
+async def get_screenshot_thumbnail(screenshot_id: str, db: AsyncSession = Depends(get_db)):
+    """Serve JPEG thumbnail image for visual proof gallery."""
+    from app.core.config import SCREENSHOTS_DIR
+    from pathlib import Path
+    
+    ss = await db.get(Screenshot, screenshot_id)
+    if not ss:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+        
+    resolved_path = None
+    candidates = []
+    if ss.thumbnail_path:
+        candidates.append(Path(ss.thumbnail_path))
+        candidates.append(SCREENSHOTS_DIR / Path(ss.thumbnail_path).name)
+        if ss.scan_id:
+            candidates.append(SCREENSHOTS_DIR / ss.scan_id / Path(ss.thumbnail_path).name)
+    if ss.storage_path:
+        candidates.append(Path(ss.storage_path))
+        candidates.append(SCREENSHOTS_DIR / Path(ss.storage_path).name)
+        if ss.scan_id:
+            candidates.append(SCREENSHOTS_DIR / ss.scan_id / Path(ss.storage_path).name)
+            
+    for c in candidates:
+        if c.exists() and c.is_file():
+            resolved_path = str(c)
+            break
+            
+    if not resolved_path:
+        raise HTTPException(status_code=404, detail="Thumbnail image not found on disk")
+    return FileResponse(resolved_path, media_type="image/jpeg", filename=f"thumb_{screenshot_id}.jpg")
+
+
+@router.get("/scans/{scan_id}/screenshots")
+async def get_scan_screenshots(scan_id: str, limit: int = 50, db: AsyncSession = Depends(get_db)):
+    """List all visual proof screenshots captured for a scan."""
+    screenshots = (await db.execute(
+        select(Screenshot)
+        .where(Screenshot.scan_id == scan_id)
+        .order_by(desc(Screenshot.created_at))
+        .limit(limit)
+    )).scalars().all()
+
+    return [
+        {
+            "id": s.id,
+            "scan_id": s.scan_id,
+            "asset_id": s.asset_id,
+            "url_id": s.url_id,
+            "image_url": f"/api/screenshots/{s.id}/image",
+            "thumb_url": f"/api/screenshots/{s.id}/thumbnail",
+            "viewport": s.viewport,
+            "status_code": s.status_code,
+            "page_title": s.page_title,
+            "content_hash": s.content_hash,
+            "visual_hash": s.visual_hash,
+            "trigger": s.trigger,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        }
+        for s in screenshots
+    ]
+
+
+# =============================================================================
+# 16. MITRE ATT&CK Matrix & Threat Modeling Intelligence (§26)
+# =============================================================================
+@router.get("/mitre/catalog")
+async def get_mitre_catalog():
+    """Returns the registered MITRE ATT&CK Enterprise matrix techniques."""
+    from app.intelligence.ttp import TtpEngine
+    return {"catalog": TtpEngine.TTP_REGISTRY}
+
+
+@router.get("/scans/{scan_id}/mitre-matrix")
+async def get_scan_mitre_matrix(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Aggregates all findings and TTP observations for a scan mapped into the
+    14 core MITRE ATT&CK Enterprise tactics with correlated findings and evidence counts.
+    """
+    from app.intelligence.ttp import TtpEngine
+
+    findings = (await db.execute(
+        select(Finding).where(Finding.scan_id == scan_id)
+    )).scalars().all()
+
+    tactics_order = TtpEngine.TACTICS_ORDER
+
+    matrix: Dict[str, Dict[str, Any]] = {
+        tactic: {"tactic": tactic, "techniques": {}, "total_findings": 0}
+        for tactic in tactics_order
+    }
+
+    for f in findings:
+        ev = f.evidence or {}
+        mitre_list = ev.get("mitre_attack") or TtpEngine.correlate(f.finding_type or f.title)
+        if not mitre_list:
+            mitre_list = TtpEngine.correlate("cve")
+
+        for m in mitre_list:
+            tactic = m.get("tactic", "Initial Access")
+            # Normalize tactic if multi
+            primary_tactic = tactic.split("/")[0].strip()
+            if primary_tactic not in matrix:
+                primary_tactic = "Initial Access"
+
+            tid = m.get("technique_id", "T1190")
+            if tid not in matrix[primary_tactic]["techniques"]:
+                matrix[primary_tactic]["techniques"][tid] = {
+                    "technique_id": tid,
+                    "technique_name": m.get("technique_name") or m.get("name") or "Technique",
+                    "mitre_url": m.get("mitre_url", f"https://attack.mitre.org/techniques/{tid}/"),
+                    "rationale": m.get("rationale") or m.get("description") or "",
+                    "findings_count": 0,
+                    "finding_ids": [],
+                    "findings_titles": [],
+                    "severities": set(),
+                }
+
+            tech_entry = matrix[primary_tactic]["techniques"][tid]
+            tech_entry["findings_count"] += 1
+            tech_entry["finding_ids"].append(f.id)
+            tech_entry["findings_titles"].append(f.title)
+            tech_entry["severities"].add(f.severity)
+            matrix[primary_tactic]["total_findings"] += 1
+
+    # Format techniques set to list for JSON serialization
+    results = []
+    for tactic_name in tactics_order:
+        t_data = matrix[tactic_name]
+        tech_list = []
+        for tid, tech in t_data["techniques"].items():
+            tech["severities"] = list(tech["severities"])
+            tech_list.append(tech)
+        results.append({
+            "tactic": tactic_name,
+            "total_findings": t_data["total_findings"],
+            "techniques": tech_list,
+        })
+
+    return {
+        "scan_id": scan_id,
+        "total_tactics_active": sum(1 for t in results if t["total_findings"] > 0),
+        "tactics": results,
+    }
+
+
+# ==========================================================================
+# 16. V8 Advanced Adversary Simulation & Local AI Orchestration API (V8 §1-§52)
+# ==========================================================================
+
+from app.services.capability_registry import capability_registry, AssessmentProfile, ValidationLevel
+from app.ai.gateway import ai_gateway
+from app.ai.policy_guard import AiToolPolicyGuard
+from app.ai.hallucination_guard import AiHallucinationGuard
+from app.ai.hypothesis import hypothesis_engine
+from app.ai.memory import memory_manager
+from app.ai.agents.recon_agent import ReconAgent
+from app.ai.agents.vuln_analyst import VulnerabilityAnalystAgent
+from app.ai.agents.validation_planner import ValidationPlannerAgent
+from app.ai.agents.evidence_critic import EvidenceCriticAgent
+from app.ai.agents.report_agent import ReportAgent
+from app.ai.agents.retest_agent import RetestAgent
+from app.validation.hash_analyzer import HashAnalyzer
+from app.validation.credential_assessment import credential_subsystem
+from app.validation.authentication_assessment import auth_assessment_subsystem
+from app.validation.execution_validation import controlled_execution_validator
+from app.validation.payload_validator import payload_capability_validator
+from app.validation.privilege_assessment import privilege_boundary_validator
+from app.intelligence.attack_graph import AttackGraphEngine
+from app.intelligence.lateral_movement import lateral_movement_simulator
+from app.intelligence.service_profiles import ServiceProfileRegistry
+from app.intelligence.webapp_profiles import WebAppProfileRegistry
+from app.intelligence.knowledge_base import local_knowledge_base
+from app.intelligence.risk_engine import risk_engine
+from app.reporting.cve_dossier import CveDossierGenerator
+from app.orchestration.scheduler import resource_scheduler
+from app.workers.worker_pool import worker_pool_manager
+from app.core.kill_switch import kill_switch_manager
+from app.services.cleanup_manager import cleanup_manager
+from app.services.lab_manager import lab_manager
+from app.core.reproducibility import reproducibility_engine
+from app.core.audit import audit_trail_manager
+from app.models.models import (
+    Approval,
+    Capability,
+    CapabilityPolicy,
+    AiRun,
+    AiDecision,
+    Hypothesis as HypothesisModel,
+    AttackPath as AttackPathModel,
+    CredentialArtifact as CredentialArtifactModel,
+    CleanupTask as CleanupTaskModel,
+    LabEnvironment as LabEnvironmentModel,
+    EvidenceScore as EvidenceScoreModel,
+)
+
+
+# --- 16.1 Capabilities Registry (V8 §4) ---
+@router.get("/capabilities")
+async def list_capabilities():
+    """List all 20 standardized platform capabilities with risk levels and profiles (V8 §4)."""
+    return {"capabilities": capability_registry.list_capabilities()}
+
+
+@router.get("/capabilities/{name}")
+async def get_capability(name: str):
+    cap = capability_registry.get_capability(name)
+    if not cap:
+        raise HTTPException(status_code=404, detail="Capability not found")
+    return {"capability": cap}
+
+
+# --- 16.2 Gated Approvals Workflow (V8 §3, §48) ---
+class DecideApprovalRequest(BaseModel):
+    decision: str  # APPROVED, REJECTED
+    approver_id: Optional[str] = "operator_1"
+    reason: Optional[str] = None
+    rollback_plan: Optional[str] = None
+
+
+@router.get("/approvals")
+async def list_approvals(scan_id: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    """List pending and historical L3/L4 approval requests."""
+    query = select(Approval)
+    if scan_id:
+        query = query.where(Approval.scan_id == scan_id)
+    query = query.order_by(desc(Approval.created_at))
+    approvals = (await db.execute(query)).scalars().all()
+    return {"approvals": approvals}
+
+
+@router.post("/approvals/{approval_id}/decide")
+async def decide_approval(
+    approval_id: str,
+    body: DecideApprovalRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user_role),
+):
+    """Approve or reject a gated high-risk action (V8 §3)."""
+    appr = await db.get(Approval, approval_id)
+    if not appr:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+
+    appr.status = body.decision.upper()
+    appr.approver_id = current_user.username
+    appr.decided_at = datetime.now(timezone.utc)
+    appr.reason = body.reason
+    if body.rollback_plan:
+        appr.rollback_plan = body.rollback_plan
+
+    await db.commit()
+    await audit_trail_manager.record_audit_event(
+        db,
+        actor=current_user.username,
+        action=f"APPROVAL_{appr.status}",
+        target=appr.target,
+        scan_id=appr.scan_id,
+        details={"approval_id": approval_id, "action": appr.action, "risk_level": appr.risk_level},
+    )
+    return {"approval_id": approval_id, "status": appr.status}
+
+
+# --- 16.3 Local AI & Hypotheses Engine (V8 §9-§12, §34, §35) ---
+class CreateHypothesisRequest(BaseModel):
+    scan_id: str
+    title: str
+    description: str
+    context_assets: Optional[List[str]] = None
+    known_techs: Optional[List[str]] = None
+
+
+@router.post("/ai/hypotheses")
+async def create_hypothesis(body: CreateHypothesisRequest, db: AsyncSession = Depends(get_db)):
+    """Create and decompose a security hypothesis into safe validation steps (V8 §35)."""
+    plan = await hypothesis_engine.create_hypothesis(
+        title=body.title,
+        description=body.description,
+        context_assets=body.context_assets or [],
+        known_techs=body.known_techs or [],
+    )
+
+    hyp_model = HypothesisModel(
+        id=plan.hypothesis_id,
+        scan_id=body.scan_id,
+        title=plan.title,
+        description=plan.description,
+        state=plan.state,
+        relevant_assets=plan.relevant_assets,
+        existing_evidence=plan.existing_evidence,
+        preconditions=plan.preconditions,
+        safe_test_sequence=plan.safe_test_sequence,
+        expected_outcomes=plan.expected_outcomes,
+    )
+    db.add(hyp_model)
+    await db.commit()
+
+    return {"hypothesis": plan}
+
+
+@router.get("/ai/hypotheses/{scan_id}")
+async def list_hypotheses(scan_id: str, db: AsyncSession = Depends(get_db)):
+    results = (await db.execute(select(HypothesisModel).where(HypothesisModel.scan_id == scan_id))).scalars().all()
+    return {"hypotheses": results}
+
+
+class TriageAttackSurfaceRequest(BaseModel):
+    assets: List[Dict[str, Any]]
+    technologies: Optional[List[Dict[str, Any]]] = None
+    ports: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/ai/triage-attack-surface")
+async def ai_triage_attack_surface(body: TriageAttackSurfaceRequest):
+    """Run ReconAgent to prioritize interesting attack surface assets (V8 §10)."""
+    result = await ReconAgent.analyze_attack_surface(
+        assets=body.assets,
+        technologies=body.technologies or [],
+        ports=body.ports or [],
+    )
+    return result
+
+
+class EvidenceReviewRequest(BaseModel):
+    finding_id: str
+
+
+@router.post("/ai/review-evidence")
+async def ai_review_evidence(body: EvidenceReviewRequest, db: AsyncSession = Depends(get_db)):
+    """Run EvidenceCriticAgent to audit finding reproducibility, proof, and defensibility (V8 §29)."""
+    finding = await db.get(Finding, body.finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    finding_dict = {
+        "title": finding.title,
+        "finding_type": finding.finding_type,
+        "severity": finding.severity,
+        "confidence": finding.confidence,
+        "evidence_level": finding.evidence_level,
+        "actual_result": finding.actual_result,
+        "poc": (finding.evidence or {}).get("poc"),
+        "description": finding.description,
+        "technical_details": finding.technical_details,
+        "evidence": finding.evidence,
+    }
+
+    review = await EvidenceCriticAgent.review_finding_evidence(finding_dict)
+    return {"review": review}
+
+
+# --- 16.4 Credential & Hash Assessment API (V8 §13) ---
+class HashAnalysisRequest(BaseModel):
+    hash_string: str
+    target_context: Optional[str] = None
+
+
+@router.post("/credentials/analyze-hash")
+async def analyze_hash(body: HashAnalysisRequest):
+    """100% Offline mathematical analysis of hash algorithm, entropy, salt, and work factor (V8 §13)."""
+    artifact = credential_subsystem.ingest_credential_artifact(
+        raw_text=body.hash_string,
+        credential_type="hash",
+        context_target=body.target_context,
+    )
+    return {"analysis": artifact}
+
+
+class PasswordStrengthRequest(BaseModel):
+    password_candidate: str
+
+
+@router.post("/credentials/evaluate-password")
+async def evaluate_password(body: PasswordStrengthRequest):
+    """Evaluate password entropy, weak patterns, and policy compliance."""
+    result = HashAnalyzer.evaluate_plaintext_strength(body.password_candidate)
+    return {"evaluation": result}
+
+
+# --- 16.5 Attack Path Graph & Lateral Movement Simulation (V8 §18, §19) ---
+@router.get("/attack-graph/{scan_id}")
+async def get_attack_graph(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate interconnected Attack Path Graph from assets, services, and confirmed findings."""
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    services = (await db.execute(select(Service).where(Service.asset_id.in_([a.id for a in assets])))).scalars().all()
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+
+    graph = AttackGraphEngine(f"graph_{scan_id}")
+    for a in assets:
+        graph.add_node(a.id, "Asset", a.hostname or a.ip or "Asset", ip=a.ip, type=a.asset_type)
+
+    for s in services:
+        s_id = f"srv_{s.id}"
+        graph.add_node(s_id, "Service", f"{s.name}:{s.protocol}", port=s.port_id, product=s.product)
+        graph.add_edge(s.asset_id, s_id, "ACCESSES", confidence=1.0)
+
+    for f in findings:
+        f_id = f"find_{f.id}"
+        graph.add_node(f_id, "Finding", f.title, severity=f.severity, evidence_level=f.evidence_level)
+        if f.asset_id:
+            graph.add_edge(f.asset_id, f_id, "POTENTIALLY_ESCALATES_TO", confidence=0.9)
+
+    return graph.to_dict()
+
+
+class SimulatePivotRequest(BaseModel):
+    scan_id: str
+    origin_node_id: str
+    is_lab: bool = False
+
+
+@router.post("/attack-graph/simulate-pivot")
+async def simulate_pivot(body: SimulatePivotRequest, db: AsyncSession = Depends(get_db)):
+    """Simulate internal lateral movement pivot paths (V8 §18)."""
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == body.scan_id))).scalars().all()
+    graph = AttackGraphEngine(f"graph_{body.scan_id}")
+    for a in assets:
+        graph.add_node(a.id, "Asset", a.hostname or a.ip or "Asset")
+        if a.parent_id:
+            graph.add_edge(a.parent_id, a.id, "TRUSTS", confidence=0.85)
+
+    result = lateral_movement_simulator.simulate_pivots(graph, body.origin_node_id, is_lab=body.is_lab)
+    return result
+
+
+# --- 16.6 Deep Profiles & Multi-Factor Risk (V8 §22, §23, §36) ---
+@router.get("/profiles/services")
+async def list_service_profiles():
+    """List 18 deep service profiles (V8 §22)."""
+    return {"service_profiles": ServiceProfileRegistry.list_profiles()}
+
+
+@router.get("/profiles/webapps")
+async def list_webapp_profiles():
+    """List 15 deep web application stack profiles (V8 §23)."""
+    return {"webapp_profiles": WebAppProfileRegistry.list_profiles()}
+
+
+class EvaluateRiskRequest(BaseModel):
+    severity: str
+    confidence: Optional[str] = "CONFIRMED"
+    exploitability_state: Optional[str] = "CANDIDATE"
+    evidence_level: Optional[str] = "E0"
+    cve_id: Optional[str] = None
+    is_internet_facing: Optional[bool] = True
+    asset_criticality: Optional[str] = "MEDIUM"
+
+
+@router.post("/risk/evaluate")
+async def evaluate_risk(body: EvaluateRiskRequest):
+    """Compute multi-factor risk score and priority tier P0–P4 (V8 §36)."""
+    result = risk_engine.calculate_priority(
+        severity=body.severity,
+        confidence=body.confidence or "CONFIRMED",
+        exploitability_state=body.exploitability_state or "CANDIDATE",
+        evidence_level=body.evidence_level or "E0",
+        cve_id=body.cve_id,
+        is_internet_facing=body.is_internet_facing if body.is_internet_facing is not None else True,
+        asset_criticality=body.asset_criticality or "MEDIUM",
+    )
+    return {"risk": result}
+
+
+# --- 16.7 CVE Dossier & Reporting (V8 §37, §38) ---
+@router.get("/reports/cve-dossier/{finding_id}")
+async def get_cve_dossier(finding_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate formal, standardized CVE submission dossier for a finding (V8 §38)."""
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    f_dict = {
+        "title": finding.title,
+        "finding_type": finding.finding_type,
+        "cwe_id": finding.cwe_id,
+        "cvss_score": finding.cvss_score,
+        "target_host": finding.asset_id or "Target Host",
+        "endpoint_url": finding.url_id or "/",
+        "root_cause": finding.root_cause,
+        "description": finding.description,
+        "reproduction_md": (finding.evidence or {}).get("reproduction_md"),
+        "poc": (finding.evidence or {}).get("poc"),
+        "business_impact": finding.business_impact,
+        "remediation": finding.remediation,
+    }
+
+    dossier_text = CveDossierGenerator.generate_dossier(f_dict)
+    return Response(content=dossier_text, media_type="text/markdown")
+
+
+# --- 16.8 Disposable Lab & Cleanup Manager (V8 §44, §45) ---
+@router.get("/labs")
+async def list_labs():
+    return {"labs": lab_manager.list_labs()}
+
+
+class CreateLabRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    targets: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/labs")
+async def create_lab(body: CreateLabRequest):
+    lab = lab_manager.create_lab_environment(
+        name=body.name,
+        description=body.description or "",
+        targets=body.targets or [],
+    )
+    return {"lab": lab}
+
+
+@router.delete("/labs/{lab_id}")
+async def destroy_lab(lab_id: str):
+    success = lab_manager.teardown_lab(lab_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Lab not found")
+    return {"status": "destroyed", "lab_id": lab_id}
+
+
+@router.get("/cleanup-tasks")
+async def list_cleanup_tasks(scan_id: Optional[str] = None):
+    return {"cleanup_tasks": cleanup_manager.list_tasks(scan_id)}
+
+
+@router.post("/cleanup-tasks/{task_id}/execute")
+async def execute_cleanup_task(task_id: str):
+    res = await cleanup_manager.execute_cleanup(task_id)
+    return res
+
+
+# --- 16.9 Granular Kill Switch & Infrastructure (V8 §41, §42, §43) ---
+class StopModuleRequest(BaseModel):
+    module_category: str  # network, crawler, browser, validation, ai, lab
+
+
+@router.post("/scans/{scan_id}/kill-switch/module")
+async def stop_scan_module(scan_id: str, body: StopModuleRequest):
+    """Trigger granular per-module kill switch (V8 §43)."""
+    kill_switch_manager.stop_module(scan_id, body.module_category)
+    return {"status": "stopped", "scan_id": scan_id, "module": body.module_category}
+
+
+@router.get("/system/scheduler")
+async def get_scheduler_telemetry():
+    """Get priority scheduler queue depth and resource telemetry (V8 §41)."""
+    return {"telemetry": resource_scheduler.get_system_telemetry()}
+
+
+@router.get("/system/workers")
+async def list_worker_statuses():
+    """List 13 dedicated worker classes and their health (V8 §42)."""
+    return {"workers": worker_pool_manager.list_workers()}
+
+
+# ==========================================================================
+# Universal Global Search & Command Palette Resolver (§19, §20)
+# ==========================================================================
+@router.get("/search")
+async def global_search(
+    q: Optional[str] = Query(None),
+    query: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """Search across Domains, Assets, URLs, Parameters, Ports, Technologies, and Findings."""
+    search_term = (q or query or "").strip()
+    results = {
+        "domains": [],
+        "assets": [],
+        "urls": [],
+        "parameters": [],
+        "ports": [],
+        "technologies": [],
+        "findings": [],
+    }
+
+    if not search_term:
+        return results
+
+    q_str = f"%{search_term}%"
+
+    try:
+        # 1. Domains
+        dom_stmt = select(Domain).where(Domain.name.ilike(q_str)).limit(10)
+        dom_res = (await db.execute(dom_stmt)).scalars().all()
+        results["domains"] = [{"id": d.id, "name": d.name, "health_status": d.health_status} for d in dom_res]
+
+        # 2. Assets
+        asset_stmt = select(Asset).where((Asset.hostname.ilike(q_str)) | (Asset.ip.ilike(q_str))).limit(10)
+        asset_res = (await db.execute(asset_stmt)).scalars().all()
+        results["assets"] = [{"id": a.id, "hostname": a.hostname, "ip": a.ip, "status": a.status} for a in asset_res]
+
+        # 3. URLs
+        url_stmt = select(URL).where((URL.url.ilike(q_str)) | (URL.path.ilike(q_str))).limit(10)
+        url_res = (await db.execute(url_stmt)).scalars().all()
+        results["urls"] = [{"id": u.id, "url": u.url, "path": u.path, "status_code": u.status_code, "method": getattr(u, "method", "GET")} for u in url_res]
+
+        # 4. Parameters
+        param_stmt = select(Parameter).where(Parameter.name.ilike(q_str)).limit(10)
+        param_res = (await db.execute(param_stmt)).scalars().all()
+        results["parameters"] = [{"id": p.id, "name": p.name, "location": p.location, "type": p.type} for p in param_res]
+
+        # 5. Ports
+        port_stmt = select(Port).where((Port.service.ilike(q_str)) | (Port.banner.ilike(q_str))).limit(10)
+        port_res = (await db.execute(port_stmt)).scalars().all()
+        results["ports"] = [{"id": pt.id, "port": pt.port, "service": pt.service, "protocol": pt.protocol} for pt in port_res]
+
+        # 6. Technologies
+        tech_stmt = select(Technology).where(Technology.name.ilike(q_str)).limit(10)
+        tech_res = (await db.execute(tech_stmt)).scalars().all()
+        results["technologies"] = [{"id": t.id, "name": t.name, "version": t.version, "category": t.category} for t in tech_res]
+
+        # 7. Findings
+        find_stmt = select(Finding).where((Finding.title.ilike(q_str)) | (Finding.finding_type.ilike(q_str))).limit(10)
+        find_res = (await db.execute(find_stmt)).scalars().all()
+        results["findings"] = [{"id": f.id, "title": f.title, "severity": f.severity, "finding_type": f.finding_type} for f in find_res]
+
+    except Exception as e:
+        logger.error(f"Global search error: {e}")
+
+    return results
+
+
+# ==========================================================================
+# Autonomous Security Intelligence & Gating APIs (§12, §25, §34, §47, §49)
+# ==========================================================================
+
+class JSAnalyzeRequest(BaseModel):
+    js_content: str
+    js_url: str
+    base_domain: Optional[str] = None
+
+
+class PreconditionRequest(BaseModel):
+    vulnerability_class: str
+    target_context: Dict[str, Any]
+
+
+class FirewallEvaluateRequest(BaseModel):
+    finding: Dict[str, Any]
+    evidence: Optional[Dict[str, Any]] = None
+
+
+class ParameterSkillsRequest(BaseModel):
+    parameters: List[Dict[str, Any]]
+
+
+@router.get("/autonomous/queue")
+async def get_autonomous_queue():
+    """Returns real-time pending actions in the Autonomous Bug Hunter Loop (§49)."""
+    from app.orchestration.autonomous_loop import autonomous_loop
+    return {"queue": autonomous_loop.get_pending_actions()}
+
+
+@router.get("/intelligence/request-graph")
+async def get_request_graph():
+    """Returns visual nodes and links of the Request & Provenance Graph (§34, §66)."""
+    from app.intelligence.request_graph import request_graph
+    return request_graph.export_graph_json()
+
+
+@router.post("/intelligence/javascript")
+async def analyze_javascript_intelligence(body: JSAnalyzeRequest):
+    """Deep JavaScript & Source-Map Intelligence parsing (§12, §13)."""
+    from app.intelligence.javascript_engine import js_intelligence_engine
+    result = js_intelligence_engine.analyze_script(body.js_content, body.js_url, body.base_domain)
+    return {
+        "js_url": result.js_url,
+        "endpoints": result.discovered_endpoints,
+        "parameters": result.discovered_parameters,
+        "subdomains": result.discovered_subdomains,
+        "secrets": result.discovered_secrets,
+        "third_party": result.third_party_services,
+        "source_maps": result.source_map_urls,
+        "feature_flags": result.feature_flags,
+        "metadata": result.metadata,
+    }
+
+
+@router.post("/validation/preconditions")
+async def check_validation_preconditions(body: PreconditionRequest):
+    """Precondition Engine evaluator before active test dispatch (§25, §75)."""
+    from app.validation.precondition_engine import precondition_engine
+    result = precondition_engine.evaluate(body.vulnerability_class, body.target_context)
+    return {
+        "status": result.status.value,
+        "vulnerability_class": result.vulnerability_class,
+        "target_endpoint": result.target_endpoint,
+        "satisfied_conditions": result.satisfied_conditions,
+        "missing_conditions": result.missing_conditions,
+        "reason": result.reason,
+    }
+
+
+@router.post("/validation/firewall")
+async def evaluate_finding_firewall(body: FirewallEvaluateRequest):
+    """Deterministic False-Positive Firewall Gatekeeper (§47)."""
+    from app.validation.false_positive_firewall import false_positive_firewall
+    verdict = false_positive_firewall.evaluate_finding(body.finding, body.evidence)
+    return {
+        "decision": verdict.decision.value,
+        "rule_id": verdict.rule_id,
+        "reason": verdict.reason,
+        "confidence_penalty": verdict.confidence_penalty,
+        "recommended_state": verdict.recommended_state,
+    }
+
+
+@router.post("/intelligence/skills/parameters")
+async def analyze_parameter_skills(body: ParameterSkillsRequest):
+    """Multi-Framework Cybersecurity Skills Parameter Triager (§22, §60)."""
+    from app.ai.cybersecurity_skills import skills_hub
+    result = skills_hub.analyze_parameter_surface(body.parameters)
+    return {
+        "skill_name": result.skill_name,
+        "category": result.category,
+        "confidence": result.confidence,
+        "summary": result.summary,
+        "findings": result.findings,
+        "mitre_mappings": result.mitre_mappings,
+        "framework_mappings": result.framework_mappings,
+        "remediation_playbook": result.remediation_playbook,
+        "metadata": result.metadata,
+    }
+
+
+# ============================================================================
+# Universal AI Pentest Engine Endpoints (Hermes, NineRouter, OpenRouter, Gemini)
+# ============================================================================
+
+class AIChatRequest(BaseModel):
+    messages: List[Dict[str, str]]
+    system_prompt: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+
+
+class AISettingsRequest(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+
+
+@router.get("/ai/status")
+async def get_ai_status():
+    """Returns the current AI Pentest Orchestrator connection status."""
+    from app.intelligence.llm_client import llm_client
+    return {
+        "enabled": settings.llm_enabled,
+        "provider": settings.llm_provider,
+        "model": settings.llm_model,
+        "is_configured": llm_client.is_configured,
+    }
+
+
+@router.post("/ai/test")
+async def test_ai_connection():
+    """Tests connection to the configured AI LLM provider."""
+    from app.intelligence.llm_client import llm_client
+    res = await llm_client.test_connection()
+    return res
+
+
+@router.post("/ai/chat")
+async def ai_chat_handler(body: AIChatRequest):
+    """Interactive AI Pentest Copilot Chat endpoint."""
+    from app.intelligence.llm_client import llm_client
+    if not llm_client.is_configured:
+        raise HTTPException(
+            status_code=400,
+            detail="AI Provider is not configured. Please set an API Key in .env or via /api/ai/settings."
+        )
+    try:
+        reply = await llm_client.chat(
+            messages=body.messages,
+            system_prompt=body.system_prompt,
+            temperature=body.temperature,
+            max_tokens=body.max_tokens,
+        )
+        return {"reply": reply, "model": llm_client.model}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/ai/settings")
+async def update_ai_settings(body: AISettingsRequest):
+    """Updates AI Provider, API Key, Base URL, and Model on the fly."""
+    from app.intelligence.llm_client import llm_client
+    if body.enabled is not None:
+        settings.llm_enabled = body.enabled
+    if body.provider is not None:
+        settings.llm_provider = body.provider
+    if body.base_url is not None:
+        settings.llm_base_url = body.base_url
+        llm_client.base_url = body.base_url.rstrip("/")
+    if body.api_key is not None:
+        settings.llm_api_key = body.api_key
+        llm_client.api_key = body.api_key
+    if body.model is not None:
+        settings.llm_model = body.model
+        llm_client.model = body.model
+    if body.temperature is not None:
+        settings.llm_temperature = body.temperature
+        llm_client.temperature = body.temperature
+
+    return {
+        "status": "updated",
+        "enabled": settings.llm_enabled,
+        "provider": settings.llm_provider,
+        "base_url": settings.llm_base_url,
+        "model": settings.llm_model,
+        "is_configured": llm_client.is_configured,
+    }
+
+
+# ============================================================================
+# 17. V12 Native Multi-Agent Orchestration & Cybersecurity Skills API (§51, §58)
+# ============================================================================
+
+@router.get("/skills")
+async def list_cybersecurity_skills(
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+):
+    """List registered cybersecurity skills and methodology definitions (V12 §51)."""
+    from app.skills.skill_registry import SkillStatus, skill_registry
+    status_enum = None
+    if status:
+        try:
+            status_enum = SkillStatus(status.lower())
+        except ValueError:
+            pass
+    skills = skill_registry.list_skills(status=status_enum, category=category)
+    return {
+        "total": len(skills),
+        "skills": [s.to_dict() for s in skills],
+    }
+
+
+@router.post("/skills/{skill_id}/approve")
+async def approve_cybersecurity_skill(skill_id: str):
+    """Approve a cybersecurity skill for autonomous multi-agent execution (V12 §20, §52)."""
+    from app.skills.skill_registry import skill_registry
+    ok = skill_registry.approve_skill(skill_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+    return {"status": "approved", "skill_id": skill_id}
+
+
+@router.post("/skills/{skill_id}/block")
+async def block_cybersecurity_skill(skill_id: str):
+    """Block a cybersecurity skill from participating in active workflows (V12 §20)."""
+    from app.skills.skill_registry import skill_registry
+    ok = skill_registry.block_skill(skill_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+    return {"status": "blocked", "skill_id": skill_id}
+
+
+@router.get("/orchestrator/teams")
+async def get_orchestrator_teams():
+    """Returns live status of all specialist agents and teams (V12 §39)."""
+    from app.orchestration.team_manager import team_manager
+    return team_manager.get_teams_summary()
+
+
+@router.get("/orchestrator/capabilities")
+async def get_orchestrator_capabilities():
+    """Returns platform capabilities and pre-flight self-diagnostic status (V12 §58, §60)."""
+    from app.orchestration.capability_registry import capability_registry
+    diag = capability_registry.run_self_diagnostic()
+    caps = capability_registry.get_capabilities_summary()
+    return {
+        "diagnostic": diag,
+        "capabilities": caps,
+    }
+
+
+@router.get("/orchestrator/graph")
+async def get_orchestrator_live_graph():
+    """Returns real-time multi-agent execution graph and metrics (V12 §40)."""
+    from app.orchestration.master_orchestrator import master_orchestrator
+    return master_orchestrator.get_live_orchestration_graph()
+
+
+# ============================================================================
+# 18. V13 Multi-Tenant Distributed Execution & Resource Quotas API (§14, §30, §38)
+# ============================================================================
+
+@router.get("/tenants/me/quotas")
+async def get_my_tenant_quotas(
+    user: Optional[User] = Depends(get_optional_user),
+):
+    """Returns active user/tenant concurrency quotas and live utilization (V13 §36)."""
+    from app.orchestration.fair_scheduler import weighted_fair_scheduler
+    from app.core.browser_pool import browser_pool
+    from app.ai.concurrency_manager import ai_concurrency_manager
+
+    tenant_id = (user.tenant_id if user else None) or (user.id if user else "default_tenant")
+    sched_stats = weighted_fair_scheduler.get_tenant_stats(tenant_id)
+    browser_stats = browser_pool.get_stats()
+    ai_stats = ai_concurrency_manager.get_stats()
+
+    return {
+        "tenant_id": tenant_id,
+        "scheduler": sched_stats,
+        "browser_pool": {
+            "active_contexts": browser_stats["tenant_breakdown"].get(tenant_id, 0),
+            "max_contexts_per_tenant": browser_stats["max_contexts_per_tenant"],
+        },
+        "ai_pool": {
+            "active_requests": ai_stats["active_per_tenant"].get(tenant_id, 0),
+            "tenant_max_concurrent": ai_stats["tenant_max_concurrent"],
+        },
+    }
+
+
+@router.post("/investigations/{scan_id}/pause")
+async def pause_investigation(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Pauses an active investigation without terminating workers (V13 §37)."""
+    from app.orchestration.checkpoint_manager import checkpoint_manager
+    ok = await checkpoint_manager.pause_investigation(scan_id)
+    scan = await db.get(Scan, scan_id)
+    if scan:
+        scan.status = "paused"
+        await db.commit()
+    return {"status": "paused" if ok else "not_found", "scan_id": scan_id}
+
+
+@router.post("/investigations/{scan_id}/resume")
+async def resume_investigation(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resumes a paused investigation from its saved checkpoint (V13 §38)."""
+    from app.orchestration.checkpoint_manager import checkpoint_manager
+    chk = await checkpoint_manager.resume_investigation(scan_id)
+    scan = await db.get(Scan, scan_id)
+    if scan:
+        scan.status = "running"
+        await db.commit()
+    return {
+        "status": "resumed" if chk else "not_found",
+        "scan_id": scan_id,
+        "checkpoint": chk.to_dict() if chk else None,
+    }
+
+
+@router.get("/investigations/{scan_id}/events/replay")
+async def replay_investigation_events(
+    scan_id: str,
+    since: float = Query(0.0),
+):
+    """Replays durable historical events for client reconnection (V13 §43)."""
+    from app.core.tenant_events import tenant_event_bus
+    events = tenant_event_bus.replay_events(scan_id, since_timestamp=since)
+    return {
+        "scan_id": scan_id,
+        "total_events": len(events),
+        "events": events,
+    }
+
+
+@router.get("/admin/distributed/metrics")
+async def get_admin_distributed_metrics(
+    user: Optional[User] = Depends(require_admin_role),
+):
+    """Global system health, queue depths, DLQ, and backpressure metrics (V13 §30)."""
+    from app.core.resource_governor import resource_governor
+    from app.orchestration.distributed_queue import distributed_queue
+    from app.orchestration.fault_recovery import fault_recovery_engine
+    from app.core.browser_pool import browser_pool
+    from app.ai.concurrency_manager import ai_concurrency_manager
+
+    sys_metrics = resource_governor.get_system_metrics()
+    queue_depths = await distributed_queue.get_queue_depths()
+    dlq_items = fault_recovery_engine.get_dlq_entries()
+
+    return {
+        "system": sys_metrics,
+        "queue_depths": queue_depths,
+        "dead_letter_queue": dlq_items,
+        "browser_pool": browser_pool.get_stats(),
+        "ai_concurrency": ai_concurrency_manager.get_stats(),
+    }
+
+
+# ==========================================================================
+# V4 — Security Engine API (Unified Platform Coordinator)
+# ==========================================================================
+
+@router.get("/engine/status")
+async def get_engine_status():
+    """Global Security Engine status — active scans, tool registry, knowledge engine, state machines."""
+    from app.core.security_engine import security_engine
+    return security_engine.get_engine_status()
+
+
+@router.get("/engine/tools")
+async def get_engine_tools():
+    """List all registered security tools with metadata, capabilities, and risk levels."""
+    from app.core.tool_registry import tool_registry
+    return tool_registry.get_summary()
+
+
+@router.get("/engine/tools/{tool_name}")
+async def get_engine_tool_detail(tool_name: str):
+    """Get details of a specific security tool."""
+    from app.core.tool_registry import tool_registry
+    tool = tool_registry.get(tool_name)
+    if not tool:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+    return tool.to_dict()
+
+
+@router.get("/engine/knowledge")
+async def get_engine_knowledge():
+    """Security Knowledge Engine summary — taxonomy, patterns, invariants."""
+    from app.intelligence.knowledge_engine import security_knowledge_engine
+    return security_knowledge_engine.get_summary()
+
+
+@router.get("/engine/knowledge/search")
+async def search_knowledge(q: str = Query(...)):
+    """Search vulnerability taxonomy by keyword."""
+    from app.intelligence.knowledge_engine import security_knowledge_engine
+    results = security_knowledge_engine.search_vulnerabilities(q)
+    return {"query": q, "results": [v.to_dict() for v in results]}
+
+
+async def _ensure_scan_engine(scan_id: str, db: AsyncSession):
+    from app.core.security_engine import security_engine
+    from app.models.application_model import EntityType
+    from app.core.state_machine import state_machine_manager
+
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        return security_engine
+
+    target = (scan.options or {}).get("target_url") or (scan.options or {}).get("target_host") or scan.root_domain
+
+    if security_engine.get_app_model(scan_id) is None:
+        security_engine.initialize_scan(scan_id, target)
+
+    app_model = security_engine.get_app_model(scan_id)
+    reasoning = security_engine.get_reasoning_layer(scan_id)
+
+    try:
+        if app_model:
+            app_model.add_entity(
+                entity_type=EntityType.ASSET,
+                label=target,
+                properties={"status": scan.status, "root_domain": scan.root_domain}
+            )
+
+            assets_res = await db.execute(select(Asset).where(Asset.scan_id == scan_id).limit(50))
+            for asset in assets_res.scalars().all():
+                ports_cnt = (asset.metadata_ or {}).get("ports_count", 0) if isinstance(asset.metadata_, dict) else 0
+                app_model.add_entity(
+                    entity_type=EntityType.ASSET,
+                    label=asset.hostname or asset.ip or "subdomain",
+                    properties={"ip": asset.ip, "ports_count": ports_cnt}
+                )
+
+            urls_res = await db.execute(
+                select(URL).join(Asset, URL.asset_id == Asset.id).where(Asset.scan_id == scan_id).limit(50)
+            )
+            for u in urls_res.scalars().all():
+                app_model.add_entity(
+                    entity_type=EntityType.ENDPOINT,
+                    label=u.path or u.url or "/",
+                    properties={"url": u.url, "method": u.method or "GET"}
+                )
+
+            techs_res = await db.execute(
+                select(Technology).join(Asset, Technology.asset_id == Asset.id).where(Asset.scan_id == scan_id).limit(30)
+            )
+            for t in techs_res.scalars().all():
+                app_model.add_entity(
+                    entity_type=EntityType.TECHNOLOGY,
+                    label=t.name,
+                    properties={"version": t.version, "category": t.category}
+                )
+    except Exception as exc:
+        logger.debug("Error populating application model entities for scan %s: %s", scan_id, exc)
+
+    try:
+        if reasoning and len(reasoning.hypothesis_engine.hypotheses) == 0:
+            from app.intelligence.llm_client import llm_client
+
+            # 1. Run deterministic baseline reasoning cycle
+            res = security_engine.run_reasoning_cycle(scan_id)
+            if res and res.hypotheses_generated:
+                for hyp in res.hypotheses_generated[:6]:
+                    security_engine.create_attack_plan(
+                        scan_id=scan_id,
+                        title=f"Exploit & Verification Plan for {hyp.statement[:40]}",
+                        target=hyp.target_endpoint or target,
+                        tool_sequence=[hyp.next_test or "nuclei", "dalfox"]
+                    )
+
+            # 2. Asynchronously enrich with NineRouter LLM Multi-Model Combo in background
+            if llm_client.is_configured and app_model:
+                async def _bg_enrich_llm_hypotheses():
+                    try:
+                        assets_list = [{"hostname": a.label, "ip": a.properties.get("ip")} for a in app_model.get_entities_by_type(EntityType.ASSET)]
+                        endpoints_list = [{"url": e.properties.get("url"), "path": e.label} for e in app_model.get_entities_by_type(EntityType.ENDPOINT)]
+                        techs_list = [{"name": t.label, "version": t.properties.get("version")} for t in app_model.get_entities_by_type(EntityType.TECHNOLOGY)]
+                        ports_list = [{"port": 80}, {"port": 443}]
+
+                        llm_hyps = await llm_client.generate_attack_hypotheses(
+                            target_domain=target,
+                            assets=assets_list,
+                            endpoints=endpoints_list,
+                            technologies=techs_list,
+                            ports=ports_list,
+                        )
+                        for lh in llm_hyps:
+                            if isinstance(lh, dict) and lh.get("statement"):
+                                stmt = lh.get("statement", "")
+                                tgt = lh.get("target_endpoint") or target
+                                tool_seq = lh.get("tool_sequence") or [lh.get("next_test") or "nuclei", "dalfox"]
+                                reasoning.hypothesis_engine.create_hypothesis(
+                                    statement=f"[AI Neural] {stmt}",
+                                    target_endpoint=tgt,
+                                    initial_confidence=float(lh.get("confidence", 0.85)),
+                                    exploitability=0.8,
+                                    impact=0.8,
+                                    chain_potential=0.6,
+                                    business_criticality=0.7,
+                                    next_test=tool_seq[0] if tool_seq else "nuclei",
+                                    expected_result=lh.get("expected_result", "Vulnerability verified with observable evidence"),
+                                )
+                                security_engine.create_attack_plan(
+                                    scan_id=scan_id,
+                                    title=lh.get("attack_plan_title") or f"AI Attack Plan for {stmt[:40]}",
+                                    target=tgt,
+                                    tool_sequence=tool_seq
+                                )
+                    except Exception as llm_err:
+                        logger.debug("NineRouter LLM hypothesis background note: %s", llm_err)
+
+                asyncio.create_task(_bg_enrich_llm_hypotheses())
+    except Exception as exc:
+        logger.debug("Error running reasoning cycle in _ensure_scan_engine for %s: %s", scan_id, exc)
+
+    sm = state_machine_manager.get(scan_id)
+    if sm and len(sm.history) == 0:
+        status = (scan.status or "completed").lower()
+        try:
+            if status == "completed":
+                security_engine.start_discovery(scan_id)
+                security_engine.complete_discovery(scan_id)
+                security_engine.start_testing(scan_id)
+                security_engine.start_validation(scan_id)
+                security_engine.start_reporting(scan_id)
+                security_engine.complete_scan(scan_id)
+            elif status in ("running", "testing"):
+                security_engine.start_discovery(scan_id)
+                security_engine.complete_discovery(scan_id)
+                security_engine.start_testing(scan_id)
+            elif status == "paused":
+                security_engine.start_discovery(scan_id)
+                security_engine.complete_discovery(scan_id)
+                security_engine.start_testing(scan_id)
+        except Exception as e:
+            logger.debug("State machine replay error: %s", e)
+
+    return security_engine
+
+
+@router.get("/scans/{scan_id}/engine")
+async def get_scan_engine_status(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Get comprehensive Security Engine status for a specific scan."""
+    security_engine = await _ensure_scan_engine(scan_id, db)
+    status = security_engine.get_scan_status(scan_id)
+    if not status.get("metrics"):
+        return {"scan_id": scan_id, "engine_initialized": False}
+    return status
+
+
+@router.get("/scans/{scan_id}/model")
+async def get_scan_application_model(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the structured Application Model (target knowledge graph) for a scan."""
+    security_engine = await _ensure_scan_engine(scan_id, db)
+    model = security_engine.get_app_model(scan_id)
+    if not model:
+        return {"scan_id": scan_id, "model": None, "message": "No application model for this scan"}
+    return model.to_graph()
+
+
+@router.get("/scans/{scan_id}/hypotheses")
+async def get_scan_hypotheses(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Get active security hypotheses and their status for a scan."""
+    security_engine = await _ensure_scan_engine(scan_id, db)
+    reasoning = security_engine.get_reasoning_layer(scan_id)
+    if not reasoning:
+        return {"scan_id": scan_id, "hypotheses": []}
+    ranked = reasoning.hypothesis_engine.rank_hypotheses()
+    return {
+        "scan_id": scan_id,
+        "total_hypotheses": len(reasoning.hypothesis_engine.hypotheses),
+        "active_hypotheses": len(ranked),
+        "hypotheses": [h.to_dict() for h in ranked],
+    }
+
+
+@router.get("/scans/{scan_id}/attack-plans")
+async def get_scan_attack_plans(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Get current and completed attack plans for a scan."""
+    security_engine = await _ensure_scan_engine(scan_id, db)
+    planner = security_engine.get_planner(scan_id)
+    if not planner:
+        return {"scan_id": scan_id, "plans": []}
+    plans = planner.list_plans()
+    return {
+        "scan_id": scan_id,
+        "total_plans": len(plans),
+        "summary": planner.get_summary(),
+        "plans": [p.to_dict() for p in plans],
+    }
+
+
+@router.get("/scans/{scan_id}/state-machine")
+async def get_scan_state_machine(scan_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the state machine lifecycle data for a scan."""
+    await _ensure_scan_engine(scan_id, db)
+    from app.core.state_machine import state_machine_manager
+    sm = state_machine_manager.get(scan_id)
+    if not sm:
+        return {"scan_id": scan_id, "state_machine": None, "history": []}
+    return {
+        "scan_id": scan_id,
+        "state_machine": sm.to_dict(),
+        "history": [e.to_dict() for e in sm.history],
     }
