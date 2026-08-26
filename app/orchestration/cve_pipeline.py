@@ -113,7 +113,7 @@ async def trigger_immediate_cve_pipeline(
         # 4. Generate Opportunities (includes version CVEs & configuration checks)
         opps = await validator.generate_opportunities(host, port, service_info)
         
-        session = SessionContext(base_url=f"http://{host}:{port}")
+        session = SessionContext(base_url=f"http://{host}:{port}", rate_limiter=ctx.rate_limiter)
 
         # 5. Immediate Active Validation
         for opp in opps:

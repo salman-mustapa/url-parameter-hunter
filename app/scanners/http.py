@@ -116,16 +116,48 @@ async def extract_tls_cert(host: str, port: int = 443) -> dict | None:
         return None
 
 
-async def fetch_http(url: str, timeout: float = 8.0) -> httpx.Response | None:
-    """Non-blocking HTTP GET with security boundaries."""
+_SHARED_CLIENT: httpx.AsyncClient | None = None
+_SHARED_CLIENT_LOCK = asyncio.Lock()
+
+async def get_shared_client() -> httpx.AsyncClient:
+    """Get or create the global shared AsyncClient with connection pooling limits."""
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is None:
+        async with _SHARED_CLIENT_LOCK:
+            if _SHARED_CLIENT is None:
+                # Use connection limits to avoid socket exhaustion and reuse connections (Keep-Alive)
+                limits = httpx.Limits(max_keepalive_connections=50, max_connections=150, keepalive_expiry=30.0)
+                _SHARED_CLIENT = httpx.AsyncClient(
+                    limits=limits,
+                    follow_redirects=False,
+                    verify=False,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (BugHunter/1.0)"}
+                )
+    return _SHARED_CLIENT
+
+async def fetch_http(url: str, timeout: float = 8.0, max_bytes: int = 1500000) -> httpx.Response | None:
+    """Non-blocking HTTP GET with connection reuse and response size limit to prevent memory exhaustion."""
     try:
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=False,
-            verify=False,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (BugHunter/1.0)"}
-        ) as client:
-            return await client.get(url)
+        client = await get_shared_client()
+        # Stream response to enforce size limit and prevent memory exhaustion
+        async with client.stream("GET", url, timeout=timeout) as response:
+            content_chunks = []
+            bytes_read = 0
+            async for chunk in response.aiter_bytes(chunk_size=16384):
+                content_chunks.append(chunk)
+                bytes_read += len(chunk)
+                if bytes_read >= max_bytes:
+                    break
+            
+            full_content = b"".join(content_chunks)
+            # Build a response object
+            mock_resp = httpx.Response(
+                status_code=response.status_code,
+                headers=response.headers,
+                content=full_content,
+                request=response.request
+            )
+            return mock_resp
     except Exception:
         return None
 

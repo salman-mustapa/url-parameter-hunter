@@ -157,6 +157,35 @@ class OpportunityBus:
     async def publish(self, opportunity: AttackOpportunity) -> bool:
         """Publishes an opportunity to the bus. Returns True if accepted, False if duplicate."""
         fp = opportunity.fingerprint()
+        
+        # Redis distributed queue check
+        from app.orchestration.distributed_queue import distributed_queue
+        if distributed_queue.use_redis:
+            stream_name = f"scan.{opportunity.attack_type}"
+            if stream_name not in distributed_queue.STREAM_NAMES:
+                stream_name = "scan.validation"
+            
+            msg_id = await distributed_queue.enqueue(
+                stream_name=stream_name,
+                payload=opportunity.to_dict(),
+                idempotency_key=fp,
+                priority=opportunity.priority,
+            )
+            if not msg_id:
+                self._stats["total_deduplicated"] += 1
+                logger.debug("Deduplicated opportunity via Redis: %s (%s)", opportunity.id, fp)
+                return False
+                
+            async with self._lock:
+                opportunity.state = OpportunityState.QUEUED
+                opportunity.updated_at = time.time()
+                self._opportunities[opportunity.id] = opportunity
+                self._stats["total_published"] += 1
+                
+            logger.info("Published opportunity [%s] to Redis stream %s", opportunity.id, stream_name)
+            await self._notify_subscribers("opportunity.queued", opportunity)
+            return True
+
         async with self._lock:
             if fp in self._seen_fingerprints:
                 self._stats["total_deduplicated"] += 1
@@ -193,6 +222,36 @@ class OpportunityBus:
 
     async def get_next(self, timeout: Optional[float] = None) -> Optional[AttackOpportunity]:
         """Fetches the next highest priority opportunity, bounded by optional timeout."""
+        from app.orchestration.distributed_queue import distributed_queue
+        if distributed_queue.use_redis:
+            try:
+                # Poll streams in logical priority order
+                streams_to_check = ["scan.validation", "scan.crawler", "scan.web", "scan.discovery"]
+                for stream in streams_to_check:
+                    tasks = await distributed_queue.claim_tasks(
+                        stream_name=stream,
+                        group_name="bughunter_workers",
+                        consumer_name="worker_api",
+                        count=1,
+                    )
+                    if tasks:
+                        task = tasks[0]
+                        opp = AttackOpportunity.from_dict(task["payload"])
+                        opp.metadata["redis_message_id"] = task["message_id"]
+                        opp.metadata["redis_stream"] = stream
+                        
+                        async with self._lock:
+                            opp.state = OpportunityState.TESTING
+                            opp.updated_at = time.time()
+                            self._opportunities[opp.id] = opp
+                            self._in_flight[opp.id] = opp
+                            
+                        await self._notify_subscribers("opportunity.started", opp)
+                        return opp
+            except Exception as e:
+                logger.error("Error claiming tasks from Redis stream: %s", e)
+
+        # Fallback to local Queue
         try:
             if timeout is not None:
                 item = await asyncio.wait_for(self._queue.get(), timeout=timeout)
@@ -251,6 +310,18 @@ class OpportunityBus:
                     self._stats["total_confirmed"] += 1
                 elif new_state == OpportunityState.EXPLOITED:
                     self._stats["total_exploited"] += 1
+
+                # ACK task in Redis Streams if registered
+                if opp.metadata.get("redis_message_id") and opp.metadata.get("redis_stream"):
+                    try:
+                        from app.orchestration.distributed_queue import distributed_queue
+                        await distributed_queue.ack(
+                            stream_name=opp.metadata["redis_stream"],
+                            group_name="bughunter_workers",
+                            message_id=opp.metadata["redis_message_id"],
+                        )
+                    except Exception as ack_err:
+                        logger.warning("Failed to XACK Redis stream task: %s", ack_err)
 
         logger.info(
             "Opportunity [%s] transitioned to %s: %s",

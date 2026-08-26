@@ -155,6 +155,210 @@ class ReportEngine:
                             f"",
                         ])
 
+                # Exploitation Evidence (Deep Proof)
+                exploitation_data = f.get("exploitation_data")
+                if exploitation_data and isinstance(exploitation_data, dict):
+                    attack_type = f.get("attack_type", f.get("vulnerability_type", ""))
+
+                    if attack_type == "sqli" and exploitation_data.get("database_name"):
+                        lines.extend([
+                            f"#### 📊 Database Exploitation Evidence (Server-Side Proof)",
+                            f"",
+                            f"| Property | Value |",
+                            f"|---|---|",
+                            f"| **Database Name** | `{exploitation_data.get('database_name', 'N/A')}` |",
+                            f"| **Database User** | `{exploitation_data.get('database_user', 'N/A')}` |",
+                            f"| **Database Version** | `{exploitation_data.get('database_version', 'N/A')}` |",
+                            f"| **UNION Column Count** | `{exploitation_data.get('column_count', 'N/A')}` |",
+                            f"",
+                        ])
+                        tables = exploitation_data.get("tables", [])
+                        if tables:
+                            lines.append(f"**Extracted Tables ({len(tables)}):**")
+                            for tbl in tables[:10]:
+                                row_counts = exploitation_data.get("row_counts", {})
+                                count_str = f" — {row_counts[tbl]:,} rows" if tbl in row_counts else ""
+                                lines.append(f"- `{tbl}`{count_str}")
+                            lines.append("")
+
+                        columns = exploitation_data.get("columns", {})
+                        if columns:
+                            lines.append(f"**Extracted Columns per Table:**")
+                            for tbl, cols in list(columns.items())[:5]:
+                                cols_str = ", ".join(f"`{c}`" for c in cols[:10])
+                                lines.append(f"- **{tbl}**: {cols_str}")
+                            lines.append("")
+
+                    elif attack_type == "rce":
+                        cmd_outputs = exploitation_data.get("command_outputs", {})
+                        lines.extend([
+                            f"#### 💻 System Exploitation Evidence (Command Execution Proof)",
+                            f"",
+                            f"| Property | Value |",
+                            f"|---|---|",
+                            f"| **Current User** | `{exploitation_data.get('current_user', exploitation_data.get('username', 'N/A'))}` |",
+                            f"| **Hostname** | `{exploitation_data.get('hostname', 'N/A')}` |",
+                            f"| **Kernel Info** | `{exploitation_data.get('kernel_info', 'N/A')}` |",
+                            f"| **UID/GID** | `uid={exploitation_data.get('uid', '?')} gid={exploitation_data.get('gid', '?')}` |",
+                            f"| **Privilege Level** | `{exploitation_data.get('privilege_level', 'N/A')}` |",
+                            f"| **Privileged Groups** | `{', '.join(exploitation_data.get('privileged_groups', []))}` |",
+                            f"| **Commands Executed** | `{exploitation_data.get('commands_executed', 0)}` |",
+                            f"",
+                        ])
+                        if cmd_outputs.get("id_output"):
+                            lines.extend([
+                                f"**`id` output:**",
+                                f"```",
+                                f"{cmd_outputs['id_output'][:500]}",
+                                f"```",
+                                f"",
+                            ])
+                        if cmd_outputs.get("passwd_output") or exploitation_data.get("passwd_content"):
+                            passwd = cmd_outputs.get("passwd_output") or exploitation_data.get("passwd_content", "")
+                            lines.extend([
+                                f"**`cat /etc/passwd` output ({exploitation_data.get('passwd_entries', '?')} entries):**",
+                                f"```",
+                                f"{passwd[:2000]}",
+                                f"```",
+                                f"",
+                            ])
+                        real_users = exploitation_data.get("real_users", [])
+                        if real_users:
+                            lines.extend([
+                                f"**Real User Accounts (uid ≥ 1000):**",
+                                f"| Username | UID | Home | Shell |",
+                                f"|---|---|---|---|",
+                            ])
+                            for u in real_users[:10]:
+                                lines.append(f"| `{u.get('username')}` | {u.get('uid')} | `{u.get('home')}` | `{u.get('shell')}` |")
+                            lines.append("")
+
+                    elif attack_type == "xss":
+                        lines.extend([
+                            f"#### 🌐 XSS Exploitation Evidence (Browser Context Proof)",
+                            f"",
+                            f"| Property | Value |",
+                            f"|---|---|",
+                            f"| **Payload Intact in DOM** | `{exploitation_data.get('payload_intact_in_dom', False)}` |",
+                            f"| **Session Hijack Risk** | `{exploitation_data.get('session_hijack_risk', 'N/A')}` |",
+                            f"| **Verified Payloads** | `{exploitation_data.get('verified_payloads_count', 0)}` |",
+                            f"",
+                        ])
+                        csp = exploitation_data.get("csp_analysis", {})
+                        if csp:
+                            csp_status = "ABSENT" if not csp.get("csp_present") else (
+                                "Allows unsafe-inline" if csp.get("allows_unsafe_inline") else "Enforced"
+                            )
+                            lines.extend([
+                                f"**CSP Analysis:**",
+                                f"- CSP Present: `{csp.get('csp_present', False)}`",
+                                f"- Status: `{csp_status}`",
+                                f"- XSS Blocked by CSP: `{csp.get('xss_blocked_by_csp', False)}`",
+                                f"",
+                            ])
+                        cookie = exploitation_data.get("cookie_analysis", {})
+                        if cookie and cookie.get("cookies_without_httponly"):
+                            lines.extend([
+                                f"**Cookie Security:**",
+                                f"- Cookies without HttpOnly: `{', '.join(cookie['cookies_without_httponly'])}`",
+                                f"- Session cookies accessible via JavaScript: **YES — session hijack possible**",
+                                f"",
+                            ])
+                        dom_context = exploitation_data.get("dom_context_sample", "")
+                        if dom_context:
+                            lines.extend([
+                                f"**DOM Context (payload reflection):**",
+                                f"```html",
+                                f"{dom_context[:500]}",
+                                f"```",
+                                f"",
+                            ])
+
+                    elif attack_type == "idor":
+                        lines.extend([
+                            f"#### 🔓 IDOR Exploitation Evidence (Multi-Object Access Proof)",
+                            f"",
+                            f"| Property | Value |",
+                            f"|---|---|",
+                            f"| **Total Objects Accessible** | `{exploitation_data.get('total_accessible', 0)}` |",
+                            f"| **Unique Objects** | `{exploitation_data.get('unique_objects', 0)}` |",
+                            f"| **Authorization Bypass** | `{exploitation_data.get('authorization_bypass_confirmed', False)}` |",
+                            f"| **Sensitive Fields Exposed** | `{', '.join(exploitation_data.get('sensitive_fields_exposed', []))}` |",
+                            f"",
+                        ])
+                        accessible = exploitation_data.get("accessible_objects", [])
+                        if accessible:
+                            lines.extend([
+                                f"**Accessed Objects:**",
+                                f"| Object ID | HTTP Status | Size | Sensitive Fields |",
+                                f"|---|---|---|---|",
+                            ])
+                            for obj in accessible[:5]:
+                                sens = ", ".join(obj.get("sensitive_fields", [])) or "—"
+                                lines.append(f"| `{obj.get('id')}` | {obj.get('status')} | {obj.get('content_length', '?')} bytes | {sens} |")
+                            lines.append("")
+
+                    elif attack_type in ("traversal", "path_traversal") and exploitation_data.get("files_read"):
+                        files_read = exploitation_data.get("files_read", {})
+                        lines.extend([
+                            f"#### 📂 Path Traversal / LFI Exploitation Evidence (File Read Proof)",
+                            f"",
+                            f"| Property | Value |",
+                            f"|---|---|",
+                            f"| **Exploitation Type** | `{exploitation_data.get('exploitation_type', 'local_file_inclusion')}` |",
+                            f"| **Files Read** | `{exploitation_data.get('files_read_count', len(files_read))}` |",
+                            f"| **OS Type** | `{exploitation_data.get('os_type', 'unknown')}` |",
+                            f"| **Hostname** | `{exploitation_data.get('hostname', 'N/A')}` |",
+                            f"| **Kernel** | `{exploitation_data.get('kernel', 'N/A')}` |",
+                            f"| **OS** | `{exploitation_data.get('os_pretty_name', 'N/A')}` |",
+                            f"| **Shadow Readable** | `{exploitation_data.get('shadow_accessible', False)}` |",
+                            f"",
+                        ])
+
+                        # /etc/passwd content
+                        passwd = exploitation_data.get("passwd_content", "")
+                        if passwd:
+                            lines.extend([
+                                f"**`/etc/passwd` ({exploitation_data.get('passwd_entries', '?')} entries):**",
+                                f"```",
+                                f"{passwd[:2500]}",
+                                f"```",
+                                f"",
+                            ])
+
+                        # Real users table
+                        real_users = exploitation_data.get("real_users", [])
+                        if real_users:
+                            lines.extend([
+                                f"**Real User Accounts (uid ≥ 1000):**",
+                                f"| Username | UID | GID | Home | Shell |",
+                                f"|---|---|---|---|---|",
+                            ])
+                            for u in real_users[:15]:
+                                lines.append(f"| `{u.get('username')}` | {u.get('uid')} | {u.get('gid', '?')} | `{u.get('home')}` | `{u.get('shell')}` |")
+                            lines.append("")
+
+                        # .env keys exposed
+                        env_keys = exploitation_data.get("env_keys_exposed", [])
+                        if env_keys:
+                            keys_str = ", ".join(f"`{k}`" for k in env_keys[:15])
+                            lines.extend([
+                                f"**⚠️ .env File Keys Exposed:**",
+                                f"{keys_str}",
+                                f"",
+                            ])
+
+                        # Files read summary
+                        if files_read:
+                            lines.extend([
+                                f"**Files Successfully Read:**",
+                                f"| File | Size |",
+                                f"|---|---|",
+                            ])
+                            for key, info in list(files_read.items())[:10]:
+                                lines.append(f"| `{info.get('file', key)}` | {info.get('size', '?')} bytes |")
+                            lines.append("")
+
                 # Remediation (§21)
                 lines.extend([
                     f"#### 6. Remediation & Engineering Fixes",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,6 +29,11 @@ async def lifespan(app: FastAPI):
     event_bus.set_persister(result_service.persist_event)
     # Connect EventBus to Redis (§9, §42) — falls back to in-memory if unavailable
     await event_bus.connect_redis(settings.redis_url)
+    
+    # Auto-resume pending/running scans on startup
+    from app.services.scan_manager import scan_manager
+    asyncio.create_task(scan_manager.resume_pending_scans())
+
     logger.info("Bug Hunter v%s started. DB ready.", settings.app_version)
     yield
     await event_bus.close()

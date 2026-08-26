@@ -47,6 +47,7 @@ from app.network.rdp import RdpAssessment
 from app.network.ssh import SshAssessment
 from app.network.tls import TlsAssessment
 from app.scanners.base import ScanContext
+from app.core.kill_switch import kill_switch_manager
 from app.scanners.http import extract_title, fetch_http
 from app.scanners.screenshot import ScreenshotEngine
 from app.services.results import result_service
@@ -661,7 +662,20 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
 
     if assets:
         await ctx.emit("scan.validate", f"Auditing sensitive file exposure and configuration leaks across {len(assets)} asset(s)...", stage="SENSITIVE_FILES")
-        asset_batch_results = await asyncio.gather(*[_audit_single_asset_sensitive_files(a) for a in assets], return_exceptions=True)
+        
+        # Batch assets to prevent resource starvation and descriptor leaks
+        batch_size = 15
+        asset_batch_results = []
+        for idx in range(0, len(assets), batch_size):
+            if kill_switch_manager.is_stopped(ctx.scan_id):
+                break
+            batch = assets[idx : idx + batch_size]
+            results = await asyncio.gather(
+                *[_audit_single_asset_sensitive_files(a) for a in batch],
+                return_exceptions=True
+            )
+            asset_batch_results.extend(results)
+
         for res_list in asset_batch_results:
             if isinstance(res_list, list):
                 for asset_id, target_host, norm_res, art_meta in res_list:
@@ -822,21 +836,33 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         return items_found
 
     if urls:
-        batch_audit_results = await asyncio.gather(*[_audit_single_url_for_secrets(u) for u in urls], return_exceptions=True)
-        for res_list in batch_audit_results:
-            if isinstance(res_list, list):
-                for asset_id, target_host, norm_res, art_meta in res_list:
-                    await _process_and_save_validated_finding(ctx, db, asset_id, target_host, norm_res)
-                    if art_meta:
-                        try:
-                            await ArtifactEngine.process_discovered_artifact(
-                                ctx=ctx,
-                                db=db,
-                                **art_meta,
-                            )
-                        except Exception as art_err:
-                            logger.debug("Artifact processing error: %s", art_err)
-        await db.commit()
+        # Process secrets audit in batches to avoid CPU/memory spikes and socket exhaustion
+        batch_size = 50
+        total_secrets_urls = len(urls)
+        for idx in range(0, total_secrets_urls, batch_size):
+            if kill_switch_manager.is_stopped(ctx.scan_id):
+                break
+            batch = urls[idx : idx + batch_size]
+            results = await asyncio.gather(
+                *[_audit_single_url_for_secrets(u) for u in batch],
+                return_exceptions=True
+            )
+            
+            # Save results immediately and clear to release memory
+            for res_list in results:
+                if isinstance(res_list, list):
+                    for asset_id, target_host, norm_res, art_meta in res_list:
+                        await _process_and_save_validated_finding(ctx, db, asset_id, target_host, norm_res)
+                        if art_meta:
+                            try:
+                                await ArtifactEngine.process_discovered_artifact(
+                                    ctx=ctx,
+                                    db=db,
+                                    **art_meta,
+                                )
+                            except Exception as art_err:
+                                logger.debug("Artifact processing error: %s", art_err)
+            await db.commit()
 
     # 3. Active Controlled Parameter Testing (§20-§22) with Bounded Async Concurrency
     if ctx.profile in ("standard", "deep", "custom", "full", "pentest", "adversary_simulation") and urls:
@@ -916,233 +942,352 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                 asset_obj = asset_map.get(u.asset_id)
                 target_host = asset_obj.hostname if asset_obj else root_domain
 
+                # Smart Parameter Heuristic Filtering & Routing
+                # Goal: Avoid scanning parameters like '?action=login' or '?submit=true' with 30 traversal payloads.
+                xss_sqli_params = []
+                traversal_params = []
+                ssrf_redirect_params = []
+                rce_params = []
+                idor_params = []
+
+                parsed_url = urlparse(u.url)
+                query_vals = parse_qs(parsed_url.query)
+
+                for p in param_dicts:
+                    p_name = p.get("name", "").lower()
+                    p_val = query_vals.get(p["name"], [""])[0].lower() if "name" in p else ""
+
+                    # Skip common static-like params to save requests
+                    if p_name in ("submit", "btn", "_csrf", "csrf_token", "hash", "timestamp", "date", "time"):
+                        continue
+
+                    # 1. SQLi & XSS Heuristic: Exclude only strict redirection URLs, test everything else
+                    if not any(k in p_name for k in ("redirect", "goto", "callback", "url_redirect")):
+                        xss_sqli_params.append(p)
+
+                    # 2. Path Traversal Heuristic
+                    if any(k in p_name for k in ("file", "path", "folder", "doc", "view", "template", "include", "dir", "load", "read", "download", "src", "source", "resource", "attachment", "filename", "filepath", "img", "image", "lang", "config", "log")):
+                        traversal_params.append(p)
+                    elif "/" in p_val or "\\" in p_val or "." in p_val:
+                        traversal_params.append(p)
+
+                    # 3. SSRF & Open Redirect Heuristic
+                    if any(k in p_name for k in ("url", "uri", "link", "href", "domain", "host", "src", "source", "callback", "webhook", "redirect", "dest", "destination", "goto", "target")):
+                        ssrf_redirect_params.append(p)
+                    elif p_val.startswith(("http://", "https://", "ftp://", "//")):
+                        ssrf_redirect_params.append(p)
+
+                    # 4. RCE Heuristic
+                    if any(k in p_name for k in ("cmd", "command", "exec", "run", "ping", "ip", "host", "shell", "query", "id", "code", "eval", "cli", "daemon")):
+                        rce_params.append(p)
+
+                    # 5. IDOR Heuristic (Check for numeric ID, UUID format, hashes, or common IDOR parameter names)
+                    is_uuid = bool(re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", p_val))
+                    is_numeric = p_val.isdigit()
+                    is_hash = bool(re.match(r"^[0-9a-fA-F]{32,64}$", p_val))
+                    is_idor_name = any(k in p_name for k in ("id", "user", "account", "order", "invoice", "doc", "profile", "member", "customer", "transaction", "payment", "file", "download", "post", "comment"))
+                    if is_numeric or is_uuid or is_hash or is_idor_name:
+                        idor_params.append(p)
+
+                # Active logs/telemetry to show filtered routing in action
+                logger.debug(
+                    "Param router on %s: SQLi/XSS=%d, LFI=%d, SSRF=%d, RCE=%d, IDOR=%d",
+                    u.path or u.url, len(xss_sqli_params), len(traversal_params),
+                    len(ssrf_redirect_params), len(rce_params), len(idor_params)
+                )
+
                 await ctx.emit(
                     "scan.validate",
-                    f"Testing {len(param_dicts)} parameter(s) on {u.path or u.url} for injection vectors...",
+                    f"Testing {len(param_dicts)} parameters on {u.path or u.url} (Routed: SQLi/XSS:{len(xss_sqli_params)} LFI:{len(traversal_params)} SSRF:{len(ssrf_redirect_params)} RCE:{len(rce_params)} IDOR:{len(idor_params)})...",
                     url=u.url,
                     stage="PARAM_TESTING",
                 )
 
                 # 3a. XSS Validation
-                try:
-                    xss_cands = await xss_validator.validate_url(u.url, param_dicts)
-                    for cand in xss_cands:
-                        # Reject pure observations without unescaped execution or dangerous context
-                        if cand.confidence == "OBSERVED" and not cand.payload_executed and not cand.unescaped:
-                            continue
+                if xss_sqli_params:
+                    try:
+                        xss_cands = await xss_validator.validate_url(u.url, xss_sqli_params)
+                        for cand in xss_cands:
+                            # Reject pure observations without unescaped execution or dangerous context
+                            if cand.confidence == "OBSERVED" and not cand.payload_executed and not cand.unescaped:
+                                continue
 
-                        if cand.payload_executed:
-                            sev = "HIGH"
-                            ev_level = "E3"
-                            title = f"Cross-Site Scripting (XSS) Confirmed on '{cand.parameter}' ({cand.technique})"
-                        elif cand.unescaped:
-                            sev = "MEDIUM"
-                            ev_level = "E2"
-                            title = f"Unescaped HTML Reflection on '{cand.parameter}' ({cand.context}, {cand.technique})"
-                        else:
-                            sev = "LOW"
-                            ev_level = "E1"
-                            title = f"Potential Input Reflection in {cand.context} on '{cand.parameter}'"
+                            if cand.payload_executed:
+                                sev = "HIGH"
+                                ev_level = "E3"
+                                title = f"Cross-Site Scripting (XSS) Confirmed on '{cand.parameter}' ({cand.technique})"
+                            elif cand.unescaped:
+                                sev = "MEDIUM"
+                                ev_level = "E2"
+                                title = f"Unescaped HTML Reflection on '{cand.parameter}' ({cand.context}, {cand.technique})"
+                            else:
+                                sev = "LOW"
+                                ev_level = "E1"
+                                title = f"Potential Input Reflection in {cand.context} on '{cand.parameter}'"
 
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="xss_validator",
-                            vulnerability_type="xss_reflection",
-                            title=title,
-                            severity=sev,
-                            confidence=cand.confidence,
-                            evidence_level=cand.evidence.get("evidence_level") or ev_level,
-                            target_host=target_host,
-                            endpoint_url=u.url,
-                            parameter=cand.parameter,
-                            cwe_id="CWE-79",
-                            description=f"Parameter '{cand.parameter}' {'executes injected script' if cand.payload_executed else 'reflects input unescaped'} in HTML context '{cand.context}' ({cand.technique}).",
-                            impact_matrix=cand.impact_matrix if cand.impact_matrix else {"confidentiality": "MEDIUM", "integrity": "MEDIUM", "availability": "LOW"},
-                            remediation="Apply contextual HTML entity encoding before reflecting user input. Implement Content-Security-Policy header.",
-                            poc_payload=cand.poc_curl or cand.evidence.get("payload", u.url) if isinstance(cand.evidence, dict) else u.url,
-                            reproduction_steps=cand.reproduction_steps,
-                            request_metadata={"url": u.url, "parameter": cand.parameter},
-                            response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("XSS validation error on %s: %s", u.url, exc)
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="xss_validator",
+                                vulnerability_type="xss_reflection",
+                                title=title,
+                                severity=sev,
+                                confidence=cand.confidence,
+                                evidence_level=cand.evidence.get("evidence_level") or ev_level,
+                                target_host=target_host,
+                                endpoint_url=u.url,
+                                parameter=cand.parameter,
+                                cwe_id="CWE-79",
+                                description=f"Parameter '{cand.parameter}' {'executes injected script' if cand.payload_executed else 'reflects input unescaped'} in HTML context '{cand.context}' ({cand.technique}).",
+                                impact_matrix=cand.impact_matrix if cand.impact_matrix else {"confidentiality": "MEDIUM", "integrity": "MEDIUM", "availability": "LOW"},
+                                remediation="Apply contextual HTML entity encoding before reflecting user input. Implement Content-Security-Policy header.",
+                                poc_payload=cand.poc_curl or cand.evidence.get("payload", u.url) if isinstance(cand.evidence, dict) else u.url,
+                                reproduction_steps=cand.reproduction_steps,
+                                request_metadata={"url": u.url, "parameter": cand.parameter},
+                                response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
+                                exploitation_data=getattr(cand, 'exploitation_data', {}) or {},
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("XSS validation error on %s: %s", u.url, exc)
 
                 # 3b. SQL Injection Deep Validation
-                try:
-                    sqli_cands = await sqli_validator.validate_url(u.url, param_dicts)
-                    for cand in sqli_cands:
-                        db_info = f" [DB: {cand.db_engine}" + (f" v{cand.db_version}" if cand.db_version else "") + "]"
-                        col_info = f" [{cand.column_count} columns]" if cand.column_count > 0 else ""
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="sqli_validator",
-                            vulnerability_type="sql_injection",
-                            title=f"SQL Injection on '{cand.parameter}' ({cand.technique}){db_info}{col_info}",
-                            severity="CRITICAL" if cand.column_count > 0 else "HIGH",
-                            confidence=cand.confidence,
-                            evidence_level="E3" if cand.confidence == "CONFIRMED" or cand.column_count > 0 else "E2",
-                            target_host=target_host,
-                            endpoint_url=u.url,
-                            parameter=cand.parameter,
-                            cwe_id="CWE-89",
-                            description=f"Parameter '{cand.parameter}' confirmed SQL injection ({cand.technique}-based). Database: {cand.db_engine}{(' v' + cand.db_version) if cand.db_version else ''}.{(' UNION column count: ' + str(cand.column_count)) if cand.column_count else ''}",
-                            impact_matrix=cand.impact_matrix or {"confidentiality": "HIGH", "integrity": "HIGH", "availability": "MEDIUM", "data_exposure": "HIGH"},
-                            remediation="Use parameterized queries / prepared statements for all database interactions.",
-                            poc_command=cand.poc_curl,
-                            poc_payload=cand.evidence.get("probe", "") if isinstance(cand.evidence, dict) else "",
-                            reproduction_steps=cand.reproduction_steps,
-                            request_metadata={"url": u.url, "parameter": cand.parameter, "db_engine": cand.db_engine},
-                            response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("SQLi validation error on %s: %s", u.url, exc)
+                if xss_sqli_params:
+                    try:
+                        sqli_cands = await sqli_validator.validate_url(u.url, xss_sqli_params)
+                        for cand in sqli_cands:
+                            db_info = f" [DB: {cand.db_engine}" + (f" v{cand.db_version}" if cand.db_version else "") + "]"
+                            col_info = f" [{cand.column_count} columns]" if cand.column_count > 0 else ""
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="sqli_validator",
+                                vulnerability_type="sql_injection",
+                                title=f"SQL Injection on '{cand.parameter}' ({cand.technique}){db_info}{col_info}",
+                                severity="CRITICAL" if cand.column_count > 0 or getattr(cand, 'exploitation_data', {}) else "HIGH",
+                                confidence=cand.confidence,
+                                evidence_level="E4" if getattr(cand, 'exploitation_data', {}) else ("E3" if cand.confidence == "CONFIRMED" or cand.column_count > 0 else "E2"),
+                                target_host=target_host,
+                                endpoint_url=u.url,
+                                parameter=cand.parameter,
+                                cwe_id="CWE-89",
+                                description=f"Parameter '{cand.parameter}' confirmed SQL injection ({cand.technique}-based). Database: {cand.db_engine}{(' v' + cand.db_version) if cand.db_version else ''}.{(' UNION column count: ' + str(cand.column_count)) if cand.column_count else ''}",
+                                impact_matrix=cand.impact_matrix or {"confidentiality": "HIGH", "integrity": "HIGH", "availability": "MEDIUM", "data_exposure": "HIGH"},
+                                remediation="Use parameterized queries / prepared statements for all database interactions.",
+                                poc_command=cand.poc_curl,
+                                poc_payload=cand.evidence.get("probe", "") if isinstance(cand.evidence, dict) else "",
+                                reproduction_steps=cand.reproduction_steps,
+                                request_metadata={"url": u.url, "parameter": cand.parameter, "db_engine": cand.db_engine},
+                                response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
+                                exploitation_data=getattr(cand, 'exploitation_data', {}) or {},
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("SQLi validation error on %s: %s", u.url, exc)
 
                 # 3c. SSRF Probes
-                try:
-                    ssrf_cands = await ssrf_validator.validate_url(u.url, param_dicts)
-                    for cand in ssrf_cands:
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="ssrf_validator",
-                            vulnerability_type="ssrf",
-                            title=f"Server-Side Request Forgery (SSRF) on '{cand.parameter}'",
-                            severity="HIGH",
-                            confidence=cand.confidence,
-                            evidence_level="E3" if cand.confidence == "CONFIRMED" else "E2",
-                            target_host=target_host,
-                            endpoint_url=cand.url,
-                            parameter=cand.parameter,
-                            cwe_id="CWE-918",
-                            description=f"Parameter '{cand.parameter}' executed server-side request with probe '{cand.probe}'. Internal/loopback response confirmed.",
-                            impact_matrix={"confidentiality": "HIGH", "integrity": "MEDIUM", "availability": "LOW"},
-                            remediation="Validate URL scheme and host against strict whitelist. Reject private IP ranges.",
-                            poc_payload=cand.probe,
-                            poc_command=getattr(cand, "poc_curl", f"curl -i -s -k '{cand.url}'"),
-                            reproduction_steps=getattr(cand, "reproduction_steps", [f"Send request to {cand.url} with probe {cand.probe}"]),
-                            request_metadata={"url": cand.url, "parameter": cand.parameter, "probe": cand.probe},
-                            response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("SSRF validation error on %s: %s", u.url, exc)
+                if ssrf_redirect_params:
+                    try:
+                        ssrf_cands = await ssrf_validator.validate_url(u.url, ssrf_redirect_params)
+                        for cand in ssrf_cands:
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="ssrf_validator",
+                                vulnerability_type="ssrf",
+                                title=f"Server-Side Request Forgery (SSRF) on '{cand.parameter}'",
+                                severity="HIGH",
+                                confidence=cand.confidence,
+                                evidence_level="E3" if cand.confidence == "CONFIRMED" else "E2",
+                                target_host=target_host,
+                                endpoint_url=cand.url,
+                                parameter=cand.parameter,
+                                cwe_id="CWE-918",
+                                description=f"Parameter '{cand.parameter}' executed server-side request with probe '{cand.probe}'. Internal/loopback response confirmed.",
+                                impact_matrix={"confidentiality": "HIGH", "integrity": "MEDIUM", "availability": "LOW"},
+                                remediation="Validate URL scheme and host against strict whitelist. Reject private IP ranges.",
+                                poc_payload=cand.probe,
+                                poc_command=getattr(cand, "poc_curl", f"curl -i -s -k '{cand.url}'"),
+                                reproduction_steps=getattr(cand, "reproduction_steps", [f"Send request to {cand.url} with probe {cand.probe}"]),
+                                request_metadata={"url": cand.url, "parameter": cand.parameter, "probe": cand.probe},
+                                response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("SSRF validation error on %s: %s", u.url, exc)
 
-                # 3d. Path Traversal Probes
-                try:
-                    trav_cands = await path_traversal_validator.validate_url(u.url, param_dicts)
-                    for cand in trav_cands:
-                        cand_payload = cand.evidence.get("payload", "../../../../etc/passwd") if isinstance(getattr(cand, "evidence", None), dict) else "../../../../etc/passwd"
-                        cand_poc = cand.evidence.get("poc_curl") if isinstance(getattr(cand, "evidence", None), dict) else None
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="path_traversal_validator",
-                            vulnerability_type="path_traversal",
-                            title=f"Path Traversal on Parameter '{cand.parameter}'",
-                            severity="HIGH",
-                            confidence=cand.confidence,
-                            evidence_level="E3",
-                            target_host=target_host,
-                            endpoint_url=getattr(cand, "url", u.url),
-                            parameter=cand.parameter,
-                            cwe_id="CWE-22",
-                            description=f"Parameter '{cand.parameter}' returned system file contents during directory traversal probing.",
-                            impact_matrix={"confidentiality": "HIGH", "integrity": "LOW", "availability": "LOW", "data_exposure": "HIGH"},
-                            remediation="Implement path canonicalization and avoid direct filesystem path construction from parameters.",
-                            poc_payload=cand_payload,
-                            poc_command=cand_poc or f"curl -i -s -k '{getattr(cand, 'url', u.url)}'",
-                            request_metadata={"url": getattr(cand, "url", u.url), "parameter": cand.parameter, "payload": cand_payload},
-                            response_metadata=cand.evidence if isinstance(getattr(cand, "evidence", None), dict) else {},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("Path traversal validation error on %s: %s", u.url, exc)
+                # 3d. Path Traversal / LFI Probes (Nuclei-grade)
+                if traversal_params:
+                    try:
+                        trav_cands = await path_traversal_validator.validate_url(u.url, traversal_params)
+                        for cand in trav_cands:
+                            cand_payload = cand.evidence.get("payload", cand.probe) if isinstance(getattr(cand, "evidence", None), dict) else cand.probe
+                            cand_poc = getattr(cand, "poc_curl", "") or (cand.evidence.get("poc_curl") if isinstance(getattr(cand, "evidence", None), dict) else None)
+                            expl_data = getattr(cand, "exploitation_data", {}) or {}
+                            has_deep = bool(expl_data.get("files_read"))
+                            files_count = expl_data.get("files_read_count", 0)
+                            target_file = getattr(cand, "target_file", "/etc/passwd")
+                            technique = getattr(cand, "technique", "standard")
+
+                            if has_deep:
+                                sev = "CRITICAL"
+                                ev_level = "E4"
+                                title = f"Path Traversal / LFI — {files_count} Files Read ({cand.parameter}, {technique})"
+                                desc = f"Parameter '{cand.parameter}' allows arbitrary file read. Confirmed {target_file} + {files_count} additional files via {technique} technique."
+                            else:
+                                sev = "HIGH"
+                                ev_level = "E3"
+                                title = f"Path Traversal on '{cand.parameter}' ({technique})"
+                                desc = f"Parameter '{cand.parameter}' returned {target_file} contents during directory traversal probing."
+
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="path_traversal_validator",
+                                vulnerability_type="path_traversal",
+                                title=title,
+                                severity=sev,
+                                confidence=cand.confidence,
+                                evidence_level=ev_level,
+                                target_host=target_host,
+                                endpoint_url=getattr(cand, "url", u.url),
+                                parameter=cand.parameter,
+                                cwe_id="CWE-22",
+                                description=desc,
+                                impact_matrix=getattr(cand, "impact_matrix", {}) or {"confidentiality": "HIGH", "integrity": "LOW", "availability": "LOW", "data_exposure": "HIGH"},
+                                remediation="Implement path canonicalization, whitelist allowed filenames, and avoid direct filesystem path construction from parameters.",
+                                poc_payload=cand_payload,
+                                poc_command=cand_poc or f"curl -ksSL '{getattr(cand, 'url', u.url)}'",
+                                reproduction_steps=getattr(cand, "reproduction_steps", []),
+                                request_metadata={"url": getattr(cand, "url", u.url), "parameter": cand.parameter, "payload": cand_payload, "technique": technique},
+                                response_metadata=cand.evidence if isinstance(getattr(cand, "evidence", None), dict) else {},
+                                exploitation_data=expl_data,
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("Path traversal validation error on %s: %s", u.url, exc)
 
                 # 3e. Open Redirect Probes
-                try:
-                    redir_cands = await open_redirect_validator.validate_url(u.url, param_dicts)
-                    for cand in redir_cands:
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="open_redirect_validator",
-                            vulnerability_type="open_redirect",
-                            title=f"Open Redirect on Parameter '{cand.parameter}'",
-                            severity="MEDIUM",
-                            confidence=cand.confidence,
-                            evidence_level="E2",
-                            target_host=target_host,
-                            endpoint_url=u.url,
-                            parameter=cand.parameter,
-                            cwe_id="CWE-601",
-                            description=f"Parameter '{cand.parameter}' allows redirection to external domain ({cand.redirect_target}).",
-                            impact_matrix={"confidentiality": "LOW", "integrity": "MEDIUM", "availability": "LOW"},
-                            remediation="Use relative path redirects or strict domain whitelist.",
-                            poc_payload=cand.evidence.get("poc_url") if isinstance(cand.evidence, dict) else u.url,
-                            request_metadata={"url": u.url, "parameter": cand.parameter},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("Open redirect validation error on %s: %s", u.url, exc)
+                if ssrf_redirect_params:
+                    try:
+                        redir_cands = await open_redirect_validator.validate_url(u.url, ssrf_redirect_params)
+                        for cand in redir_cands:
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="open_redirect_validator",
+                                vulnerability_type="open_redirect",
+                                title=f"Open Redirect on Parameter '{cand.parameter}'",
+                                severity="MEDIUM",
+                                confidence=cand.confidence,
+                                evidence_level="E2",
+                                target_host=target_host,
+                                endpoint_url=u.url,
+                                parameter=cand.parameter,
+                                cwe_id="CWE-601",
+                                description=f"Parameter '{cand.parameter}' allows redirection to external domain ({cand.redirect_target}).",
+                                impact_matrix={"confidentiality": "LOW", "integrity": "MEDIUM", "availability": "LOW"},
+                                remediation="Use relative path redirects or strict domain whitelist.",
+                                poc_payload=cand.evidence.get("poc_url") if isinstance(cand.evidence, dict) else u.url,
+                                request_metadata={"url": u.url, "parameter": cand.parameter},
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("Open redirect validation error on %s: %s", u.url, exc)
 
                 # 3f. RCE / Command Injection Probes
-                try:
-                    rce_cands = await rce_validator.validate_url(u.url, param_dicts)
-                    for cand in rce_cands:
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="rce_validator",
-                            vulnerability_type="command_injection",
-                            title=f"Command Injection on '{cand.parameter}' ({cand.technique}, {cand.os_type})",
-                            severity="CRITICAL",
-                            confidence=cand.confidence,
-                            evidence_level="E3" if cand.confidence == "CONFIRMED" else "E2",
-                            target_host=target_host,
-                            endpoint_url=u.url,
-                            parameter=cand.parameter,
-                            cwe_id="CWE-78",
-                            description=f"Parameter '{cand.parameter}' allows OS command injection via {cand.technique}. OS: {cand.os_type}. Canary token confirmed.",
-                            impact_matrix={"confidentiality": "CRITICAL", "integrity": "CRITICAL", "availability": "CRITICAL", "data_exposure": "CRITICAL"},
-                            remediation="Never pass user input directly to shell commands. Use safe APIs and input validation.",
-                            poc_command=cand.evidence.get("poc_curl", "") if isinstance(cand.evidence, dict) else "",
-                            poc_payload=cand.evidence.get("probe", "") if isinstance(cand.evidence, dict) else "",
-                            request_metadata={"url": u.url, "parameter": cand.parameter, "os_type": cand.os_type},
-                            response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("RCE validation error on %s: %s", u.url, exc)
+                if rce_params:
+                    try:
+                        rce_cands = await rce_validator.validate_url(u.url, rce_params)
+                        for cand in rce_cands:
+                            rce_expl = getattr(cand, 'exploitation_data', {}) or {}
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="rce_validator",
+                                vulnerability_type="command_injection",
+                                title=f"Command Injection on '{cand.parameter}' ({cand.technique}, {cand.os_type})",
+                                severity="CRITICAL",
+                                confidence=cand.confidence,
+                                evidence_level="E4" if rce_expl else ("E3" if cand.confidence == "CONFIRMED" else "E2"),
+                                target_host=target_host,
+                                endpoint_url=u.url,
+                                parameter=cand.parameter,
+                                cwe_id="CWE-78",
+                                description=f"Parameter '{cand.parameter}' allows OS command injection via {cand.technique}. OS: {cand.os_type}. Canary token confirmed.",
+                                impact_matrix={"confidentiality": "CRITICAL", "integrity": "CRITICAL", "availability": "CRITICAL", "data_exposure": "CRITICAL"},
+                                remediation="Never pass user input directly to shell commands. Use safe APIs and input validation.",
+                                poc_command=cand.evidence.get("poc_curl", "") if isinstance(cand.evidence, dict) else "",
+                                poc_payload=cand.evidence.get("probe", "") if isinstance(cand.evidence, dict) else "",
+                                request_metadata={"url": u.url, "parameter": cand.parameter, "os_type": cand.os_type},
+                                response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
+                                exploitation_data=rce_expl,
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("RCE validation error on %s: %s", u.url, exc)
 
                 # 3g. IDOR / Broken Access Control
-                try:
-                    idor_cands = await idor_validator.validate_url(u.url, param_dicts)
-                    for cand in idor_cands:
-                        norm_res = NormalizedValidationResult(
-                            adapter_name="idor_validator",
-                            vulnerability_type="broken_access_control",
-                            title=f"IDOR on '{cand.parameter}' (ID {cand.original_value} → {cand.modified_value})",
-                            severity="HIGH",
-                            confidence=cand.confidence,
-                            evidence_level="E2",
-                            target_host=target_host,
-                            endpoint_url=u.url,
-                            parameter=cand.parameter,
-                            cwe_id="CWE-639",
-                            description=f"Parameter '{cand.parameter}' allows access to different objects by modifying ID. Technique: {cand.technique}.",
-                            impact_matrix={"confidentiality": "HIGH", "integrity": "MEDIUM", "availability": "LOW", "data_exposure": "HIGH"},
-                            remediation="Implement server-side ownership checks and authorization on all resource lookups.",
-                            poc_command=cand.evidence.get("poc_curl", "") if isinstance(cand.evidence, dict) else "",
-                            request_metadata={"url": u.url, "parameter": cand.parameter},
-                            response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
-                        )
-                        collected.append((u.asset_id, target_host, norm_res))
-                except Exception as exc:
-                    logger.debug("IDOR validation error on %s: %s", u.url, exc)
+                if idor_params:
+                    try:
+                        idor_cands = await idor_validator.validate_url(u.url, idor_params)
+                        for cand in idor_cands:
+                            idor_expl = getattr(cand, 'exploitation_data', {}) or {}
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="idor_validator",
+                                vulnerability_type="broken_access_control",
+                                title=f"IDOR on '{cand.parameter}' (ID {cand.original_value} → {cand.modified_value})",
+                                severity="CRITICAL" if idor_expl.get('sensitive_fields_exposed') else "HIGH",
+                                confidence=cand.confidence,
+                                evidence_level="E4" if idor_expl else "E2",
+                                target_host=target_host,
+                                endpoint_url=u.url,
+                                parameter=cand.parameter,
+                                cwe_id="CWE-639",
+                                description=f"Parameter '{cand.parameter}' allows access to different objects by modifying ID. Technique: {cand.technique}.",
+                                impact_matrix={"confidentiality": "HIGH", "integrity": "MEDIUM", "availability": "LOW", "data_exposure": "HIGH"},
+                                remediation="Implement server-side ownership checks and authorization on all resource lookups.",
+                                poc_command=cand.evidence.get("poc_curl", "") if isinstance(cand.evidence, dict) else "",
+                                request_metadata={"url": u.url, "parameter": cand.parameter},
+                                response_metadata=cand.evidence if isinstance(cand.evidence, dict) else {},
+                                exploitation_data=idor_expl,
+                            )
+                            collected.append((u.asset_id, target_host, norm_res))
+                    except Exception as exc:
+                        logger.debug("IDOR validation error on %s: %s", u.url, exc)
 
             return collected
 
-        url_tasks = [_validate_single_url(u, params_by_url.get(u.id, [])) for u in target_urls]
-        batch_results = await asyncio.gather(*url_tasks, return_exceptions=True)
+        # Process target URLs in small batches to prevent starvation, support live progress updates, and check timeouts/cancellations
+        batch_size = 10
+        total_urls = len(target_urls)
+        
+        for idx in range(0, total_urls, batch_size):
+            # Check if cancelled
+            if kill_switch_manager.is_stopped(ctx.scan_id):
+                logger.info("Scan cancelled during security validation phase.")
+                await ctx.emit("scan.validate", "Security validation cancelled by operator.", severity="warn")
+                break
+                
+            batch = target_urls[idx : idx + batch_size]
+            await ctx.emit(
+                "scan.validate",
+                f"Testing injection vectors: batch {idx // batch_size + 1}/{(total_urls + batch_size - 1) // batch_size} ({idx}/{total_urls} URLs completed)...",
+                stage="PARAM_VALIDATION",
+            )
+            
+            # Wrap each URL task in a strict timeout to prevent any hanging validator from blocking the entire pipeline
+            async def _validate_with_timeout(u: URL, p_list: list[dict[str, str]]) -> list:
+                try:
+                    return await asyncio.wait_for(
+                        _validate_single_url(u, p_list),
+                        timeout=90.0  # 90 seconds max per URL endpoint validation
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout validating URL: %s", u.url)
+                    await ctx.emit("scan.validate", f"Validation timed out for {u.url} (skipped)", severity="warn")
+                    return []
+                except Exception as e:
+                    logger.error("Error during validation of URL %s: %s", u.url, e)
+                    return []
 
-        for res in batch_results:
-            if isinstance(res, list):
-                for asset_id, target_host, norm_res in res:
-                    await _process_and_save_validated_finding(ctx, db, asset_id, target_host, norm_res)
-
-        await db.commit()
+            url_tasks = [_validate_with_timeout(u, params_by_url.get(u.id, [])) for u in batch]
+            batch_results = await asyncio.gather(*url_tasks, return_exceptions=True)
+            
+            for res in batch_results:
+                if isinstance(res, list):
+                    for asset_id, target_host, norm_res in res:
+                        await _process_and_save_validated_finding(ctx, db, asset_id, target_host, norm_res)
+            
+            await db.commit()
 
     # 4. Technology to CVE Intelligence (Observations only — V5 §23, §24, §40 Zero False Positive Rule)
     techs = (await db.execute(

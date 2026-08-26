@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import re
+import httpx
 from typing import Any, List, Tuple
 
 from sqlalchemy import select
@@ -13,6 +15,69 @@ from app.scanners.base import ScanContext
 from app.services.results import result_service
 
 logger = logging.getLogger("scanner.dns")
+
+
+TAKEOVER_SIGNATURES = [
+    {
+        "service": "GitHub Pages",
+        "cname_pattern": r"\.github\.io$",
+        "body_patterns": ["There isn't a GitHub Pages site here", "404 Not Found"],
+        "severity": "HIGH",
+    },
+    {
+        "service": "AWS S3",
+        "cname_pattern": r"s3(-website)?\..*amazonaws\.com$",
+        "body_patterns": ["The specified bucket does not exist", "NoSuchBucket", "AccessDenied"],
+        "severity": "HIGH",
+    },
+    {
+        "service": "Heroku",
+        "cname_pattern": r"\.herokudns\.com$|\.herokuapp\.com$",
+        "body_patterns": ["no such app", "herokucdn.com/error-pages/no-such-app.html", "No such app"],
+        "severity": "HIGH",
+    },
+    {
+        "service": "Shopify",
+        "cname_pattern": r"\.myshopify\.com$",
+        "body_patterns": ["Sorry, this shop is currently unavailable", "Only one step left", "no-such-shop"],
+        "severity": "HIGH",
+    },
+    {
+        "service": "Zendesk",
+        "cname_pattern": r"\.zendesk\.com$",
+        "body_patterns": ["Help Center Closed", "no such subdomain", "No such Zendesk account"],
+        "severity": "HIGH",
+    },
+    {
+        "service": "Ghost",
+        "cname_pattern": r"\.ghost\.io$",
+        "body_patterns": ["The thing you were looking for is no longer here", "Ghost.io - No such blog"],
+        "severity": "HIGH",
+    },
+]
+
+
+async def check_subdomain_takeover(hostname: str, cname: str) -> dict | None:
+    """Probes the CNAME host to confirm if a service subdomain takeover is possible."""
+    for sig in TAKEOVER_SIGNATURES:
+        if re.search(sig["cname_pattern"], cname, re.I):
+            for scheme in ("https", "http"):
+                try:
+                    async with httpx.AsyncClient(timeout=6.0, verify=False, follow_redirects=True) as client:
+                        resp = await client.get(f"{scheme}://{hostname}")
+                        body_text = resp.text
+                        for body_pat in sig["body_patterns"]:
+                            if body_pat in body_text:
+                                return {
+                                    "service": sig["service"],
+                                    "cname": cname,
+                                    "severity": sig["severity"],
+                                    "evidence": body_pat,
+                                    "url": f"{scheme}://{hostname}",
+                                }
+                except Exception:
+                    pass
+    return None
 
 
 async def _resolve_socket(host: str) -> list[str]:
@@ -112,6 +177,49 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                     cname=cname,
                     asset_id=asset.id,
                     severity="info",
+                )
+            
+            # Active Subdomain Takeover Validation
+            takeover_res = await check_subdomain_takeover(asset.hostname, cname)
+            if takeover_res:
+                desc = (
+                    f"Subdomain {asset.hostname} points via CNAME to {cname}, which appears "
+                    f"to be an unused/abandoned {takeover_res['service']} page. This allows "
+                    f"an attacker to claim the subdomain and host malicious content."
+                )
+                remed = (
+                    f"Remove the CNAME DNS record pointing to {cname} from your DNS zone editor, "
+                    f"or register the domain inside {takeover_res['service']} under your control."
+                )
+                
+                await ctx.emit(
+                    "finding.created",
+                    f"[HIGH] Subdomain Takeover on {asset.hostname} (Service: {takeover_res['service']}) (Evidence: E3, Score: 85/100)",
+                    title=f"Subdomain Takeover on {asset.hostname}",
+                    severity="HIGH",
+                    url=takeover_res["url"],
+                    asset_id=asset.id,
+                    evidence_level="E3",
+                    evidence_score=85,
+                    confidence="CONFIRMED",
+                )
+                
+                await result_service.upsert_finding(
+                    db,
+                    scan_id=ctx.scan_id,
+                    asset_id=asset.id,
+                    finding_type="subdomain_takeover",
+                    title=f"Subdomain Takeover on {asset.hostname}",
+                    severity="HIGH",
+                    confidence="CONFIRMED",
+                    cwe_id="CWE-15",
+                    description=desc,
+                    impact="Allows full session hijacking, phishing campaigns, cookie theft, and brand defacement under the target domain.",
+                    remediation=remed,
+                    technical_details=f"CNAME points to: {cname}\nResponse Signature Matched: {takeover_res['evidence']}\nVerified URL: {takeover_res['url']}",
+                    evidence_level="E3",
+                    evidence_score=85,
+                    evidence={"cname": cname, "service": takeover_res["service"], "url": takeover_res["url"], "matched_signature": takeover_res["evidence"]},
                 )
 
         # Update Asset metadata & IP

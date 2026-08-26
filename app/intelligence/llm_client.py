@@ -125,7 +125,9 @@ class LLMClient:
 
     @property
     def is_configured(self) -> bool:
-        """Checks if API key or local endpoint is configured."""
+        """Checks if LLM is enabled and API key or local endpoint is configured."""
+        if not settings.llm_enabled:
+            return False
         if "localhost" in self.base_url or "127.0.0.1" in self.base_url:
             return True
         return bool(self.api_key and len(self.api_key) > 4)

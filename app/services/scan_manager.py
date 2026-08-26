@@ -167,6 +167,17 @@ class ScanManager:
         task = asyncio.create_task(self._pipeline(scan_id, root_domain, profile, options))
         self._running[scan_id] = task
 
+    async def resume_pending_scans(self) -> None:
+        """Startup handler to rehydrate and resume running/queued scans."""
+        async with async_session_scope() as db:
+            pending_scans = (await db.execute(
+                select(Scan).where(Scan.status.in_(["running", "queued"]))
+            )).scalars().all()
+            
+            for scan in pending_scans:
+                logger.info("Resuming pending/interrupted scan %s for %s", scan.id, scan.root_domain)
+                self._run(scan.id, scan.root_domain, scan.profile, scan.options)
+
     async def pause(self, scan_id: str) -> None:
         ev = self._pause_events.get(scan_id)
         if ev:
@@ -223,6 +234,31 @@ class ScanManager:
 
         start_time = time.time()
         try:
+            # Rehydrate from checkpoint if present
+            async with async_session_scope() as db:
+                scan_rec = await db.get(Scan, scan_id)
+                if scan_rec and scan_rec.checkpoint:
+                    cp = scan_rec.checkpoint
+                    if "opportunities" in cp:
+                        from app.orchestration.attack_opportunity import AttackOpportunity, opportunity_bus
+                        # Rehydrate seen fingerprints
+                        for fp in cp.get("seen_fingerprints", []):
+                            opportunity_bus._seen_fingerprints.add(fp)
+                        
+                        # Rehydrate opportunities
+                        count_rehydrated = 0
+                        for opp_dict in cp["opportunities"]:
+                            opp = AttackOpportunity.from_dict(opp_dict)
+                            if opp.id not in opportunity_bus._opportunities:
+                                await opportunity_bus.publish(opp)
+                                count_rehydrated += 1
+                        if count_rehydrated > 0:
+                            await ctx.emit(
+                                "scan.rehydrated",
+                                f"Rehydrated {count_rehydrated} opportunities from checkpoint.",
+                                severity="info"
+                            )
+
             from app.core.security_engine import security_engine
             from app.models.application_model import EntityType
 
@@ -239,7 +275,7 @@ class ScanManager:
                 scan_id, "scan.running", f"Pipeline running for {root_domain}", severity="info"))
 
             # Initialize stateful session context & continuous validation loop
-            session_ctx = SessionContext(base_url=f"http://{root_domain}")
+            session_ctx = SessionContext(base_url=f"http://{root_domain}", rate_limiter=ctx.rate_limiter)
             val_stop_event = asyncio.Event()
             val_worker_task = asyncio.create_task(
                 self._run_continuous_validation_worker(ctx, scan_id, root_domain, session_ctx, val_stop_event)
@@ -591,6 +627,32 @@ class ScanManager:
         if count >= settings.max_assets_per_scan:
             raise RuntimeError("Max assets limit reached")
 
+        # Persistent Checkpointing: serialize active opportunity bus state to database Scan entity
+        try:
+            from app.orchestration.attack_opportunity import opportunity_bus, OpportunityState
+            from app.models.models import Scan
+            scan = await db.get(Scan, ctx.scan_id)
+            if scan:
+                # Only checkpoint active/pending opportunities to save RAM/CPU and reduce DB write size
+                active_states = {OpportunityState.QUEUED, OpportunityState.SUSPECTED, OpportunityState.VALIDATING}
+                opps_to_save = [
+                    opp.to_dict() for opp in opportunity_bus.get_all_opportunities()
+                    if opp.state in active_states
+                ]
+                # Cap the checkpoint sizes to prevent SQLite write locking under high load
+                opps_to_save = sorted(opps_to_save, key=lambda x: x.get("priority", 50), reverse=True)[:300]
+                
+                scan.checkpoint = {
+                    "timestamp": time.time(),
+                    "elapsed_seconds": time.time() - start_time,
+                    "opportunities": opps_to_save,
+                    "seen_fingerprints": list(opportunity_bus._seen_fingerprints)[:1000],
+                }
+                await db.commit()
+                logger.info("Scan checkpoint persisted successfully for scan %s (%d active opportunities).", ctx.scan_id, len(opps_to_save))
+        except Exception as err:
+            logger.warning("Failed to persist scan checkpoint: %s", err)
+
     async def _set_status(self, scan_id: str, status: str, started_at: bool = False) -> None:
         async with async_session_scope() as db:
             scan = await db.get(Scan, scan_id)
@@ -703,6 +765,17 @@ class ScanManager:
                         asset_id = asset.id if asset else None
                         finding_type = f"{opp.attack_type}_vulnerability"
 
+                        # Determine evidence level based on exploitation depth
+                        expl_data = getattr(res, 'exploitation_data', {}) or {}
+                        has_deep_proof = bool(expl_data)
+                        ev_level = "E4" if has_deep_proof else "E3"
+                        ev_score = 95 if has_deep_proof else 90
+
+                        # Merge exploitation_data into evidence package
+                        evidence_dict = ev_pkg.to_dict()
+                        if expl_data:
+                            evidence_dict["exploitation_data"] = expl_data
+
                         await result_service.upsert_finding(
                             db,
                             scan_id=scan_id,
@@ -717,11 +790,11 @@ class ScanManager:
                             impact=risk.impact,
                             technical_details=f"PoC: {res.poc_curl}\n\nEvidence: {res.evidence}",
                             remediation=f"Sanitize and validate input on {opp.parameter or 'endpoint'} and follow standard remediation guidelines for {res.cwe_id}.",
-                            evidence_level="E3",
-                            evidence_score=90,
+                            evidence_level=ev_level,
+                            evidence_score=ev_score,
                             exploitability_state="EXPLOITABLE",
                             priority="P1" if res.severity in ("CRITICAL", "HIGH") else "P2",
-                            evidence_data=ev_pkg.to_dict(),
+                            evidence_data=evidence_dict,
                             poc_curl=res.poc_curl,
                             poc_valid=True,
                             matched_at=opp.endpoint,

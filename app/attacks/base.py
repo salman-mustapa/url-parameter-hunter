@@ -54,20 +54,21 @@ class AttackPlan:
 class ValidationResult:
     is_vulnerable: bool
     confidence: float  # 0.0 to 1.0
-    proof_level: str   # P0 (Unverified), P1 (Reflected), P2 (Behavioral Diff), P3 (Confirmed Exploit), P4 (Full RCE/Admin)
+    proof_level: str   # P0 (Unverified), P1 (Reflected), P2 (Behavioral Diff), P3 (Confirmed Exploit), P4 (Full RCE/Admin), P5 (Full Exploitation Evidence)
     attack_type: str
     target_url: str
     parameter: Optional[str] = None
     baseline_status: int = 0
     exploit_status: int = 0
     evidence: Dict[str, Any] = field(default_factory=dict)
+    exploitation_data: Dict[str, Any] = field(default_factory=dict)  # Deep exploitation proof: DB schemas, command outputs, IDOR data, DOM context
     poc_curl: str = ""
     message: str = ""
     cwe_id: str = "CWE-200"
     severity: str = "INFO"  # CRITICAL, HIGH, MEDIUM, LOW, INFO
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "is_vulnerable": self.is_vulnerable,
             "confidence": self.confidence,
             "proof_level": self.proof_level,
@@ -82,6 +83,9 @@ class ValidationResult:
             "cwe_id": self.cwe_id,
             "severity": self.severity,
         }
+        if self.exploitation_data:
+            d["exploitation_data"] = self.exploitation_data
+        return d
 
 
 @dataclass
@@ -92,6 +96,7 @@ class EvidencePackage:
     url: str = ""
     parameter: Optional[str] = None
     proof_data: Dict[str, Any] = field(default_factory=dict)
+    exploitation_data: Dict[str, Any] = field(default_factory=dict)  # Deep exploitation proof
     raw_request: str = ""
     raw_response: str = ""
     cryptographic_hash: str = ""
@@ -103,7 +108,7 @@ class EvidencePackage:
             self.cryptographic_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "evidence_id": self.evidence_id,
             "attack_type": self.attack_type,
             "target": self.target,
@@ -115,6 +120,9 @@ class EvidencePackage:
             "cryptographic_hash": self.cryptographic_hash,
             "timestamp": self.timestamp,
         }
+        if self.exploitation_data:
+            d["exploitation_data"] = self.exploitation_data
+        return d
 
 
 @dataclass
@@ -158,6 +166,7 @@ class BaseAttackModule(abc.ABC):
             url=result.target_url,
             parameter=result.parameter,
             proof_data=result.evidence,
+            exploitation_data=result.exploitation_data,
             raw_request=result.poc_curl,
             raw_response=str(result.evidence.get("response_sample", "")),
         )

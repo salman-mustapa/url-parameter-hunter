@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", str(BASE_DIR / ".env")), extra="ignore")
     database_url: str = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    proxy_pool: str = os.getenv("PROXY_POOL", "")
+    oob_callback_host: str = os.getenv("OOB_CALLBACK_HOST", "localhost:9001")
     cors_origins: str = "*"
     rate_limit_rps: int = 15
     max_concurrent_hosts: int = 12
@@ -46,8 +48,8 @@ class Settings(BaseSettings):
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     ninerouter_api_key: str = os.getenv("NINEROUTER_API_KEY", "")
     # Database Connection Pool Configuration
-    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "60"))
-    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "60"))
+    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "10"))
+    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
     db_pool_timeout: float = float(os.getenv("DB_POOL_TIMEOUT", "60.0"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
 

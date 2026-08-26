@@ -993,9 +993,9 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
                                 seen_urls.add(r_norm)
                                 new_discovered_urls.append((r_url, p_r))
 
-                    # 2. Live NineRouter LLM Multi-Model Combo JS Intelligence
+                    # 2. Live NineRouter LLM Multi-Model Combo JS Intelligence (Only on deep profiles to save resources)
                     from app.intelligence.llm_client import llm_client
-                    if llm_client.is_configured and len(resp.text) > 120:
+                    if llm_client.is_configured and len(resp.text) > 120 and ctx.profile in ("deep", "deep_bug_hunt", "pentest", "adversary_simulation"):
                         try:
                             ai_js = await llm_client.analyze_javascript_code(resp.text, js_url)
                             for ep in (ai_js.get("endpoints") or []):

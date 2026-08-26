@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import httpx
+from app.core.config import settings
+from app.core.rate_limit import RateLimiter
 
 logger = logging.getLogger("core.session_context")
 
@@ -139,6 +141,8 @@ class SessionContext:
         timeout: float = 15.0,
         verify_ssl: bool = False,
         default_headers: Optional[Dict[str, str]] = None,
+        rate_limiter: Optional[RateLimiter] = None,
+        proxies: Optional[List[str]] = None,
     ) -> None:
         self.base_url = base_url
         self.timeout = timeout
@@ -148,9 +152,14 @@ class SessionContext:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
+        self.rate_limiter = rate_limiter
+        self.proxies = proxies or []
+        if not self.proxies and settings.proxy_pool:
+            self.proxies = [p.strip() for p in settings.proxy_pool.split(",") if p.strip()]
+        self._proxy_index = 0
         self.identities: Dict[str, SessionIdentity] = {}
         self.active_identity_id: str = "default"
-        self._clients: Dict[str, httpx.AsyncClient] = {}
+        self._clients: Dict[Tuple[str, Optional[str]], httpx.AsyncClient] = {}
         self._lock = asyncio.Lock()
 
         # Initialize default identity
@@ -177,17 +186,19 @@ class SessionContext:
     def get_identity(self, identity_id: str) -> Optional[SessionIdentity]:
         return self.identities.get(identity_id)
 
-    async def _get_client(self, identity_id: str) -> httpx.AsyncClient:
-        if identity_id not in self._clients:
+    async def _get_client(self, identity_id: str, proxy: Optional[str] = None) -> httpx.AsyncClient:
+        key = (identity_id, proxy)
+        if key not in self._clients:
             ident = self.identities.get(identity_id) or SessionIdentity(id=identity_id)
             client = httpx.AsyncClient(
                 timeout=self.timeout,
                 verify=self.verify_ssl,
                 follow_redirects=True,
                 cookies=ident.cookies,
+                proxy=proxy,
             )
-            self._clients[identity_id] = client
-        return self._clients[identity_id]
+            self._clients[key] = client
+        return self._clients[key]
 
     @staticmethod
     def extract_csrf_tokens(text: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -270,7 +281,18 @@ class SessionContext:
                 primary_name, primary_val = next(iter(identity.csrf_tokens.items()))
                 data[primary_name] = primary_val
 
-        client = await self._get_client(target_ident_id)
+        # Select proxy from pool in round-robin fashion
+        proxy = None
+        if self.proxies:
+            async with self._lock:
+                proxy = self.proxies[self._proxy_index % len(self.proxies)]
+                self._proxy_index += 1
+
+        # Wait on rate limiter if configured
+        if self.rate_limiter:
+            await self.rate_limiter.wait()
+
+        client = await self._get_client(target_ident_id, proxy)
         start_t = time.time()
 
         try:
@@ -299,6 +321,14 @@ class SessionContext:
                 identity.cookies[k] = v
 
             classification = self.classify_response(resp.status_code, resp_headers, body_text)
+
+            # Adaptive Rate Limiting: Backoff on blocks, decay on success
+            if self.rate_limiter:
+                if classification in (NetworkClassification.WAF_BLOCK, NetworkClassification.RATE_LIMIT):
+                    self.rate_limiter.backoff()
+                    logger.warning("WAF block or Rate Limit detected on %s. Backed off rate limiter: delay = %.2fs", url, self.rate_limiter.delay)
+                elif classification == NetworkClassification.SUCCESS:
+                    self.rate_limiter.decay()
 
             return SessionResponse(
                 status_code=resp.status_code,

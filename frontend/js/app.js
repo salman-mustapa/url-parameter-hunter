@@ -239,12 +239,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       document.querySelectorAll(".admin-subtab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       const view = btn.dataset.adminView;
-      if (view === "users") {
-        if (el("adminUsersView")) el("adminUsersView").classList.remove("hidden");
-        if (el("adminDomainsView")) el("adminDomainsView").classList.add("hidden");
-      } else {
-        if (el("adminUsersView")) el("adminUsersView").classList.add("hidden");
-        if (el("adminDomainsView")) el("adminDomainsView").classList.remove("hidden");
+      
+      // Hide all admin views first
+      if (el("adminUsersView")) el("adminUsersView").classList.add("hidden");
+      if (el("adminDomainsView")) el("adminDomainsView").classList.add("hidden");
+      if (el("adminAiView")) el("adminAiView").classList.add("hidden");
+
+      // Show the selected view
+      if (view === "users" && el("adminUsersView")) {
+        el("adminUsersView").classList.remove("hidden");
+      } else if (view === "domains" && el("adminDomainsView")) {
+        el("adminDomainsView").classList.remove("hidden");
+      } else if (view === "ai" && el("adminAiView")) {
+        el("adminAiView").classList.remove("hidden");
+        // Lazy load AI config/status when opening the AI tab
+        if (typeof loadAiConfig === "function") loadAiConfig();
       }
     });
   });

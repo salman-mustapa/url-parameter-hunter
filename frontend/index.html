@@ -1381,6 +1381,7 @@
           <div class="admin-subtabs">
             <button class="admin-subtab active" data-admin-view="users">👥 Aktivitas Scrapping Pengguna</button>
             <button class="admin-subtab" data-admin-view="domains">🌐 Audit Pemetaan Domain</button>
+            <button class="admin-subtab" data-admin-view="ai">🤖 AI Agent & Chat Copilot</button>
           </div>
 
           <!-- Admin View 1: User Scrapping Analytics Table -->
@@ -1431,6 +1432,92 @@
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          <!-- Admin View 3: AI Settings and Live Chat Copilot -->
+          <div id="adminAiView" class="admin-view-content hidden">
+            <div class="ai-panel-grid">
+              <!-- AI Settings Column -->
+              <div class="ai-settings-column">
+                <div class="ai-settings-section">
+                  <div class="ai-settings-title">⚙️ AI Provider Config (NineRouter)</div>
+                  
+                  <div class="ai-status-row">
+                    <span class="token-label">Connection Status</span>
+                    <span id="aiConnStatus" class="ai-status-pill inactive">🔴 Disconnected</span>
+                  </div>
+
+                  <div class="ai-form-group">
+                    <label for="aiLlmEnabled">Enable AI/LLM Features</label>
+                    <select id="aiLlmEnabled" class="ai-select-field">
+                      <option value="true">Active (Enabled)</option>
+                      <option value="false">Inactive (Disabled)</option>
+                    </select>
+                  </div>
+
+                  <div class="ai-form-group">
+                    <label for="aiProvider">API Provider Type</label>
+                    <select id="aiProvider" class="ai-select-field">
+                      <option value="openai_compatible">NineRouter / OpenAI Compatible</option>
+                      <option value="openai">Direct OpenAI</option>
+                      <option value="gemini">Google Gemini</option>
+                    </select>
+                  </div>
+
+                  <div class="ai-form-group">
+                    <label for="aiBaseUrl">API Base URL</label>
+                    <input type="text" id="aiBaseUrl" class="ai-input-field" placeholder="https://openrouter.ai/api/v1">
+                  </div>
+
+                  <div class="ai-form-group">
+                    <label for="aiApiKey">API Token Key</label>
+                    <input type="password" id="aiApiKey" class="ai-input-field" placeholder="sk-or-...">
+                  </div>
+
+                  <div class="ai-form-group">
+                    <label for="aiModel">Active Model (Fallback Cascade Enabled)</label>
+                    <select id="aiModel" class="ai-select-field">
+                      <option value="gemini/gemini-3.5-flash-lite">gemini/gemini-3.5-flash-lite (Fast Fuzzing)</option>
+                      <option value="ag/gemini-3.7-flash-medium">ag/gemini-3.7-flash-medium (Triage & reasoning)</option>
+                      <option value="ag/claude-sonnet-4-6">ag/claude-sonnet-4-6 (High tier analysis)</option>
+                      <option value="fast">fast (NineRouter High-Speed)</option>
+                      <option value="developer">developer (NineRouter Code Specialist)</option>
+                      <option value="free">free (NineRouter Fallback)</option>
+                    </select>
+                  </div>
+
+                  <div class="ai-form-group" style="margin-top: 15px; display: flex; gap: 8px;">
+                    <button id="saveAiSettingsBtn" class="btn btn-primary" style="flex: 1;">💾 Save & Apply</button>
+                    <button id="testAiConnectionBtn" class="btn btn-secondary">🔌 Test Conn</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- AI Chat Column -->
+              <div class="ai-chat-column">
+                <div class="ai-chat-container">
+                  <div class="ai-chat-header">
+                    <div class="ai-chat-title">💬 AI Pentest Copilot Chat</div>
+                    <button id="clearAiChatBtn" class="btn btn-secondary btn-sm" style="padding: 2px 8px; font-size: 10px;">🗑️ Clear Logs</button>
+                  </div>
+                  
+                  <div id="aiChatLogs" class="ai-chat-logs">
+                    <div class="chat-msg-bubble system">
+                      <div class="chat-msg-text">
+                        System: AI Copilot initialized. Ask anything about vulnerabilities, payloads, or target scopes. Change configurations on the left to swap models instantly.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="ai-chat-input-area">
+                    <textarea id="aiChatTextarea" class="ai-chat-textarea" placeholder="Type query (e.g. Generate time-based SQLi payloads for MySQL...)"></textarea>
+                    <button id="aiChatSendBtn" class="btn btn-primary ai-chat-send-btn">
+                      <span>Send</span> ➡️
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

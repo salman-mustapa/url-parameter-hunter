@@ -3445,3 +3445,30 @@ async def get_scan_state_machine(scan_id: str, db: AsyncSession = Depends(get_db
         "state_machine": sm.to_dict(),
         "history": [e.to_dict() for e in sm.history],
     }
+
+
+# Out-of-band Callback receiver endpoint
+@router.api_route("/oob/{correlation_id}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
+async def oob_callback(correlation_id: str, request: Request):
+    """Out-of-band (OOB) vulnerability verification callback endpoint."""
+    client_ip = request.client.host if request.client else "unknown"
+    headers = dict(request.headers)
+    body = b""
+    try:
+        body = await request.body()
+    except Exception:
+        pass
+    
+    metadata = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "client_ip": client_ip,
+        "headers": headers,
+        "body": body.decode("utf-8", errors="ignore"),
+        "method": request.method,
+        "query_params": dict(request.query_params),
+    }
+    
+    from app.services.oob import oob_service
+    await oob_service.log_interaction(correlation_id, metadata)
+    
+    return {"status": "logged", "correlation_id": correlation_id}
