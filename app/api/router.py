@@ -2955,6 +2955,12 @@ class AIModelsRequest(BaseModel):
     api_key: Optional[str] = None
 
 
+class AITestRequest(BaseModel):
+    provider: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
 @router.get("/ai/status")
 async def get_ai_status():
     """Returns the current AI Pentest Orchestrator connection status."""
@@ -2970,11 +2976,34 @@ async def get_ai_status():
 
 
 @router.post("/ai/test")
-async def test_ai_connection():
-    """Tests connection to the configured AI LLM provider."""
+async def test_ai_connection(body: Optional[AITestRequest] = None):
+    """Tests connection to the configured or candidate AI provider and lists models."""
     from app.intelligence.llm_client import llm_client
-    res = await llm_client.test_connection()
-    return res
+    from app.core.config import settings
+
+    provider = body.provider if body and body.provider is not None else settings.llm_provider
+    base_url = body.base_url if body and body.base_url is not None else llm_client.base_url
+    api_key = body.api_key if body and body.api_key is not None else llm_client.api_key
+
+    # Fetch models to verify connection and key validity
+    models = await llm_client.list_models(
+        provider=provider,
+        base_url=base_url,
+        api_key=api_key
+    )
+
+    if models:
+        return {
+            "status": "success",
+            "message": f"Koneksi AI Berhasil! Ditemukan {len(models)} model.",
+            "models": models
+        }
+    else:
+        return {
+            "status": "error",
+            "message": "Koneksi gagal: Tidak dapat mengambil daftar model. Silakan periksa kembali API Key dan Base URL Anda.",
+            "models": []
+        }
 
 
 @router.get("/ai/models")

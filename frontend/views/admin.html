@@ -163,19 +163,14 @@
 
             <div class="ai-form-group">
               <label for="aiModel">Active Model (Fallback Cascade Enabled)</label>
-              <select id="aiModel" class="ai-select-field">
-                <option value="gemini/gemini-3.5-flash-lite">gemini/gemini-3.5-flash-lite (Fast Fuzzing)</option>
-                <option value="ag/gemini-3.7-flash-medium">ag/gemini-3.7-flash-medium (Triage & reasoning)</option>
-                <option value="ag/claude-sonnet-4-6">ag/claude-sonnet-4-6 (High tier analysis)</option>
-                <option value="fast">fast (NineRouter High-Speed)</option>
-                <option value="developer">developer (NineRouter Code Specialist)</option>
-                <option value="free">free (NineRouter Fallback)</option>
+              <select id="aiModel" class="ai-select-field" disabled>
+                <option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>
               </select>
             </div>
 
             <div class="ai-form-group" style="margin-top: 15px; display: flex; gap: 8px;">
               <button id="saveAiSettingsBtn" class="btn btn-primary" style="flex: 1;">💾 Save & Apply</button>
-              <button id="testAiConnectionBtn" class="btn btn-secondary">🔌 Test Conn</button>
+              <button id="testAiConnectionBtn" class="btn btn-secondary">🔌 Connect & Load Models</button>
             </div>
           </div>
         </div>

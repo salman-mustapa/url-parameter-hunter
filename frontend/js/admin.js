@@ -133,6 +133,7 @@ async function fetchAndPopulateModels(candidateConfig = null) {
       modelSelect.innerHTML = "";
       
       if (data.models && data.models.length > 0) {
+        modelSelect.disabled = false;
         data.models.forEach(m => {
           const opt = document.createElement("option");
           opt.value = m;
@@ -147,6 +148,9 @@ async function fetchAndPopulateModels(candidateConfig = null) {
         } else {
           modelSelect.value = data.models[0];
         }
+      } else {
+        modelSelect.disabled = true;
+        modelSelect.innerHTML = `<option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>`;
       }
     }
   } catch (err) {
@@ -164,13 +168,23 @@ async function loadAiConfig() {
     if (el("aiProvider")) el("aiProvider").value = data.provider || "openai_compatible";
     if (el("aiBaseUrl")) el("aiBaseUrl").value = data.base_url || "";
     
-    await fetchAndPopulateModels({
-      provider: data.provider,
-      base_url: data.base_url,
-      model: data.model
-    });
-    
-    if (el("aiModel")) el("aiModel").value = data.model || "";
+    const modelSelect = el("aiModel");
+    if (data.is_configured) {
+      await fetchAndPopulateModels({
+        provider: data.provider,
+        base_url: data.base_url,
+        model: data.model
+      });
+      if (modelSelect) {
+        modelSelect.disabled = false;
+        modelSelect.value = data.model || "";
+      }
+    } else {
+      if (modelSelect) {
+        modelSelect.disabled = true;
+        modelSelect.innerHTML = `<option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>`;
+      }
+    }
 
     updateAiStatusUI(data.is_configured);
   } catch (err) {
@@ -198,6 +212,11 @@ async function saveAiSettings() {
   const apiKey = el("aiApiKey") ? el("aiApiKey").value : "";
   const model = el("aiModel") ? el("aiModel").value : "";
 
+  if (enabled && !model) {
+    if (typeof showToast === "function") showToast("Harap koneksikan ke NineRouter dan pilih model terlebih dahulu.", "warning");
+    return;
+  }
+
   const payload = { enabled, provider, base_url: baseUrl, model };
   if (apiKey.trim()) {
     payload.api_key = apiKey;
@@ -221,12 +240,6 @@ async function saveAiSettings() {
     
     updateAiStatusUI(data.is_configured);
     appendSystemMessage(`System: Configuration applied successfully. Active model is now "${data.model}".`);
-    
-    await fetchAndPopulateModels({
-      provider: data.provider,
-      base_url: data.base_url,
-      model: data.model
-    });
   } catch (err) {
     if (typeof showToast === "function") showToast("Gagal: " + err.message, "danger");
   } finally {
@@ -237,29 +250,60 @@ async function saveAiSettings() {
 
 async function testAiConnection() {
   const statusPill = el("aiConnStatus");
-  if (statusPill) statusPill.innerHTML = "🟡 Testing...";
+  if (statusPill) statusPill.innerHTML = "🟡 Connecting...";
+
+  const provider = el("aiProvider") ? el("aiProvider").value : "openai_compatible";
+  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value : "";
+  const apiKey = el("aiApiKey") ? el("aiApiKey").value : "";
+
+  const payload = {
+    provider: provider,
+    base_url: baseUrl,
+    api_key: apiKey
+  };
 
   try {
     const btn = el("testAiConnectionBtn");
     if (btn) btn.disabled = true;
 
-    const res = await authFetch(`${API_BASE}/ai/test`, { method: "POST" });
+    const res = await authFetch(`${API_BASE}/ai/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
     if (!res.ok) throw new Error("Koneksi gagal.");
     const data = await res.json();
 
-    if (data.status === "success" || data.status === "ready" || data.status === "PENTEST_AI_READY" || data.reply === "PENTEST_AI_READY" || data.status === "connected") {
-      if (typeof showToast === "function") showToast("Koneksi AI Berhasil!", "success");
+    if (data.status === "success" && data.models && data.models.length > 0) {
+      if (typeof showToast === "function") showToast("Koneksi AI Berhasil & Model Dimuat!", "success");
       updateAiStatusUI(true);
-      appendSystemMessage(`System: AI connection successful. Connected to model "${data.model || 'active model'}".`);
       
-      await fetchAndPopulateModels();
+      const modelSelect = el("aiModel");
+      if (modelSelect) {
+        modelSelect.disabled = false;
+        modelSelect.innerHTML = "";
+        data.models.forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m;
+          opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+      }
+      appendSystemMessage(`System: AI connection successful. Connected and retrieved ${data.models.length} models.`);
     } else {
       throw new Error(data.message || "Model failed to respond.");
     }
   } catch (err) {
     if (typeof showToast === "function") showToast("Koneksi Gagal: " + err.message, "danger");
     updateAiStatusUI(false);
-    appendSystemMessage(`⚠️ System Failover Warning: AI connection failed or model is degraded. Details: ${err.message}. Cascading/failover model is ready to route requests.`);
+    
+    const modelSelect = el("aiModel");
+    if (modelSelect) {
+      modelSelect.disabled = true;
+      modelSelect.innerHTML = `<option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>`;
+    }
+    
+    appendSystemMessage(`⚠️ Connection failed: ${err.message}`);
   } finally {
     const btn = el("testAiConnectionBtn");
     if (btn) btn.disabled = false;
@@ -356,16 +400,6 @@ function initializeAiSettingsWiring() {
       e.preventDefault();
       testAiConnection();
     });
-  }
-  if (el("aiProvider")) {
-    el("aiProvider").addEventListener("change", () => fetchAndPopulateModels());
-  }
-  if (el("aiBaseUrl")) {
-    el("aiBaseUrl").addEventListener("change", () => fetchAndPopulateModels());
-  }
-  if (el("aiApiKey")) {
-    el("aiApiKey").addEventListener("change", () => fetchAndPopulateModels());
-    el("aiApiKey").addEventListener("blur", () => fetchAndPopulateModels());
   }
   if (el("aiChatSendBtn")) {
     el("aiChatSendBtn").addEventListener("click", (e) => {
