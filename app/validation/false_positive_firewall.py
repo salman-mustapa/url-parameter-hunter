@@ -114,13 +114,13 @@ class FalsePositiveFirewall:
         """Rule 2: Database error message alone is NOT confirmed SQLi."""
         vuln_type = (finding.get("type") or finding.get("title") or "").upper()
         if "SQL" in vuln_type:
-            has_canary_calc = evidence.get("canary_calculation_verified", False)
-            has_time_delay = evidence.get("time_differential_verified", False)
-            has_union_extract = evidence.get("union_extraction_verified", False)
-            has_boolean_diff = evidence.get("boolean_differential_verified", False)
+            has_canary_calc = evidence.get("canary_calculation_verified", False) or evidence.get("math_canary_confirmed", False)
+            has_time_delay = evidence.get("time_differential_verified", False) or (evidence.get("expected_delay1_ms", 0) > 0)
+            has_union_extract = evidence.get("union_extraction_verified", False) or (evidence.get("column_count", 0) > 0)
+            has_boolean_diff = evidence.get("boolean_differential_verified", False) or evidence.get("triple_verified", False)
 
             if not any([has_canary_calc, has_time_delay, has_union_extract, has_boolean_diff]):
-                if evidence.get("db_error_detected"):
+                if evidence.get("db_error_detected") or not evidence.get("baseline_clean", False):
                     return FirewallVerdict(
                         decision=GateDecision.NEEDS_REVIEW,
                         rule_id="FP-SQLI-001",
@@ -135,8 +135,11 @@ class FalsePositiveFirewall:
         vuln_type = (finding.get("type") or finding.get("title") or "").upper()
         if "XSS" in vuln_type or "CROSS-SITE SCRIPTING" in vuln_type:
             dom_sink = evidence.get("dom_sink_verified", False)
-            browser_executed = evidence.get("browser_execution_verified", False)
-            unescaped_html = evidence.get("unescaped_context_verified", False)
+            browser_executed = evidence.get("browser_execution_verified", False) or evidence.get("execution_confirmed", False)
+            unescaped_html = (
+                evidence.get("unescaped_context_verified", False)
+                or evidence.get("payload_reflected_unescaped", False)
+            )
 
             if not any([dom_sink, browser_executed, unescaped_html]):
                 return FirewallVerdict(

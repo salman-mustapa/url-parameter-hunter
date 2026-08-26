@@ -84,6 +84,34 @@ async def init_db() -> None:
     from app.models import models  # noqa: F401 ensure models registered
     from app.models.models import User
     from app.core.auth import hash_password
+    import asyncio as _asyncio
+
+    # Retry logic for Docker environments where PostgreSQL DNS may not be immediately available
+    max_retries = 5
+    retry_delays = [2, 4, 8, 16, 30]
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            async with engine.begin() as _test_conn:
+                await _test_conn.execute(text("SELECT 1"))
+            logger.info("Database connection established on attempt %d", attempt + 1)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = retry_delays[attempt]
+                logger.warning(
+                    "Database connection attempt %d/%d failed: %s. Retrying in %ds...",
+                    attempt + 1, max_retries, str(e)[:200], delay,
+                )
+                await _asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "Database connection failed after %d attempts. Last error: %s",
+                    max_retries, str(last_error)[:500],
+                )
+                raise last_error
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

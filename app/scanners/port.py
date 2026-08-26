@@ -133,6 +133,20 @@ TOP_EXTENDED_PORTS = [
 
 DEEP_PORTS = sorted(set(list(range(1, 1025)) + TOP_EXTENDED_PORTS + list(COMMON_PORTS.keys())))
 
+# Priority web ports scanned first in all modes for quick results
+PRIORITY_WEB_PORTS = [80, 443, 8080, 8443, 8000, 8888, 3000, 9000, 9090, 8081]
+
+# Top 100 high-value ports for standard mode (fast, focused scanning)
+TOP_100_PORTS = sorted(set([
+    21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 389, 443, 445, 465,
+    587, 636, 993, 995, 1433, 1521, 1883, 2082, 2083, 2086, 2087,
+    2222, 3000, 3001, 3306, 3389, 4000, 4200, 4433, 4443, 5000, 5001,
+    5173, 5432, 5555, 5672, 5900, 5985, 5986, 6379, 6443, 7000, 7001,
+    8000, 8001, 8008, 8080, 8081, 8082, 8088, 8443, 8500, 8848, 8880,
+    8888, 8983, 9000, 9001, 9042, 9090, 9200, 9300, 9443, 10000, 10443,
+    11211, 15672, 27017, 27018, 33060, 50051,
+]))
+
 
 async def _grab_banner(host: str, port: int, timeout: float = 1.2) -> str | None:
     """Brief banner grab for service fingerprinting with null byte sanitization."""
@@ -185,8 +199,23 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
 
     # Cap hosts scanned to keep runtime sane; prioritize root + shallow depth
     assets = sorted(assets, key=lambda a: a.depth)[: settings.max_port_hosts]
-    ports_to_scan = DEEP_PORTS if ctx.profile == "deep" else sorted(COMMON_PORTS.keys())
-    timeout = settings.port_timeout_seconds
+    # Use focused port list for standard mode, full list for deep/full
+    if ctx.profile in ("deep", "full", "pentest", "adversary_simulation"):
+        ports_to_scan = DEEP_PORTS
+        timeout = settings.port_timeout_seconds
+    elif ctx.profile == "standard":
+        ports_to_scan = TOP_100_PORTS
+        timeout = min(settings.port_timeout_seconds, 0.8)  # Faster timeout for standard
+    else:
+        ports_to_scan = sorted(COMMON_PORTS.keys())
+        timeout = min(settings.port_timeout_seconds, 0.8)
+
+    # Reorder: priority web ports first for quick results
+    priority_set = set(PRIORITY_WEB_PORTS)
+    priority_ports = [p for p in ports_to_scan if p in priority_set]
+    other_ports = [p for p in ports_to_scan if p not in priority_set]
+    ports_to_scan = priority_ports + other_ports
+
     limiter = RateLimiter(settings.port_rps)
     asset_sem = asyncio.Semaphore(10)
 
@@ -227,6 +256,11 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                     is_open = await _check_port(resolved_ip, p, timeout)
                 if is_open:
                     open_ports.append(p)
+                    # Trigger immediate background analysis without waiting for complete port scan to finish
+                    from app.orchestration.cve_pipeline import trigger_immediate_cve_pipeline
+                    asyncio.create_task(
+                        trigger_immediate_cve_pipeline(ctx, asset_id, probe_target, resolved_ip, p)
+                    )
 
             chunk_size = 60
             for i in range(0, len(ports_to_scan), chunk_size):

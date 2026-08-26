@@ -70,6 +70,7 @@ from app.intelligence.cvss4 import cvss4_calculator
 from app.validation.bypass_403 import bypass_403_engine
 from app.validation.brute_force import controlled_brute_force_validator
 from app.validation.info_disclosure import info_disclosure_validator
+from app.validation.service_exploiter import service_exploit_validator
 
 logger = logging.getLogger("scanner.security")
 
@@ -926,19 +927,35 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                 try:
                     xss_cands = await xss_validator.validate_url(u.url, param_dicts)
                     for cand in xss_cands:
-                        sev = "HIGH" if cand.payload_executed else ("MEDIUM" if cand.confidence in ("VALIDATED", "CONFIRMED") else "LOW")
+                        # Reject pure observations without unescaped execution or dangerous context
+                        if cand.confidence == "OBSERVED" and not cand.payload_executed and not cand.unescaped:
+                            continue
+
+                        if cand.payload_executed:
+                            sev = "HIGH"
+                            ev_level = "E3"
+                            title = f"Cross-Site Scripting (XSS) Confirmed on '{cand.parameter}' ({cand.technique})"
+                        elif cand.unescaped:
+                            sev = "MEDIUM"
+                            ev_level = "E2"
+                            title = f"Unescaped HTML Reflection on '{cand.parameter}' ({cand.context}, {cand.technique})"
+                        else:
+                            sev = "LOW"
+                            ev_level = "E1"
+                            title = f"Potential Input Reflection in {cand.context} on '{cand.parameter}'"
+
                         norm_res = NormalizedValidationResult(
                             adapter_name="xss_validator",
                             vulnerability_type="xss_reflection",
-                            title=f"XSS {'Confirmed' if cand.payload_executed else 'Reflected'} on '{cand.parameter}' ({cand.context}, {cand.technique})",
+                            title=title,
                             severity=sev,
                             confidence=cand.confidence,
-                            evidence_level=cand.evidence.get("evidence_level", "E1") if isinstance(cand.evidence, dict) else "E1",
+                            evidence_level=cand.evidence.get("evidence_level") or ev_level,
                             target_host=target_host,
                             endpoint_url=u.url,
                             parameter=cand.parameter,
                             cwe_id="CWE-79",
-                            description=f"Parameter '{cand.parameter}' {'executes injected script' if cand.payload_executed else 'reflects input'} in HTML context '{cand.context}' ({cand.technique}).",
+                            description=f"Parameter '{cand.parameter}' {'executes injected script' if cand.payload_executed else 'reflects input unescaped'} in HTML context '{cand.context}' ({cand.technique}).",
                             impact_matrix=cand.impact_matrix if cand.impact_matrix else {"confidentiality": "MEDIUM", "integrity": "MEDIUM", "availability": "LOW"},
                             remediation="Apply contextual HTML entity encoding before reflecting user input. Implement Content-Security-Policy header.",
                             poc_payload=cand.poc_curl or cand.evidence.get("payload", u.url) if isinstance(cand.evidence, dict) else u.url,
@@ -1224,6 +1241,46 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                 )
                 await _process_and_save_validated_finding(ctx, db, p.asset_id, target_host, norm_res)
 
+    # 6b. Service Exploitation Engine — Test discovered services for default creds / unauth access
+    exploitable_ports = [p for p in ports if p.state == "open" and p.ip and p.port in (
+        21, 3306, 33060, 6379, 9200, 9300, 11211, 27017, 27018,
+    )]
+    if exploitable_ports:
+        await ctx.emit("scan.network", f"Testing {len(exploitable_ports)} discovered service(s) for default credentials and unauthenticated access...", stage="SERVICE_EXPLOIT")
+
+    for p in exploitable_ports:
+        asset_obj = asset_map.get(p.asset_id)
+        target_host = asset_obj.hostname if asset_obj else root_domain
+        service_hint = p.service or ""
+
+        try:
+            exploit_cands = await service_exploit_validator.test_port(p.ip, p.port, service_hint)
+            for cand in exploit_cands:
+                norm_res = NormalizedValidationResult(
+                    adapter_name="service_exploit_validator",
+                    vulnerability_type=f"{cand.service.lower()}_{cand.technique}",
+                    title=cand.title,
+                    severity=cand.severity,
+                    confidence=cand.confidence,
+                    evidence_level=cand.evidence_level,
+                    target_host=target_host,
+                    endpoint_url=f"{p.ip}:{p.port}",
+                    cwe_id=cand.cwe_id,
+                    description=cand.description,
+                    impact_matrix=cand.impact_matrix,
+                    remediation=cand.remediation,
+                    poc_command=cand.poc_curl,
+                    reproduction_steps=cand.reproduction_steps,
+                    request_metadata={"host": p.ip, "port": p.port, "service": cand.service},
+                    response_metadata=cand.evidence,
+                    actual_result=f"{cand.technique} confirmed on {cand.service} service",
+                    expected_result="Service should require authentication and not accept default credentials.",
+                )
+                await _process_and_save_validated_finding(ctx, db, p.asset_id, target_host, norm_res)
+                logger.info("CONFIRMED SERVICE EXPLOIT on %s:%d: %s", target_host, p.port, cand.title)
+        except Exception as svc_err:
+            logger.debug("Service exploit test error on %s:%d: %s", p.ip, p.port, svc_err)
+
     # 7. Auth Bypass Validation (V5 §17) — test discovered URLs
     try:
         all_url_strings = [u.url for u in urls if u.url]
@@ -1383,6 +1440,49 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                 "Auth endpoints will only be tested when genuine login forms are found dynamically.",
                 stage="AUTH_AUDIT_SKIPPED",
             )
+
+        # Collect discovered credentials from artifacts for credential reuse testing
+        discovered_creds: list[tuple[str, str]] = []
+        discovered_usernames: list[str] = []
+        try:
+            from app.models.models import Artifact
+            scan_artifacts = (await db.execute(
+                select(Artifact).where(Artifact.scan_id == ctx.scan_id)
+            )).scalars().all()
+
+            for art in scan_artifacts:
+                if art.extracted_entities:
+                    # Extract from SQL dump entities
+                    for user_entry in (art.extracted_entities.get("users") or [])[:20]:
+                        uname = user_entry.get("username") or user_entry.get("email", "")
+                        pwd = user_entry.get("password", "")
+                        if uname:
+                            discovered_usernames.append(uname)
+                            if pwd:
+                                discovered_creds.append((uname, pwd))
+
+                    # Extract from .env secrets
+                    for secret in (art.extracted_entities.get("secrets") or [])[:10]:
+                        key = secret.get("key", "").lower()
+                        val = secret.get("value", "")
+                        if val and any(k in key for k in ("password", "pwd", "pass", "secret")):
+                            for admin_user in ["admin", "root", "administrator"]:
+                                discovered_creds.append((admin_user, val))
+
+                if art.schema_data:
+                    # Extract from CSV PII data
+                    for email in (art.schema_data.get("sample_emails") or [])[:10]:
+                        if email and email not in discovered_usernames:
+                            discovered_usernames.append(email)
+
+            if discovered_creds or discovered_usernames:
+                logger.info(
+                    "Collected %d credential pairs and %d usernames from artifacts for auth testing",
+                    len(discovered_creds), len(discovered_usernames),
+                )
+        except Exception as cred_exc:
+            logger.debug("Credential collection from artifacts failed: %s", cred_exc)
+
         for u_obj in login_urls_with_forms[:5]:
             l_url = u_obj.url
             target_asset_id = u_obj.asset_id
@@ -1391,11 +1491,16 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
 
             await ctx.emit(
                 "scan.auth",
-                f"🔐 Auditing authentication rate-limiting & credential policy on crawl-discovered login: {l_url}",
+                f"🔐 Auditing authentication rate-limiting & credential policy on crawl-discovered login: {l_url}"
+                + (f" (+ {len(discovered_creds)} discovered credentials)" if discovered_creds else ""),
                 url=l_url,
                 stage="AUTH_AUDIT_DYNAMIC",
             )
-            brute_cands = await controlled_brute_force_validator.validate_login_portal(l_url)
+            brute_cands = await controlled_brute_force_validator.validate_login_portal(
+                l_url,
+                discovered_credentials=discovered_creds or None,
+                discovered_usernames=discovered_usernames or None,
+            )
             for cand in brute_cands:
                 norm_res = NormalizedValidationResult(
                     adapter_name="controlled_brute_force",

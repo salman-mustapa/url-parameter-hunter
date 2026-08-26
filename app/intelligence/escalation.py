@@ -34,8 +34,10 @@ _HEADERS = {
 
 # Top common weak passwords for offline dictionary check against weak hashes
 _WEAK_PASSWORDS = [
-    "admin", "password", "123456", "admin123", "root", "test", "user",
-    "guest", "demo", "12345678", "qwerty", "abc123", "letmein", "welcome",
+    "admin", "password", "123456", "admin123", "Admin123", "root", "test", "user",
+    "guest", "demo", "12345678", "123456789", "qwerty", "abc123", "letmein", "welcome",
+    "Welcome1", "P@ssw0rd", "admin@123", "root123", "password123", "pass123", "1234",
+    "master", "operator", "support",
 ]
 
 # Common internal service ports for SSRF chaining
@@ -119,25 +121,55 @@ class AssetDrivenEscalationEngine:
         
         # Build candidate credential pairs for testing
         cred_candidates: List[Tuple[str, str, str]] = []  # (username, password, source_desc)
-        
-        for u in admin_users[:5]:
-            uid = u["identifier"]
-            for pwd in _WEAK_PASSWORDS[:5]:
-                cred_candidates.append((uid, pwd, f"Admin user '{uid}' from SQL dump with weak password guess"))
-        
-        # If there are weak md5 hashes, attempt offline match
-        for h in weak_hashes[:10]:
+
+        # 1. Direct passwords from users if parsed from plaintext SQL inserts
+        for u in users[:15]:
+            uid = u.get("identifier") or u.get("username") or u.get("email", "")
+            raw_pwd = u.get("password") or u.get("plain_password") or u.get("pwd", "")
+            if uid and raw_pwd:
+                cred_candidates.append((uid, raw_pwd, f"Direct password for '{uid}' from SQL dump"))
+
+        # 2. Admin users with dictionary passwords
+        target_users = admin_users if admin_users else users[:5]
+        for u in target_users[:5]:
+            uid = u.get("identifier") or u.get("username") or u.get("email", "")
+            if not uid:
+                continue
+            for pwd in _WEAK_PASSWORDS[:10]:
+                cred_candidates.append((uid, pwd, f"User '{uid}' from SQL dump with dictionary password '{pwd}'"))
+
+        # 3. Offline hash matching (MD5, SHA1, SHA256)
+        for h in hashes[:25]:
+            sample_hash = (h.get("hash_sample") or "").strip().lower()
+            htype = (h.get("hash_type") or "").lower()
+            table = h.get("table", "users")
+            col = h.get("column", "password")
+
+            if not sample_hash:
+                continue
+
             for pwd in _WEAK_PASSWORDS:
-                if h["hash_type"] == "md5":
-                    if hashlib.md5(pwd.encode()).hexdigest() == h.get("hash_sample", ""):
-                        # Found a matching weak password
-                        table = h.get("table", "unknown")
-                        col = h.get("column", "unknown")
+                matched = False
+                if htype == "md5" or len(sample_hash) == 32:
+                    if hashlib.md5(pwd.encode()).hexdigest().lower() == sample_hash:
+                        matched = True
+                elif htype == "sha1" or len(sample_hash) == 40:
+                    if hashlib.sha1(pwd.encode()).hexdigest().lower() == sample_hash:
+                        matched = True
+                elif htype == "sha256" or len(sample_hash) == 64:
+                    if hashlib.sha256(pwd.encode()).hexdigest().lower() == sample_hash:
+                        matched = True
+
+                if matched:
+                    # Link with any user identifier from same table or admin
+                    for u in target_users[:3]:
+                        uid = u.get("identifier") or u.get("username") or "admin"
                         cred_candidates.append((
-                            f"user_from_{table}",
+                            uid,
                             pwd,
-                            f"Cracked MD5 hash from {table}.{col}",
+                            f"Cracked {htype.upper()} hash ({pwd}) for {table}.{col}",
                         ))
+                    break
         
         if not cred_candidates:
             logger.info("No viable credential candidates extracted from SQL dump.")

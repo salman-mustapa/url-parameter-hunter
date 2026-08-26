@@ -51,20 +51,49 @@ class BruteForceCandidate:
 
 
 class ControlledBruteForceValidator:
-    """Controlled, bounded authentication testing engine."""
+    """Controlled, bounded authentication testing engine with dynamic credential injection."""
 
-    # Top default test credentials (safe, standard test pairs)
+    # Expanded default test credentials (safe, standard test pairs)
     TEST_CREDENTIALS = [
         ("admin", "admin"),
         ("admin", "password"),
         ("admin", "123456"),
         ("admin", "admin123"),
+        ("admin", "Admin123"),
+        ("admin", "admin@123"),
+        ("admin", "P@ssw0rd"),
+        ("admin", "1234"),
+        ("admin", "12345678"),
         ("administrator", "administrator"),
+        ("administrator", "password"),
         ("root", "root"),
+        ("root", "toor"),
+        ("root", "password"),
         ("test", "test"),
+        ("test", "test123"),
         ("user", "user"),
+        ("user", "password"),
         ("guest", "guest"),
         ("demo", "demo"),
+        ("operator", "operator"),
+        ("manager", "manager"),
+        ("support", "support"),
+        ("info", "info"),
+        ("default", "default"),
+    ]
+
+    # Common password patterns to try with discovered usernames
+    PASSWORD_PATTERNS = [
+        "{username}",           # username = password
+        "{username}123",       # username + 123
+        "{username}!",         # username + !
+        "{username}@123",      # username + @123
+        "password",
+        "123456",
+        "P@ssw0rd",
+        "admin123",
+        "Welcome1",
+        "letmein",
     ]
 
     # Stop signals indicating defensive lockout or WAF intervention
@@ -137,8 +166,19 @@ class ControlledBruteForceValidator:
             logger.debug("Failed to detect form fields on %s: %s", url, exc)
             return None
 
-    async def validate_login_portal(self, url: str) -> List[BruteForceCandidate]:
-        """Perform controlled, rate-limited credential audit and brute-force protection analysis."""
+    async def validate_login_portal(
+        self,
+        url: str,
+        discovered_credentials: Optional[List[Tuple[str, str]]] = None,
+        discovered_usernames: Optional[List[str]] = None,
+    ) -> List[BruteForceCandidate]:
+        """Perform controlled, rate-limited credential audit and brute-force protection analysis.
+
+        Args:
+            url: Login portal URL
+            discovered_credentials: Credential pairs from SQL dumps, .env files, etc.
+            discovered_usernames: Usernames from CSV exports for password spraying
+        """
         candidates: List[BruteForceCandidate] = []
 
         async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=True) as client:
@@ -183,7 +223,29 @@ class ControlledBruteForceValidator:
             valid_credential_found: Optional[Tuple[str, str]] = None
             successful_failure_responses = 0
 
-            for username, password in self.TEST_CREDENTIALS:
+            # Build credential list: defaults + discovered + username spray
+            all_credentials = list(self.TEST_CREDENTIALS)
+
+            # Add discovered credentials from artifacts (SQL dumps, .env files)
+            if discovered_credentials:
+                for cred_pair in discovered_credentials[:30]:
+                    if cred_pair not in all_credentials:
+                        all_credentials.append(cred_pair)
+                logger.info("Added %d discovered credentials for testing on %s", len(discovered_credentials), final_url)
+
+            # Generate password spray from discovered usernames
+            if discovered_usernames:
+                for uname in discovered_usernames[:15]:
+                    for pattern in self.PASSWORD_PATTERNS[:5]:
+                        pwd = pattern.replace("{username}", uname)
+                        pair = (uname, pwd)
+                        if pair not in all_credentials:
+                            all_credentials.append(pair)
+                logger.info("Added %d username-spray pairs for testing on %s", len(discovered_usernames) * 5, final_url)
+
+            # Cap total attempts at 60 to prevent abuse
+            max_attempts = min(len(all_credentials), 60)
+            for username, password in all_credentials[:max_attempts]:
                 attempts_made += 1
                 # Enforce safe delay (approx 2 requests/sec)
                 await asyncio.sleep(0.5)

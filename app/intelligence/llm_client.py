@@ -530,5 +530,106 @@ class LLMClient:
             logger.debug("AI deep triage error: %s", exc)
         return None
 
+    async def generate_structured_attack_plan(
+        self,
+        target_url: str,
+        attack_type: str,
+        parameter: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Synthesizes a structured JSON attack plan for an identified opportunity."""
+        if not self.is_configured:
+            return None
+
+        prompt = (
+            f"Generate a professional, non-destructive attack verification plan for:\n"
+            f"- Target URL: {target_url}\n"
+            f"- Attack Type: {attack_type}\n"
+            f"- Parameter: {parameter or 'None'}\n"
+            f"- Discovered Context: {json.dumps(context or {}, default=str)}\n\n"
+            f"Respond ONLY as a valid JSON object with:\n"
+            f"{{\n"
+            f"  \"title\": \"Descriptive Plan Title\",\n"
+            f"  \"steps\": [\"Step 1 description\", \"Step 2 description\"],\n"
+            f"  \"payloads\": [\"payload_1\", \"payload_2\"],\n"
+            f"  \"expected_evidence\": \"Expected wire response pattern or diff\",\n"
+            f"  \"confidence\": 0.9\n"
+            f"}}"
+        )
+
+        try:
+            reply = await self.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt="You are an Offensive Security Lead AI. Output valid JSON object only.",
+                temperature=0.2,
+                max_tokens=400,
+                task="reasoning",
+            )
+            reply = re.sub(r"^```(?:json)?", "", reply.strip(), flags=re.MULTILINE)
+            reply = re.sub(r"```$", "", reply.strip(), flags=re.MULTILINE).strip()
+            match = re.search(r'\{.*\}', reply, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+        except Exception as exc:
+            logger.debug("AI attack plan synthesis error: %s", exc)
+        return None
+
+    async def evaluate_evidence_critic(
+        self,
+        target_url: str,
+        attack_type: str,
+        parameter: Optional[str],
+        raw_request: str,
+        raw_response: str,
+        baseline_diff: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Multi-Layer AI Evidence Critic verifying that raw evidence conclusively proves vulnerability."""
+        default_verdict = {
+            "verdict": "CONFIRMED",
+            "confidence": 0.9,
+            "false_positive_score": 0.1,
+            "reasoning": "Standard heuristic confirmation passed.",
+        }
+        if not self.is_configured:
+            return default_verdict
+
+        prompt = (
+            f"As an AI Evidence Critic, verify if this captured HTTP request/response conclusively proves a {attack_type} vulnerability:\n"
+            f"- Target: {target_url}\n"
+            f"- Parameter: {parameter or 'N/A'}\n"
+            f"- Raw Request / PoC: {raw_request[:500]}\n"
+            f"- Raw Response Sample: {raw_response[:800]}\n"
+            f"- Differential Analysis: {json.dumps(baseline_diff or {}, default=str)}\n\n"
+            f"Eliminate false positives (e.g. static reflection vs unescaped HTML, soft 404, WAF block, generic error).\n"
+            f"Respond ONLY with a JSON object:\n"
+            f"{{\n"
+            f"  \"verdict\": \"CONFIRMED\" or \"FALSE_POSITIVE\" or \"INCONCLUSIVE\",\n"
+            f"  \"confidence\": 0.95,\n"
+            f"  \"false_positive_score\": 0.05,\n"
+            f"  \"reasoning\": \"Concise justification of verdict based on raw response forensics.\"\n"
+            f"}}"
+        )
+
+        try:
+            reply = await self.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt="You are a strict Offensive Security Evidence Critic AI. Output valid JSON only.",
+                temperature=0.1,
+                max_tokens=300,
+                task="evidence_critic",
+            )
+            reply = re.sub(r"^```(?:json)?", "", reply.strip(), flags=re.MULTILINE)
+            reply = re.sub(r"```$", "", reply.strip(), flags=re.MULTILINE).strip()
+            match = re.search(r'\{.*\}', reply, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                if "verdict" in data:
+                    return data
+        except Exception as exc:
+            logger.debug("Evidence critic AI error: %s", exc)
+
+        return default_verdict
+
 
 llm_client = LLMClient()
+

@@ -28,6 +28,7 @@ from app.orchestration.adaptive_orchestrator import (
     TaskState,
     adaptive_orchestrator,
 )
+from app.orchestration.attack_opportunity import AttackOpportunity, opportunity_bus
 from app.orchestration.attack_path_engine import attack_path_engine
 from app.orchestration.correlation_engine import correlation_engine
 from app.orchestration.opportunity_engine import Opportunity, opportunity_engine
@@ -99,6 +100,27 @@ class MasterOrchestrator:
         # 4. Opportunity Detection & Attack Path Analysis
         opportunities = opportunity_engine.evaluate_event(event_type, event_data)
         created_tasks: List[OrchestratorTask] = []
+
+        # Convert and publish to OpportunityBus for specialist attack execution
+        for opp in opportunities:
+            opp_attack_type = opp.opportunity_type.value.replace("_candidate", "")
+            if opp_attack_type in ("auth_bypass", "default_credentials"):
+                opp_attack_type = "auth"
+            elif opp_attack_type in ("access_control_403",):
+                opp_attack_type = "idor"
+            elif opp_attack_type in ("sensitive_file_exposure", "directory_listing"):
+                opp_attack_type = "artifact"
+
+            bus_opp = AttackOpportunity(
+                target=opp.target_url,
+                endpoint=opp.target_url,
+                attack_type=opp_attack_type,
+                hypothesis=f"Opportunity from {event_type} on {opp.target_url}",
+                priority=opp.priority,
+                prerequisites=opp.preconditions,
+                context=opp.context,
+            )
+            await opportunity_bus.publish(bus_opp)
 
         # Optional Attack Path Reasoning
         if target and ("auth" in event_type or "sqli" in event_type or "endpoint" in event_type):

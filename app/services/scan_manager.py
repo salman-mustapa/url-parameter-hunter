@@ -9,13 +9,18 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy import func, select
 
+from app.attacks import get_attack_module
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal, async_session_scope
 from app.core.events import event_bus
 from app.core.kill_switch import kill_switch_manager
 from app.core.rate_limit import RateLimiter
 from app.core.scope_engine import ScopeEngine, normalize_target
+from app.core.session_context import SessionContext, SessionIdentity
+from app.discovery.parameter_classifier import parameter_classifier
+from app.intelligence.attack_graph import attack_graph_engine
 from app.models.models import Asset, Certificate, Domain, Finding, Parameter, Port, Scan, Screenshot, Technology, URL
+from app.orchestration.attack_opportunity import AttackOpportunity, OpportunityState, opportunity_bus
 from app.scanners import dns, http, port, screenshot, security, subdomain, web
 from app.scanners.base import ScanContext
 from app.services.capability_registry import AssessmentProfile, ValidationLevel
@@ -233,6 +238,13 @@ class ScanManager:
             await event_bus.publish(result_service.make_event(
                 scan_id, "scan.running", f"Pipeline running for {root_domain}", severity="info"))
 
+            # Initialize stateful session context & continuous validation loop
+            session_ctx = SessionContext(base_url=f"http://{root_domain}")
+            val_stop_event = asyncio.Event()
+            val_worker_task = asyncio.create_task(
+                self._run_continuous_validation_worker(ctx, scan_id, root_domain, session_ctx, val_stop_event)
+            )
+
             # ---- Phase A: Discovery (subdomains / focused target) ----
             if not kill_switch_manager.is_stopped(scan_id, "discovery"):
                 try:
@@ -300,6 +312,28 @@ class ScanManager:
                         logger.warning("HTTP probe phase warning on %s: %s", scan_id, phase_err)
 
             await asyncio.gather(run_port(), run_http())
+
+            # Seed service & artifact opportunities immediately upon port discovery
+            try:
+                async with async_session_scope() as db:
+                    ports_db_seed = (await db.execute(select(Port).join(Asset, Port.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalars().all()
+                    for p in ports_db_seed:
+                        port_num = getattr(p, "port_number", None) or getattr(p, "port", None)
+                        p_serv = getattr(p, "service", "") or ""
+                        if port_num in (80, 443, 8080, 8443, 3000, 8000) or "http" in p_serv.lower():
+                            scheme = "https" if port_num in (443, 8443) else "http"
+                            target_ep = f"{scheme}://{root_domain}:{port_num}" if port_num not in (80, 443) else f"{scheme}://{root_domain}"
+                            for art_module in [get_attack_module("artifact"), get_attack_module("auth")]:
+                                if art_module:
+                                    art_opps = await art_module.discover(target_ep, {"urls": [target_ep]})
+                                    await opportunity_bus.publish_batch(art_opps)
+                        elif port_num in (6379, 27017, 9200, 21, 11211, 3306):
+                            serv_module = get_attack_module("service")
+                            if serv_module:
+                                s_opps = await serv_module.discover(root_domain, {"ports": [{"port": port_num, "service": p_serv}]})
+                                await opportunity_bus.publish_batch(s_opps)
+            except Exception as seed_err:
+                logger.debug("Port discovery seeding note: %s", seed_err)
 
             try:
                 from app.intelligence.llm_client import llm_client
@@ -403,7 +437,7 @@ class ScanManager:
                                     statement=stmt,
                                     target=tgt,
                                     severity="info",
-                                )
+                                    )
                     except Exception as llm_err:
                         logger.debug("In-flight LLM reasoning note: %s", llm_err)
             except Exception as se_err:
@@ -424,30 +458,37 @@ class ScanManager:
                         await self._checkpoint(ctx, db, root_domain, start_time)
                         await web.run(ctx, db, root_domain)
 
-                    # Update application model with discovered endpoints
+                    # Update application model with discovered endpoints and classify parameters
                     app_model = security_engine.get_app_model(scan_id)
                     reasoning = security_engine.get_reasoning_layer(scan_id)
-                    if app_model:
-                        async with async_session_scope() as db:
-                            urls_res = await db.execute(
-                                select(URL).join(Asset, URL.asset_id == Asset.id).where(Asset.scan_id == scan_id).limit(60)
-                            )
-                            for u in urls_res.scalars().all():
+                    async with async_session_scope() as db:
+                        urls_res = await db.execute(
+                            select(URL).join(Asset, URL.asset_id == Asset.id).where(Asset.scan_id == scan_id).limit(100)
+                        )
+                        crawled_urls = urls_res.scalars().all()
+                        for u in crawled_urls:
+                            if app_model:
                                 app_model.add_entity(
                                     entity_type=EntityType.ENDPOINT,
                                     label=u.path or u.url or "/",
                                     properties={"url": u.url, "method": u.method or "GET"}
                                 )
+                            # Immediately feed parameters into Opportunity Bus for concurrent testing
+                            if u.url:
+                                param_opps = parameter_classifier.generate_hypotheses_for_url(u.url, method=u.method or "GET")
+                                await opportunity_bus.publish_batch(param_opps)
+
                         # Re-run reasoning cycle with new endpoint data
-                        res = security_engine.run_reasoning_cycle(scan_id)
-                        if res and res.hypotheses_generated:
-                            for hyp in res.hypotheses_generated[:5]:
-                                security_engine.create_attack_plan(
-                                    scan_id=scan_id,
-                                    title=f"Attack Plan for {hyp.statement[:40]}",
-                                    target=hyp.target_endpoint or root_domain,
-                                    tool_sequence=[hyp.next_test or "nuclei", "dalfox"]
-                                )
+                        if reasoning:
+                            res = security_engine.run_reasoning_cycle(scan_id)
+                            if res and res.hypotheses_generated:
+                                for hyp in res.hypotheses_generated[:5]:
+                                    security_engine.create_attack_plan(
+                                        scan_id=scan_id,
+                                        title=f"Attack Plan for {hyp.statement[:40]}",
+                                        target=hyp.target_endpoint or root_domain,
+                                        tool_sequence=[hyp.next_test or "nuclei", "dalfox"]
+                                    )
                 except Exception as phase_err:
                     logger.warning("Web discovery phase warning on %s: %s", scan_id, phase_err)
 
@@ -467,6 +508,14 @@ class ScanManager:
                         await security.run(ctx, db, root_domain)
                 except Exception as phase_err:
                     logger.warning("Security validation phase warning on %s: %s", scan_id, phase_err)
+
+            # Drain and stop continuous validation worker
+            val_stop_event.set()
+            try:
+                await asyncio.wait_for(val_worker_task, timeout=15.0)
+            except Exception:
+                pass
+            await session_ctx.close()
 
             try:
                 security_engine.start_validation(scan_id)
@@ -604,6 +653,116 @@ class ScanManager:
             scan_id, "scan.completed", f"Scan completed for {root_domain}",
             assets=assets, urls=urls, ports=ports, parameters=params, technologies=techs,
             certificates=certs, findings=findings, severity="success"))
+
+    async def _run_continuous_validation_worker(
+        self,
+        ctx: Any,
+        scan_id: str,
+        root_domain: str,
+        session: SessionContext,
+        stop_event: asyncio.Event,
+    ) -> None:
+        """Continuously consumes opportunities from OpportunityBus and executes specialist attack modules."""
+        logger.info("Continuous validation worker active for scan %s", scan_id)
+        while not stop_event.is_set() or opportunity_bus.get_queue_size() > 0:
+            if kill_switch_manager.is_stopped(scan_id):
+                break
+
+            opp = await opportunity_bus.get_next(timeout=1.0)
+            if not opp:
+                if stop_event.is_set():
+                    break
+                continue
+
+            try:
+                module = get_attack_module(opp.attack_type)
+                if not module:
+                    opportunity_bus.task_done()
+                    continue
+
+                # Execute attack module
+                res = await module.validate(opp, session)
+                if res.is_vulnerable:
+                    ev_pkg = await module.collect_evidence(res)
+                    risk = await module.score(ev_pkg, res)
+
+                    await opportunity_bus.update_state(
+                        opp.id,
+                        OpportunityState.CONFIRMED,
+                        evidence=ev_pkg.to_dict(),
+                        message=res.message,
+                    )
+
+                    # Persist confirmed finding to database
+                    async with async_session_scope() as db:
+                        host_label = opp.host or root_domain
+                        asset = (await db.execute(
+                            select(Asset).where(Asset.scan_id == scan_id, Asset.hostname == host_label)
+                        )).scalar_one_or_none()
+
+                        asset_id = asset.id if asset else None
+                        finding_type = f"{opp.attack_type}_vulnerability"
+
+                        await result_service.upsert_finding(
+                            db,
+                            scan_id=scan_id,
+                            asset_id=asset_id,
+                            finding_type=finding_type,
+                            title=f"Confirmed {opp.attack_type.upper()} on {opp.endpoint}",
+                            severity=res.severity,
+                            confidence="CONFIRMED",
+                            cwe_id=res.cwe_id,
+                            cvss_score=risk.cvss_v4,
+                            description=res.message,
+                            impact=risk.impact,
+                            technical_details=f"PoC: {res.poc_curl}\n\nEvidence: {res.evidence}",
+                            remediation=f"Sanitize and validate input on {opp.parameter or 'endpoint'} and follow standard remediation guidelines for {res.cwe_id}.",
+                            evidence_level="E3",
+                            evidence_score=90,
+                            exploitability_state="EXPLOITABLE",
+                            priority="P1" if res.severity in ("CRITICAL", "HIGH") else "P2",
+                            evidence_data=ev_pkg.to_dict(),
+                            poc_curl=res.poc_curl,
+                            poc_valid=True,
+                            matched_at=opp.endpoint,
+                        )
+                        await db.commit()
+
+                    # Emit real-time telemetry event
+                    await ctx.emit(
+                        "finding.confirmed",
+                        f"🚨 {res.severity} CONFIRMED: {opp.attack_type.upper()} on {opp.endpoint} - {res.message}",
+                        severity="error" if res.severity in ("CRITICAL", "HIGH") else "warn",
+                        finding_type=opp.attack_type,
+                        url=opp.endpoint,
+                        poc_curl=res.poc_curl,
+                    )
+
+                    # Attack Chaining: If credentials discovered in artifact, link and synthesize new attack opportunities
+                    if opp.attack_type == "artifact" and "extracted_secrets" in res.evidence:
+                        for k, v in res.evidence["extracted_secrets"].items():
+                            attack_graph_engine.add_credential_discovery(
+                                source_finding_id=opp.id,
+                                username=k,
+                                password_or_token=v,
+                                secret_type=k,
+                                target_url=opp.endpoint,
+                            )
+                        chained_opps = attack_graph_engine.generate_chained_opportunities()
+                        await opportunity_bus.publish_batch(chained_opps)
+
+                else:
+                    await opportunity_bus.update_state(
+                        opp.id,
+                        OpportunityState.INCONCLUSIVE if res.confidence > 0.3 else OpportunityState.REJECTED,
+                        message=res.message,
+                    )
+
+            except Exception as opp_err:
+                logger.debug("Error in continuous validation on opp %s: %s", opp.id, opp_err)
+            finally:
+                opportunity_bus.task_done()
+
 
 
 class ScanContextPort:

