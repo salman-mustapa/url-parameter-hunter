@@ -280,10 +280,12 @@ class LLMClient:
                 headers["X-Title"] = "BugHunter-OS"
 
             payload_messages = []
-            if system_prompt:
-                payload_messages.append({"role": "system", "content": system_prompt})
-            else:
-                payload_messages.append({"role": "system", "content": DEFAULT_SYSTEM_PROMPT})
+            has_system = any(m.get("role") == "system" for m in messages)
+            if not has_system:
+                if system_prompt:
+                    payload_messages.append({"role": "system", "content": system_prompt})
+                else:
+                    payload_messages.append({"role": "system", "content": DEFAULT_SYSTEM_PROMPT})
 
             payload_messages.extend(messages)
 

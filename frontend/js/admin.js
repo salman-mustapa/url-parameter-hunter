@@ -118,43 +118,73 @@ async function fetchAndPopulateModels(candidateConfig = null) {
     api_key: apiKey
   };
 
+  const defaultModels = [
+    "combo",
+    "developer",
+    "ag/gemini-3.7-flash-medium",
+    "gemini/gemini-3.5-flash-lite",
+    "fast",
+    "ag/claude-sonnet-4-6",
+    "free"
+  ];
+
   try {
     const res = await authFetch(`${API_BASE}/ai/models`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    if (!res.ok) throw new Error("Gagal memuat list model.");
-    const data = await res.json();
+    
+    let modelsList = defaultModels;
+    if (res.ok) {
+      const data = await res.json();
+      if (data.models && data.models.length > 0) {
+        modelsList = data.models;
+      }
+    } else {
+      console.warn("API/models returned non-ok status, falling back to default models.");
+    }
     
     const modelSelect = el("aiModel");
     if (modelSelect) {
       const currentSelected = modelSelect.value;
       modelSelect.innerHTML = "";
+      modelSelect.disabled = false;
       
-      if (data.models && data.models.length > 0) {
-        modelSelect.disabled = false;
-        data.models.forEach(m => {
-          const opt = document.createElement("option");
-          opt.value = m;
-          opt.textContent = m;
-          modelSelect.appendChild(opt);
-        });
-        
-        if (data.models.includes(currentSelected)) {
-          modelSelect.value = currentSelected;
-        } else if (payload.model && data.models.includes(payload.model)) {
-          modelSelect.value = payload.model;
-        } else {
-          modelSelect.value = data.models[0];
-        }
+      modelsList.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        modelSelect.appendChild(opt);
+      });
+      
+      if (modelsList.includes(currentSelected)) {
+        modelSelect.value = currentSelected;
+      } else if (payload.model && modelsList.includes(payload.model)) {
+        modelSelect.value = payload.model;
       } else {
-        modelSelect.disabled = true;
-        modelSelect.innerHTML = `<option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>`;
+        modelSelect.value = modelsList[0];
       }
     }
   } catch (err) {
     console.error("fetchAndPopulateModels error:", err);
+    // Fallback on exception
+    const modelSelect = el("aiModel");
+    if (modelSelect) {
+      modelSelect.innerHTML = "";
+      modelSelect.disabled = false;
+      defaultModels.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        modelSelect.appendChild(opt);
+      });
+      if (payload && payload.model && defaultModels.includes(payload.model)) {
+        modelSelect.value = payload.model;
+      } else {
+        modelSelect.value = "combo";
+      }
+    }
   }
 }
 
