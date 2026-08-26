@@ -132,6 +132,67 @@ class LLMClient:
             return True
         return bool(self.api_key and len(self.api_key) > 4)
 
+    async def list_models(
+        self,
+        provider: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None
+    ) -> List[str]:
+        """Lists available models from the AI provider."""
+        prov = provider or settings.llm_provider
+        url = base_url or self.base_url
+        key = api_key or self.api_key
+
+        if url:
+            url = url.rstrip("/")
+
+        if prov == "gemini" or (url and "generativelanguage.googleapis.com" in url):
+            endpoint = "https://generativelanguage.googleapis.com/v1beta/models"
+            params = {"key": key} if key else {}
+            try:
+                async with httpx.AsyncClient(timeout=8.0, verify=False) as client:
+                    resp = await client.get(endpoint, params=params)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = []
+                        for m in data.get("models", []):
+                            name = m.get("name", "")
+                            if name.startswith("models/"):
+                                name = name[7:]
+                            models.append(name)
+                        return models
+            except Exception as e:
+                logger.error("Failed to list Gemini models: %s", e)
+                return []
+        else:
+            endpoint = f"{url}/models" if url else "https://api.openai.com/v1/models"
+            if not endpoint.startswith("http"):
+                endpoint = f"https://{endpoint}"
+            
+            headers = {}
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            
+            try:
+                async with httpx.AsyncClient(timeout=8.0, verify=False) as client:
+                    resp = await client.get(endpoint, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = []
+                        if isinstance(data, dict) and "data" in data:
+                            for m in data["data"]:
+                                if isinstance(m, dict) and "id" in m:
+                                    models.append(m["id"])
+                        elif isinstance(data, list):
+                            for m in data:
+                                if isinstance(m, dict) and "id" in m:
+                                    models.append(m["id"])
+                        return models
+            except Exception as e:
+                logger.error("Failed to list OpenAI-compatible models from %s: %s", endpoint, e)
+                return []
+        return []
+
     async def test_connection(self) -> Dict[str, Any]:
         """Tests connection and verifies the active multi-model combo ensemble."""
         if not self.is_configured:

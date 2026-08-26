@@ -111,8 +111,8 @@ async def update_ai_config(body: AIConfigRequest):
     return {"status": "success", "config": ai_gateway.get_config()}
 
 
-@router.post("/ai/test")
-async def test_ai_connection(body: AIConfigRequest):
+@router.post("/ai/gateway/test")
+async def test_ai_gateway_connection(body: AIConfigRequest):
     """Test connection and measure response latency against candidate AI provider."""
     from app.ai.gateway import ai_gateway
     cfg = body.model_dump()
@@ -2949,13 +2949,21 @@ class AISettingsRequest(BaseModel):
     temperature: Optional[float] = None
 
 
+class AIModelsRequest(BaseModel):
+    provider: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
 @router.get("/ai/status")
 async def get_ai_status():
     """Returns the current AI Pentest Orchestrator connection status."""
+    from app.core.config import settings
     from app.intelligence.llm_client import llm_client
     return {
         "enabled": settings.llm_enabled,
         "provider": settings.llm_provider,
+        "base_url": settings.llm_base_url,
         "model": settings.llm_model,
         "is_configured": llm_client.is_configured,
     }
@@ -2967,6 +2975,55 @@ async def test_ai_connection():
     from app.intelligence.llm_client import llm_client
     res = await llm_client.test_connection()
     return res
+
+
+@router.get("/ai/models")
+async def get_ai_models():
+    """Fetch available models from the currently configured AI provider."""
+    from app.core.config import settings
+    from app.intelligence.llm_client import llm_client
+    models = await llm_client.list_models()
+    if not models:
+        prov = settings.llm_provider
+        if prov == "openai_compatible" or prov == "openrouter" or prov == "nine_router":
+            models = ["gemini/gemini-3.5-flash-lite", "ag/gemini-3.7-flash-medium", "ag/claude-sonnet-4-6", "fast", "developer", "free"]
+        elif prov == "openai":
+            models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        elif prov == "gemini":
+            models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+        else:
+            models = ["gemini/gemini-3.5-flash-lite", "fast", "developer", "free"]
+    return {"models": models}
+
+
+@router.post("/ai/models")
+async def list_ai_models(body: Optional[AIModelsRequest] = None):
+    """Fetch available models from the current or candidate AI provider."""
+    from app.core.config import settings
+    from app.intelligence.llm_client import llm_client
+    
+    provider = body.provider if body and body.provider is not None else None
+    base_url = body.base_url if body and body.base_url is not None else None
+    api_key = body.api_key if body and body.api_key is not None else None
+
+    models = await llm_client.list_models(
+        provider=provider,
+        base_url=base_url,
+        api_key=api_key
+    )
+    
+    if not models:
+        prov = provider or settings.llm_provider
+        if prov == "openai_compatible" or prov == "openrouter" or prov == "nine_router":
+            models = ["gemini/gemini-3.5-flash-lite", "ag/gemini-3.7-flash-medium", "ag/claude-sonnet-4-6", "fast", "developer", "free"]
+        elif prov == "openai":
+            models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        elif prov == "gemini":
+            models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+        else:
+            models = ["gemini/gemini-3.5-flash-lite", "fast", "developer", "free"]
+
+    return {"models": models}
 
 
 @router.post("/ai/chat")
@@ -2993,6 +3050,7 @@ async def ai_chat_handler(body: AIChatRequest):
 @router.post("/ai/settings")
 async def update_ai_settings(body: AISettingsRequest):
     """Updates AI Provider, API Key, Base URL, and Model on the fly."""
+    from app.core.config import settings
     from app.intelligence.llm_client import llm_client
     if body.enabled is not None:
         settings.llm_enabled = body.enabled

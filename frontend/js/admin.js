@@ -107,6 +107,53 @@ let aiChatMessages = [
   { role: "system", content: "You are a helpful security assistant in a vulnerability scanner portal." }
 ];
 
+async function fetchAndPopulateModels(candidateConfig = null) {
+  const provider = el("aiProvider") ? el("aiProvider").value : "openai_compatible";
+  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value : "";
+  const apiKey = el("aiApiKey") ? el("aiApiKey").value : "";
+  
+  const payload = candidateConfig || {
+    provider: provider,
+    base_url: baseUrl,
+    api_key: apiKey
+  };
+
+  try {
+    const res = await authFetch(`${API_BASE}/ai/models`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error("Gagal memuat list model.");
+    const data = await res.json();
+    
+    const modelSelect = el("aiModel");
+    if (modelSelect) {
+      const currentSelected = modelSelect.value;
+      modelSelect.innerHTML = "";
+      
+      if (data.models && data.models.length > 0) {
+        data.models.forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m;
+          opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+        
+        if (data.models.includes(currentSelected)) {
+          modelSelect.value = currentSelected;
+        } else if (payload.model && data.models.includes(payload.model)) {
+          modelSelect.value = payload.model;
+        } else {
+          modelSelect.value = data.models[0];
+        }
+      }
+    }
+  } catch (err) {
+    console.error("fetchAndPopulateModels error:", err);
+  }
+}
+
 async function loadAiConfig() {
   try {
     const res = await authFetch(`${API_BASE}/ai/status`);
@@ -116,7 +163,14 @@ async function loadAiConfig() {
     if (el("aiLlmEnabled")) el("aiLlmEnabled").value = data.enabled ? "true" : "false";
     if (el("aiProvider")) el("aiProvider").value = data.provider || "openai_compatible";
     if (el("aiBaseUrl")) el("aiBaseUrl").value = data.base_url || "";
-    if (el("aiModel")) el("aiModel").value = data.model || "gemini/gemini-3.5-flash-lite";
+    
+    await fetchAndPopulateModels({
+      provider: data.provider,
+      base_url: data.base_url,
+      model: data.model
+    });
+    
+    if (el("aiModel")) el("aiModel").value = data.model || "";
 
     updateAiStatusUI(data.is_configured);
   } catch (err) {
@@ -167,6 +221,12 @@ async function saveAiSettings() {
     
     updateAiStatusUI(data.is_configured);
     appendSystemMessage(`System: Configuration applied successfully. Active model is now "${data.model}".`);
+    
+    await fetchAndPopulateModels({
+      provider: data.provider,
+      base_url: data.base_url,
+      model: data.model
+    });
   } catch (err) {
     if (typeof showToast === "function") showToast("Gagal: " + err.message, "danger");
   } finally {
@@ -187,10 +247,12 @@ async function testAiConnection() {
     if (!res.ok) throw new Error("Koneksi gagal.");
     const data = await res.json();
 
-    if (data.status === "success" || data.status === "ready" || data.status === "PENTEST_AI_READY" || data.reply === "PENTEST_AI_READY") {
+    if (data.status === "success" || data.status === "ready" || data.status === "PENTEST_AI_READY" || data.reply === "PENTEST_AI_READY" || data.status === "connected") {
       if (typeof showToast === "function") showToast("Koneksi AI Berhasil!", "success");
       updateAiStatusUI(true);
       appendSystemMessage(`System: AI connection successful. Connected to model "${data.model || 'active model'}".`);
+      
+      await fetchAndPopulateModels();
     } else {
       throw new Error(data.message || "Model failed to respond.");
     }
@@ -294,6 +356,16 @@ function initializeAiSettingsWiring() {
       e.preventDefault();
       testAiConnection();
     });
+  }
+  if (el("aiProvider")) {
+    el("aiProvider").addEventListener("change", () => fetchAndPopulateModels());
+  }
+  if (el("aiBaseUrl")) {
+    el("aiBaseUrl").addEventListener("change", () => fetchAndPopulateModels());
+  }
+  if (el("aiApiKey")) {
+    el("aiApiKey").addEventListener("change", () => fetchAndPopulateModels());
+    el("aiApiKey").addEventListener("blur", () => fetchAndPopulateModels());
   }
   if (el("aiChatSendBtn")) {
     el("aiChatSendBtn").addEventListener("click", (e) => {
