@@ -592,7 +592,7 @@ async def _in_flight_fuzz_url(ctx: ScanContext, host: str, asset_id: str, endpoi
         logger.debug("In-flight fuzzing error on %s: %s", endpoint_url, exc)
 
 
-async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_domain: str) -> None:
+async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_domain: str, is_many_hosts: bool = False) -> None:
     """Discovers URLs, Endpoints, and Parameters for a single active asset dynamically."""
     host = asset.hostname
     if not host or not ctx.scope.host_allowed(host):
@@ -606,18 +606,27 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
         )
         return
 
-    # 1. Detect Soft-404 / Custom 404 Baseline
-    soft_404_baseline = await soft_404_detector.get_baseline(host)
-    is_soft_404 = soft_404_baseline.get("is_soft_404", False)
-
     base_urls = [f"https://{host}/", f"http://{host}/"]
-    
-    # Check existing root probed URLs
     existing_urls = (await db.execute(
         select(URL).where(URL.asset_id == asset.id)
     )).scalars().all()
     if existing_urls:
         base_urls = list({u.url for u in existing_urls})
+
+    # 1. Fast Liveness Check — avoid wasting budgets on dead/unresponsive hosts
+    is_live = False
+    for b in base_urls:
+        resp_test = await fetch_http(b, timeout=3.5)
+        if resp_test is not None:
+            is_live = True
+            break
+    if not is_live:
+        logger.debug("Asset %s is unreachable on HTTP/HTTPS. Skipping heavy web crawl.", host)
+        return
+
+    # 1b. Detect Soft-404 / Custom 404 Baseline
+    soft_404_baseline = await soft_404_detector.get_baseline(host)
+    is_soft_404 = soft_404_baseline.get("is_soft_404", False)
 
     seen_urls: Set[str] = {u.rstrip("/") for u in base_urls}
     to_probe_queue: List[str] = []
@@ -674,7 +683,7 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
 
         # 4. Check robots.txt and sitemap.xml dynamically
         robots_url = urljoin(base, "/robots.txt")
-        resp = await fetch_http(robots_url, timeout=5.0)
+        resp = await fetch_http(robots_url, timeout=4.0)
         if resp and resp.status_code == 200 and resp.text:
             for line in resp.text.splitlines():
                 if ":" in line:
@@ -694,34 +703,44 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
                             seen_urls.add(sitemap_url.rstrip("/"))
                             to_probe_queue.append(sitemap_url)
 
-        # 5. Execute Dirsearch Tool Adapter for deep dictionary discovery (V10)
-        try:
-            ds_adapter = DirsearchAdapter()
-            await ctx.emit(
-                "tool.active",
-                f"⚡ Dirsearch active on {base} (9,681 paths dictionary)...",
-                tool="dirsearch",
-                target=base,
-                host=host,
-                severity="info",
-            )
-            ds_res = await ds_adapter.execute({"target_url": base, "threads": 20, "max_time": 40})
-            ds_hits = ds_res.get("discovered_urls", [])
-            if ds_hits:
+        # 5. Execute Dirsearch Tool Adapter selectively on primary/high-value targets (V10)
+        # Avoid exhausting scan runtime budgets on dozens of secondary/leaf subdomains
+        is_high_value_host = (
+            host == root_domain
+            or host == f"www.{root_domain}"
+            or any(kw in host.lower() for kw in ["siakad", "portal", "admin", "api", "app", "login", "webmail", "elearning", "moodle", "kuesioner", "auth"])
+            or (asset.depth == 0)
+            or not is_many_hosts
+        )
+
+        if is_high_value_host:
+            try:
+                ds_adapter = DirsearchAdapter()
                 await ctx.emit(
-                    "dirsearch.results",
-                    f"🎯 Dirsearch discovered {len(ds_hits)} live endpoint(s) on {host}",
-                    count=len(ds_hits),
+                    "tool.active",
+                    f"⚡ Dirsearch active on {base} (9,681 paths dictionary)...",
+                    tool="dirsearch",
+                    target=base,
                     host=host,
                     severity="info",
                 )
-                for hit in ds_hits:
-                    hit_url = hit.get("url")
-                    if hit_url and hit_url.rstrip("/") not in seen_urls:
-                        seen_urls.add(hit_url.rstrip("/"))
-                        to_probe_queue.append(hit_url)
-        except Exception as ds_err:
-            logger.debug("Dirsearch adapter execution fallback on %s: %s", host, ds_err)
+                ds_res = await ds_adapter.execute({"target_url": base, "threads": 20, "max_time": 30})
+                ds_hits = ds_res.get("discovered_urls", [])
+                if ds_hits:
+                    await ctx.emit(
+                        "dirsearch.results",
+                        f"🎯 Dirsearch discovered {len(ds_hits)} live endpoint(s) on {host}",
+                        count=len(ds_hits),
+                        host=host,
+                        severity="info",
+                    )
+                    for hit in ds_hits:
+                        hit_url = hit.get("url")
+                        if hit_url and hit_url.rstrip("/") not in seen_urls:
+                            seen_urls.add(hit_url.rstrip("/"))
+                            to_probe_queue.append(hit_url)
+            except Exception as ds_err:
+                logger.debug("Dirsearch adapter execution fallback on %s: %s", host, ds_err)
 
         # 6. Execute Katana Tool Adapter for fast JS-aware crawling (V10)
         try:
@@ -1059,12 +1078,37 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         )
     )).scalars().all()
 
-    assets = sorted(assets, key=lambda a: a.depth)[: settings.max_web_hosts]
+    # Prioritize root domain and high-value functional portals over leaf/CDN subdomains
+    def _asset_priority(a: Asset) -> int:
+        h = (a.hostname or "").lower()
+        if h == root_domain or h == f"www.{root_domain}":
+            return 0
+        if any(kw in h for kw in ["siakad", "portal", "admin", "api", "app", "login", "auth", "moodle", "elearning", "kuesioner"]):
+            return 1
+        return 2
+
+    sorted_assets = sorted(assets, key=_asset_priority)[: settings.max_web_hosts]
+    total_count = len(sorted_assets)
     sem = asyncio.Semaphore(6)
 
     async def _crawl_asset_sem(a: Asset):
         async with sem:
             async with AsyncSessionLocal() as session:
-                await crawl_and_discover_asset(ctx, session, a, root_domain)
+                try:
+                    await asyncio.wait_for(
+                        crawl_and_discover_asset(ctx, session, a, root_domain, is_many_hosts=(total_count > 4)),
+                        timeout=45.0,  # Max 45s per individual asset crawl
+                    )
+                except asyncio.TimeoutError:
+                    logger.debug("Asset %s crawl exceeded 45s per-asset budget", a.hostname)
+                except Exception as exc:
+                    logger.debug("Asset %s crawl error: %s", a.hostname, exc)
 
-    await asyncio.gather(*[_crawl_asset_sem(a) for a in assets], return_exceptions=True)
+    try:
+        # Cap total web crawl phase to 600s max (10 minutes)
+        await asyncio.wait_for(
+            asyncio.gather(*[_crawl_asset_sem(a) for a in sorted_assets], return_exceptions=True),
+            timeout=600.0,
+        )
+    except asyncio.TimeoutError:
+        logger.info("Web discovery phase reached maximum allocated budget (600s). Proceeding to next phase.")

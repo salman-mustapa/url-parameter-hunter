@@ -1607,7 +1607,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         for asset_id_key, asset_obj in asset_map.items():
             target_host = asset_obj.hostname if asset_obj else root_domain
             asset_urls = [u.url for u in urls if u.asset_id == asset_id_key and u.url]
-            discovered_bases = list({urlparse(u).scheme + "://" + urlparse(u).netloc for u in asset_urls if urlparse(u).netloc})
+            discovered_bases = list({urlparse(u).scheme + "://" + urlparse(u).netloc for u in asset_urls if urlparse(u).netloc})[:3]
             if not discovered_bases:
                 discovered_bases = [f"https://{target_host}", f"http://{target_host}"]
 
@@ -1650,7 +1650,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         for asset_id_key, asset_obj in asset_map.items():
             target_host = asset_obj.hostname if asset_obj else root_domain
             disc_url_strings = [u.url for u in urls if u.asset_id == asset_id_key and u.url]
-            discovered_bases = list({urlparse(u).scheme + "://" + urlparse(u).netloc for u in disc_url_strings if urlparse(u).netloc})
+            discovered_bases = list({urlparse(u).scheme + "://" + urlparse(u).netloc for u in disc_url_strings if urlparse(u).netloc})[:3]
             if not discovered_bases:
                 discovered_bases = [f"https://{target_host}", f"http://{target_host}"]
 

@@ -168,13 +168,18 @@ class ScanManager:
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
-            logger.error("Scan %s exceeded its hard runtime limit of %.0f seconds.", scan_id, timeout_seconds)
+            logger.error("Scan %s reached its runtime budget of %.0f seconds. Gracefully finalizing telemetry...", scan_id, timeout_seconds)
+            try:
+                from app.core.security_engine import security_engine
+                security_engine.complete_scan(scan_id)
+            except Exception:
+                pass
             await self._finish_status(scan_id, "timeout")
             await event_bus.publish(result_service.make_event(
                 scan_id,
                 "scan.timeout",
-                f"Scan stopped after reaching the {timeout_seconds:.0f}s runtime budget.",
-                severity="error",
+                f"Scan reached the {timeout_seconds:.0f}s runtime budget. Discovered assets, endpoints, and findings preserved.",
+                severity="warn",
             ))
 
     async def resume_pending_scans(self, max_scans: Optional[int] = None) -> None:
@@ -612,18 +617,28 @@ class ScanManager:
                 logger.debug("SecurityEngine complete_scan: %s", se_err)
 
             # ---- Complete Scan & Update Summary ----
-            completion_status = "degraded" if phase_failures else "completed"
+            async with async_session_scope() as db:
+                from sqlalchemy import func
+                db_assets = (await db.execute(select(func.count(Asset.id)).where(Asset.scan_id == scan_id))).scalar() or 0
+                db_urls = (await db.execute(select(func.count(URL.id)).join(Asset, URL.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalar() or 0
+                db_findings = (await db.execute(select(func.count(Finding.id)).where(Finding.scan_id == scan_id))).scalar() or 0
+
+            # Scan is only degraded if critical core discovery produced 0 assets or unhandled fatal failure aborted execution
+            is_fatal_failure = any(f.get("fatal", False) for f in phase_failures)
+            is_degraded = is_fatal_failure or (db_assets == 0 and any(f.get("phase") == "discovery" for f in phase_failures))
+            completion_status = "degraded" if is_degraded else "completed"
+
             await ctx.emit(
                 "pipeline.stage",
                 (
-                    f"Assessment completed for {root_domain}. Security report compiled."
-                    if not phase_failures
-                    else f"Assessment finished in DEGRADED state for {root_domain}; {len(phase_failures)} phase(s) were incomplete."
+                    f"Assessment completed for {root_domain}. Security report compiled ({db_assets} active assets, {db_urls} endpoints, {db_findings} findings)."
+                    if not is_degraded
+                    else f"Assessment finished in DEGRADED state for {root_domain}; critical reconnaissance phases were incomplete."
                 ),
                 stage="REPORT",
                 tool="dossier_builder",
                 progress=100,
-                severity="warn" if phase_failures else "info",
+                severity="warn" if is_degraded else "info",
             )
             await self._complete(
                 scan_id,
