@@ -1356,6 +1356,14 @@ async def get_investigation_workspace(
     techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
     findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id).order_by(desc(Finding.first_seen)))).scalars().all()
     evidence_items = (await db.execute(select(Evidence).where(Evidence.scan_id == scan_id))).scalars().all()
+    
+    # Auto-heal, synchronize, and retroactively reprocess any unparsed or empty artifacts (§27)
+    try:
+        from app.artifacts.engine import ArtifactEngine
+        await ArtifactEngine.reprocess_and_sync_scan_artifacts(db, scan_id)
+    except Exception as sync_err:
+        logger.debug("Artifact auto-sync notice for scan %s: %s", scan_id, sync_err)
+
     artifacts = (await db.execute(select(Artifact).where(Artifact.scan_id == scan_id).order_by(desc(Artifact.created_at)))).scalars().all()
     export_jobs = (await db.execute(select(ExportJob).where(ExportJob.scan_id == scan_id).order_by(desc(ExportJob.created_at)))).scalars().all()
     recent_events = (await db.execute(select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(desc(ScanEvent.created_at)).limit(100))).scalars().all()
@@ -1517,13 +1525,16 @@ async def get_investigation_workspace(
             "file_type": a.file_type,
             "classification": a.classification,
             "category": a.category,
-            "record_count": a.record_count,
+            "record_count": a.record_count or (len(a.preview_data.get("rows", [])) if a.preview_data and isinstance(a.preview_data, dict) else 0),
             "size_bytes": a.size_bytes,
+            "file_size": a.size_bytes,
             "sha256_hash": a.sha256_hash,
             "source": a.source,
             "is_redacted": a.is_redacted,
             "state": a.state,
             "preview_available": bool(a.preview_data),
+            "preview_data": a.preview_data,
+            "schema_data": a.schema_data,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }
         for a in artifacts

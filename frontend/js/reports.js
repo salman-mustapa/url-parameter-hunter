@@ -578,14 +578,16 @@ function renderWorkspaceArtifacts(artifacts) {
     const classBadge = `
       <span class="pill pill-class-${cls.toLowerCase()}">${esc(cls)}</span>
     `;
+    const recCount = art.record_count ?? (art.preview_data?.rows?.length) ?? 0;
+    const szBytes = art.size_bytes ?? art.file_size ?? 0;
 
     return `
       <tr>
         <td><strong>${esc(art.filename)}</strong></td>
         <td>${classBadge}</td>
         <td><span class="pill pill-neutral">${esc(art.category || 'generic')}</span></td>
-        <td><strong class="font-mono">${esc(String(art.record_count || 0))}</strong> rows</td>
-        <td class="text-xs font-mono">${formatBytes(art.file_size || 0)}</td>
+        <td><strong class="font-mono">${esc(String(recCount))}</strong> rows</td>
+        <td class="text-xs font-mono">${formatBytes(szBytes)}</td>
         <td class="text-xs font-mono text-muted">${esc((art.sha256_hash || '-').slice(0, 16))}...</td>
         <td>
           <button class="btn btn-primary btn-xs" onclick="openArtifactPreview('${esc(art.id)}')">👁️ Pratinjau</button>

@@ -458,3 +458,226 @@ class ArtifactEngine:
 
         return artifact
 
+    @classmethod
+    async def reprocess_and_sync_scan_artifacts(
+        cls,
+        db: AsyncSession,
+        scan_id: str,
+    ) -> list[Artifact]:
+        """
+        Auto-heal, synchronize, and retroactively reprocess artifacts for a scan (§27).
+        Ensures existing historical artifacts with 0 bytes or unparsed schemas/counts
+        are parsed, classified, and populated with previews, size, and records.
+        Also inspects findings for any leaked files or schemas not yet registered as artifacts.
+        """
+        from app.models.models import Finding
+        dirs = get_investigation_dirs(scan_id)
+        classifier = DocumentClassifier()
+
+        # 1. Fetch all artifacts for this scan
+        stmt = select(Artifact).where(Artifact.scan_id == scan_id)
+        artifacts = list((await db.execute(stmt)).scalars().all())
+
+        # 2. Fetch all findings for this scan
+        findings_stmt = select(Finding).where(Finding.scan_id == scan_id)
+        findings = list((await db.execute(findings_stmt)).scalars().all())
+
+        modified = False
+
+        # 3. Check existing artifacts for missing sizes or empty previews
+        for art in artifacts:
+            content_bytes = None
+            # Check storage path
+            if art.storage_path and os.path.isfile(art.storage_path):
+                try:
+                    with open(art.storage_path, "rb") as f:
+                        content_bytes = f.read()
+                except Exception:
+                    content_bytes = None
+            # Check quarantine path
+            if not content_bytes and art.quarantine_path and os.path.isfile(art.quarantine_path):
+                try:
+                    with open(art.quarantine_path, "rb") as f:
+                        content_bytes = f.read()
+                except Exception:
+                    content_bytes = None
+
+            # Check if linked finding or matching finding has evidence content
+            if not content_bytes:
+                for f in findings:
+                    fn_low = (art.filename or "").lower()
+                    ft_low = (art.file_type or "").lower()
+                    f_title = (f.title or "").lower()
+                    f_url = (getattr(f, "endpoint_url", None) or (f.evidence.get("url") if isinstance(f.evidence, dict) else "") or "").lower()
+                    f_type = (f.finding_type or "").lower()
+
+                    matches_finding = (
+                        f.id == art.finding_id
+                        or (fn_low and fn_low in f_title)
+                        or (fn_low and fn_low in f_url)
+                        or ("sql" in ft_low and ("sql" in f_type or "sql" in f_title))
+                        or ("csv" in ft_low and ("csv" in f_type or "csv" in f_title))
+                        or ("passwd" in ft_low and ("passwd" in f_title or "lfi" in f_type or "passwd" in str(f.evidence).lower()))
+                        or (f.evidence and (
+                            (art.filename and art.filename in str(f.evidence))
+                            or (art.sha256_hash and art.sha256_hash in str(f.evidence))
+                        ))
+                    )
+                    if matches_finding:
+                        ev = f.evidence if isinstance(f.evidence, dict) else {}
+                        cand = ev.get("body_sample") or ev.get("response_body") or ev.get("passwd_content")
+                        if not cand and "files_read" in ev and isinstance(ev["files_read"], dict):
+                            for fk, fi in ev["files_read"].items():
+                                if isinstance(fi, dict) and fi.get("content"):
+                                    if art.filename in fi.get("file", "") or fk in art.filename:
+                                        cand = fi.get("content")
+                                        break
+                        if cand:
+                            content_bytes = cand.encode("utf-8", errors="ignore") if isinstance(cand, str) else cand
+                            break
+
+            # If we obtained content_bytes, update the artifact
+            if content_bytes and (art.size_bytes == 0 or not art.preview_data or art.category in ("generic", "", None)):
+                art.size_bytes = len(content_bytes)
+                content_text = content_bytes.decode("utf-8", errors="ignore")
+                classification, category, tags = classifier.classify(art.filename, content_text, art.file_type)
+                art.classification = classification
+                art.category = category
+
+                # Ensure saved to storage if missing
+                if not art.storage_path or not os.path.isfile(art.storage_path):
+                    safe_fn = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", art.filename)
+                    out_path = dirs["files"] / safe_fn
+                    try:
+                        with open(out_path, "wb") as f_out:
+                            f_out.write(content_bytes)
+                        art.storage_path = str(out_path)
+                    except Exception:
+                        pass
+
+                # Parse depending on type
+                fn_lower = art.filename.lower()
+                if "passwd" in fn_lower or art.file_type == "passwd_file":
+                    passwd_lines = [l for l in content_text.strip().splitlines() if ":" in l and not l.startswith("#")]
+                    real_users = []
+                    for line in passwd_lines:
+                        parts = line.split(":")
+                        if len(parts) >= 7:
+                            try:
+                                uid = int(parts[2])
+                                real_users.append({
+                                    "username": parts[0],
+                                    "uid": uid,
+                                    "gid": int(parts[3]),
+                                    "home": parts[5],
+                                    "shell": parts[6],
+                                })
+                            except (ValueError, IndexError):
+                                pass
+                    art.schema_data = {"type": "unix_passwd", "total_entries": len(passwd_lines), "real_users": real_users}
+                    art.preview_data = {
+                        "columns": ["Username", "UID", "GID", "Home Directory", "Shell"],
+                        "rows": [
+                            {"Username": u["username"], "UID": str(u["uid"]), "GID": str(u["gid"]), "Home Directory": u["home"], "Shell": u["shell"]}
+                            for u in real_users[:50]
+                        ]
+                    }
+                    art.record_count = len(real_users)
+                elif fn_lower.endswith(".csv") or "csv" in art.file_type:
+                    rows = []
+                    lines = content_text.splitlines()[:50]
+                    for l in lines:
+                        if "," in l or ";" in l:
+                            sep = ";" if ";" in l else ","
+                            rows.append([cell.strip() for cell in l.split(sep)])
+                    if rows:
+                        cols = rows[0]
+                        data_rows = [dict(zip(cols, r)) for r in rows[1:30]]
+                        art.preview_data = {"columns": cols, "rows": data_rows}
+                        art.record_count = len(content_text.splitlines()) - 1
+                elif fn_lower.endswith(".sql") or "sql" in art.file_type:
+                    tbl_matches = re.findall(r"CREATE\s+TABLE\s+[`\"']?(\w+)[`\"']?", content_text, re.IGNORECASE)
+                    tables = [{"name": t, "columns": []} for t in set(tbl_matches)]
+                    art.schema_data = {"tables": tables}
+                    art.preview_data = {
+                        "columns": ["Line", "SQL Statement Sample"],
+                        "rows": [{"Line": idx + 1, "SQL Statement Sample": l[:120]} for idx, l in enumerate(content_text.splitlines()[:30]) if l.strip()]
+                    }
+                    art.record_count = len(tables) or len(content_text.splitlines())
+                elif fn_lower.endswith(".env") or "env" in art.file_type:
+                    env_pairs = []
+                    for l in content_text.splitlines():
+                        if "=" in l and not l.strip().startswith("#"):
+                            k, _, v = l.partition("=")
+                            env_pairs.append({"Variable": k.strip(), "Value": v.strip()[:3] + "********" if len(v.strip()) > 3 else "********"})
+                    art.preview_data = {"columns": ["Variable", "Value"], "rows": env_pairs[:40]}
+                    art.record_count = len(env_pairs)
+                else:
+                    lines = [l for l in content_text.splitlines() if l.strip()]
+                    art.preview_data = {
+                        "columns": ["Line", "Content"],
+                        "rows": [{"Line": idx + 1, "Content": l[:140]} for idx, l in enumerate(lines[:30])]
+                    }
+                    art.record_count = len(lines)
+
+                art.state = "EVIDENCE_READY"
+                modified = True
+
+        # 4. Check findings for unmaterialized files/data
+        existing_filenames = {a.filename.lower() for a in artifacts}
+        for f in findings:
+            ev = f.evidence if isinstance(f.evidence, dict) else {}
+            if "files_read" in ev and isinstance(ev["files_read"], dict):
+                for fk, fi in ev["files_read"].items():
+                    if isinstance(fi, dict) and fi.get("content"):
+                        fn = fi.get("file", "").split("/")[-1] or f"lfi_{fk}.txt"
+                        if fn.lower() not in existing_filenames:
+                            content = fi["content"]
+                            c_bytes = content.encode("utf-8", errors="ignore")
+                            c_sha = hashlib.sha256(c_bytes).hexdigest()
+                            c_tier, c_cat, c_tags = classifier.classify(fn, content, "passwd_file" if "passwd" in fn.lower() else "generic")
+                            safe_fn = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", fn)
+                            f_path = dirs["files"] / safe_fn
+                            try:
+                                with open(f_path, "wb") as out_f:
+                                    out_f.write(c_bytes)
+                            except Exception:
+                                f_path = None
+                            new_art = Artifact(
+                                scan_id=scan_id,
+                                asset_id=f.asset_id,
+                                finding_id=f.id,
+                                filename=fn,
+                                file_type="passwd_file" if "passwd" in fn.lower() else "text_file",
+                                mime_type="text/plain",
+                                size_bytes=len(c_bytes),
+                                sha256_hash=c_sha,
+                                storage_path=str(f_path) if f_path else None,
+                                quarantine_path=str(f_path) if f_path else None,
+                                state="EVIDENCE_READY",
+                                classification=c_tier,
+                                category=c_cat,
+                                record_count=len(content.splitlines()),
+                                source=fi.get("url") or getattr(f, "endpoint_url", None) or (f.evidence.get("url") if isinstance(f.evidence, dict) else None),
+                                is_redacted=True,
+                                preview_data={
+                                    "columns": ["Line", "Content"],
+                                    "rows": [{"Line": idx + 1, "Content": l[:140]} for idx, l in enumerate(content.splitlines()[:30])]
+                                },
+                                schema_data={},
+                                extracted_entities={},
+                                metadata_={"detected_tags": c_tags, "auto_healed": True},
+                            )
+                            db.add(new_art)
+                            artifacts.append(new_art)
+                            existing_filenames.add(fn.lower())
+                            modified = True
+
+        if modified:
+            try:
+                await db.commit()
+            except Exception as commit_err:
+                logger.debug("Reprocess commit notice: %s", commit_err)
+
+        return artifacts
+

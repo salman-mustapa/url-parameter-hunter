@@ -112,13 +112,13 @@ function switchViewTab(tabName, params = {}, pushState = true) {
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (typeof syncActiveScansBar === "function") syncActiveScansBar();
 
-    const requestedScanId = params.scan_id;
+    const targetScanId = params.scan_id || state.activeScanId;
 
-    if (requestedScanId && requestedScanId !== state.activeScanId) {
+    if (targetScanId) {
       if (typeof openHistoricalScan === "function") {
-        openHistoricalScan(requestedScanId, params.target || state.activeTarget);
+        openHistoricalScan(targetScanId, params.target || state.activeTarget);
       }
-    } else if (!state.activeScanId && !requestedScanId) {
+    } else {
       authFetch(`${API_BASE}/scans`)
         .then(res => res.json())
         .then(scans => {
@@ -133,40 +133,22 @@ function switchViewTab(tabName, params = {}, pushState = true) {
             if (typeof openHistoricalScan === "function") {
               openHistoricalScan(runningScan.id, exactTarget);
             }
+          } else if (scanList.length > 0) {
+            const latestScan = scanList[0];
+            const exactTarget = (latestScan.options && (latestScan.options.target_url || latestScan.options.target_host)) || latestScan.target_url || latestScan.target_host || latestScan.root_domain || "";
+            state.activeScanId = latestScan.id;
+            state.activeTarget = exactTarget;
+            state.currentTarget = exactTarget;
+            if (typeof openHistoricalScan === "function") {
+              openHistoricalScan(latestScan.id, exactTarget);
+            }
           } else {
-            // Keep workspace clean and ready for new scans
             if (typeof resetCleanDashboard === "function") {
               resetCleanDashboard();
             }
           }
         })
         .catch(err => console.warn("Failed to check scans:", err));
-    } else if (state.activeScanId) {
-      // Check if current active scan still exists in database
-      authFetch(`${API_BASE}/scans/${encodeURIComponent(state.activeScanId)}`)
-        .then(res => {
-          if (!res.ok) {
-            if (typeof resetCleanDashboard === "function") resetCleanDashboard();
-          } else {
-            res.json().then(scanData => {
-              const exactTarget = (scanData.options && (scanData.options.target_url || scanData.options.target_host)) || scanData.target_url || scanData.target_host || scanData.root_domain;
-              if (exactTarget) {
-                state.activeTarget = exactTarget;
-                state.currentTarget = exactTarget;
-                if (el("targetInput")) el("targetInput").value = exactTarget;
-                if (el("dashReportTarget")) el("dashReportTarget").textContent = exactTarget;
-              }
-              if (typeof updateBreadcrumbUI === "function") {
-                updateBreadcrumbUI("dashboard", { scan_id: state.activeScanId });
-              }
-              if (typeof refreshAssetTree === "function") refreshAssetTree();
-              if (typeof loadFindings === "function") loadFindings();
-            });
-          }
-        })
-        .catch(() => {
-          if (typeof resetCleanDashboard === "function") resetCleanDashboard();
-        });
     }
   } else if (tabName === "history") {
     if (el("viewHistory")) el("viewHistory").classList.remove("hidden");

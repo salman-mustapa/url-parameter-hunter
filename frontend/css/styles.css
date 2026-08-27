@@ -947,6 +947,9 @@ html, body {
   border-radius: 8px;
   box-shadow: 3px 3px 0 var(--shadow);
   padding: 14px 18px;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .control-header {
@@ -1011,6 +1014,9 @@ html, body {
   gap: 12px;
   align-items: flex-end;
   margin-bottom: 12px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 @media (max-width: 1024px) {
@@ -1091,6 +1097,7 @@ html, body {
 
 .custom-select {
   width: 100%;
+  max-width: 100%;
   padding: 8px 12px;
   border: 2px solid var(--border);
   border-radius: 8px;
@@ -1104,6 +1111,9 @@ html, body {
   cursor: pointer;
   height: 38px;
   box-sizing: border-box;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .engine-status-pill {
@@ -1115,11 +1125,15 @@ html, body {
   border-radius: 6px;
   padding: 7px 10px;
   box-shadow: 2px 2px 0 var(--shadow);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 800;
   color: #065F46;
-  white-space: nowrap;
-  height: 36px;
+  white-space: normal;
+  line-height: 1.3;
+  height: auto;
+  min-height: 38px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .control-actions {
@@ -8182,12 +8196,21 @@ html, body {
   }
 
   .ws-table {
-    min-width: 600px;
+    min-width: 520px;
   }
 
   .ws-table th, .ws-table td {
-    padding: 8px 10px;
-    font-size: 12px;
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  #wsTabArtifacts .ws-table {
+    min-width: 100%;
+  }
+
+  #wsTabArtifacts .ws-table th:nth-child(6),
+  #wsTabArtifacts .ws-table td:nth-child(6) {
+    display: none;
   }
 
   /* Finding Cards */
