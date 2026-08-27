@@ -596,14 +596,34 @@ class ArtifactEngine:
                         art.preview_data = {"columns": cols, "rows": data_rows}
                         art.record_count = len(content_text.splitlines()) - 1
                 elif fn_lower.endswith(".sql") or "sql" in art.file_type:
-                    tbl_matches = re.findall(r"CREATE\s+TABLE\s+[`\"']?(\w+)[`\"']?", content_text, re.IGNORECASE)
-                    tables = [{"name": t, "columns": []} for t in set(tbl_matches)]
-                    art.schema_data = {"tables": tables}
-                    art.preview_data = {
-                        "columns": ["Line", "SQL Statement Sample"],
-                        "rows": [{"Line": idx + 1, "SQL Statement Sample": l[:120]} for idx, l in enumerate(content_text.splitlines()[:30]) if l.strip()]
+                    parsed_sql = SqlDumpParser.parse(content_text, max_sample_rows=50)
+                    art.schema_data = parsed_sql
+                    art.extracted_entities = {
+                        "users": parsed_sql.get("extracted_users", []),
+                        "hashes": parsed_sql.get("extracted_hashes", []),
+                        "sensitive_fields": parsed_sql.get("sensitive_fields", []),
                     }
-                    art.record_count = len(tables) or len(content_text.splitlines())
+                    preview_tables = []
+                    for t in parsed_sql.get("tables", [])[:20]:
+                        preview_tables.append({
+                            "name": t.get("name"),
+                            "columns": [c.get("name") if isinstance(c, dict) else str(c) for c in t.get("columns", [])],
+                            "sample_rows": t.get("sample_rows", [])[:20],
+                            "primary_key": t.get("primary_key"),
+                        })
+                    art.preview_data = {
+                        "format": "database_tables",
+                        "vendor": parsed_sql.get("vendor") or "MySQL / MariaDB",
+                        "database_name": parsed_sql.get("database_name") or "main_db",
+                        "tables": preview_tables,
+                        "columns": preview_tables[0]["columns"] if preview_tables else ["Table", "Columns"],
+                        "rows": preview_tables[0]["sample_rows"] if preview_tables else [],
+                        "extracted_users": parsed_sql.get("extracted_users", [])[:50],
+                        "extracted_hashes": parsed_sql.get("extracted_hashes", [])[:50],
+                        "sensitive_fields": parsed_sql.get("sensitive_fields", [])[:50],
+                        "raw_sample": "\n".join(content_text.splitlines()[:50]),
+                    }
+                    art.record_count = parsed_sql.get("total_records_estimated") or len(parsed_sql.get("tables", [])) or len(content_text.splitlines())
                 elif fn_lower.endswith(".env") or "env" in art.file_type:
                     env_pairs = []
                     for l in content_text.splitlines():

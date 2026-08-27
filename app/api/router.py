@@ -1356,15 +1356,19 @@ async def get_investigation_workspace(
     techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
     findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id).order_by(desc(Finding.first_seen)))).scalars().all()
     evidence_items = (await db.execute(select(Evidence).where(Evidence.scan_id == scan_id))).scalars().all()
-    
-    # Auto-heal, synchronize, and retroactively reprocess any unparsed or empty artifacts (§27)
-    try:
-        from app.artifacts.engine import ArtifactEngine
-        await ArtifactEngine.reprocess_and_sync_scan_artifacts(db, scan_id)
-    except Exception as sync_err:
-        logger.debug("Artifact auto-sync notice for scan %s: %s", scan_id, sync_err)
-
     artifacts = (await db.execute(select(Artifact).where(Artifact.scan_id == scan_id).order_by(desc(Artifact.created_at)))).scalars().all()
+
+    # Fast conditional auto-heal: only reprocess if artifacts are empty/unparsed or findings have unmaterialized evidence
+    needs_sync = any(a.size_bytes == 0 or not a.preview_data or a.category in ("generic", "", None) for a in artifacts)
+    if not artifacts and any(f.evidence and any(k in str(f.evidence) for k in ("files_read", "passwd_content", "body_sample")) for f in findings):
+        needs_sync = True
+
+    if needs_sync:
+        try:
+            from app.artifacts.engine import ArtifactEngine
+            artifacts = await ArtifactEngine.reprocess_and_sync_scan_artifacts(db, scan_id)
+        except Exception as sync_err:
+            logger.debug("Artifact auto-sync notice for scan %s: %s", scan_id, sync_err)
     export_jobs = (await db.execute(select(ExportJob).where(ExportJob.scan_id == scan_id).order_by(desc(ExportJob.created_at)))).scalars().all()
     recent_events = (await db.execute(select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(desc(ScanEvent.created_at)).limit(100))).scalars().all()
 

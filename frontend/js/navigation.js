@@ -36,6 +36,38 @@ function updateRouteURL(tabName, params = {}) {
   }
 }
 
+window.showTopLoader = function() {
+  const elLoader = el("globalTopLoader");
+  if (elLoader) {
+    elLoader.classList.remove("done");
+    elLoader.classList.add("loading");
+  }
+};
+
+window.hideTopLoader = function() {
+  const elLoader = el("globalTopLoader");
+  if (elLoader) {
+    elLoader.classList.add("done");
+    setTimeout(() => {
+      elLoader.classList.remove("loading", "done");
+    }, 350);
+  }
+};
+
+window.setButtonLoading = function(btn, isLoading, loadingText = "Memuat...") {
+  if (!btn) return;
+  if (isLoading) {
+    if (!btn.dataset.origHtml) btn.dataset.origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-inline">⏳</span> ${loadingText}`;
+    btn.classList.add("btn-loading");
+  } else {
+    if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    btn.disabled = false;
+    btn.classList.remove("btn-loading");
+  }
+};
+
 function updateBreadcrumbUI(tabName, params = {}) {
   const dashBc = el("dashboardBreadcrumbName");
   if (dashBc) {
@@ -115,8 +147,13 @@ function switchViewTab(tabName, params = {}, pushState = true) {
     const targetScanId = params.scan_id || state.activeScanId;
 
     if (targetScanId) {
-      if (typeof openHistoricalScan === "function") {
-        openHistoricalScan(targetScanId, params.target || state.activeTarget);
+      const isDifferentScan = params.scan_id && params.scan_id !== state.activeScanId;
+      const isNotYetRendered = !state.events || state.events.length === 0 || !el("targetInput")?.value;
+
+      if (isDifferentScan || isNotYetRendered) {
+        if (typeof openHistoricalScan === "function") {
+          openHistoricalScan(targetScanId, params.target || state.activeTarget);
+        }
       }
     } else {
       authFetch(`${API_BASE}/scans`)

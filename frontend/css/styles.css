@@ -8330,3 +8330,151 @@ html, body {
     padding: 10px;
   }
 }
+
+/* ==========================================================================
+   Global Top Progress & Interactive Loading Feedback
+   ========================================================================== */
+.global-top-loader {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0%;
+  height: 3.5px;
+  background: linear-gradient(90deg, #10B981, #06B6D4, #3B82F6, #8B5CF6);
+  background-size: 200% 100%;
+  z-index: 999999;
+  transition: width 0.25s ease, opacity 0.25s ease;
+  opacity: 0;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.8), 0 0 5px rgba(6, 182, 212, 0.6);
+  pointer-events: none;
+}
+
+.global-top-loader.loading {
+  opacity: 1;
+  width: 78%;
+  animation: shimmerLoader 1.5s infinite linear;
+}
+
+.global-top-loader.done {
+  width: 100%;
+  opacity: 0;
+}
+
+@keyframes shimmerLoader {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.btn-loading {
+  opacity: 0.85 !important;
+  cursor: wait !important;
+  pointer-events: none !important;
+}
+
+/* ==========================================================================
+   Workspace Navigation Wrapper & Mobile Selector
+   ========================================================================== */
+.workspace-nav-wrapper {
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.ws-mobile-nav-selector {
+  display: none;
+  margin-bottom: 8px;
+}
+
+.ws-mobile-select {
+  width: 100%;
+  font-weight: 700;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: var(--text);
+  box-shadow: 2px 2px 0 var(--shadow);
+  height: 40px;
+}
+
+@media (max-width: 768px) {
+  .ws-mobile-nav-selector {
+    display: block;
+  }
+}
+
+/* ==========================================================================
+   Artifact Intelligence Multi-Tab Modal & Table Switcher
+   ========================================================================== */
+.art-intel-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  background: #F8FAFC;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+}
+
+.art-modal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.art-tab-btn {
+  background: #FFFFFF;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: 1.5px 1.5px 0 var(--shadow);
+  transition: all 0.15s ease;
+}
+
+.art-tab-btn:hover {
+  background: #F1F5F9;
+  color: var(--text);
+}
+
+.art-tab-btn.active {
+  background: #D1FAE5;
+  color: #065F46;
+  border-color: #059669;
+  box-shadow: 2px 2px 0 var(--shadow);
+}
+
+.art-subtab-pane {
+  display: none;
+}
+
+.art-subtab-pane.active {
+  display: block;
+}
+
+.art-table-switcher {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #F8FAFC;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.art-table-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.art-tbl-pill {
+  font-size: 11px !important;
+  font-family: var(--font-mono);
+  padding: 3px 8px !important;
+}

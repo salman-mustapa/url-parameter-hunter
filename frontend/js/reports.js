@@ -68,6 +68,8 @@ async function initReportHub(preferredScanId = null) {
   }
 }
 
+const workspaceCache = new Map();
+
 async function loadReportHubData(scanId, updateUrl = false) {
   return loadWorkspaceData(scanId, updateUrl);
 }
@@ -84,10 +86,18 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
     updateBreadcrumbUI("reports", { scan_id: scanId });
   }
 
-  // Visual feedback while loading
-  if (el("wsExecSummaryText")) {
-    el("wsExecSummaryText").innerHTML = `<em>🔄 Memuat telemetri investigasi #${scanId.slice(0, 16)}...</em>`;
+  // Instant render from cache (0ms delay)
+  if (workspaceCache.has(scanId)) {
+    const cachedWs = workspaceCache.get(scanId);
+    currentWorkspaceData = cachedWs;
+    renderWorkspace(cachedWs);
+  } else {
+    if (el("wsExecSummaryText")) {
+      el("wsExecSummaryText").innerHTML = `<em>🔄 Memuat telemetri investigasi #${scanId.slice(0, 16)}...</em>`;
+    }
   }
+
+  if (typeof showTopLoader === "function") showTopLoader();
 
   try {
     let res = await authFetch(`${API_BASE}/investigations/${encodeURIComponent(scanId)}/workspace`);
@@ -99,13 +109,18 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
     }
     const ws = await res.json();
     currentWorkspaceData = ws;
+    workspaceCache.set(scanId, ws);
     renderWorkspace(ws);
   } catch (err) {
     console.error("Failed to fetch investigation workspace data:", err);
-    showToast("Gagal memuat Investigation Workspace: " + err.message, "danger");
-    if (el("wsExecSummaryText")) {
-      el("wsExecSummaryText").textContent = "Gagal memuat data investigasi. Silakan periksa koneksi atau pilih scan lain.";
+    if (!workspaceCache.has(scanId)) {
+      showToast("Gagal memuat Investigation Workspace: " + err.message, "danger");
+      if (el("wsExecSummaryText")) {
+        el("wsExecSummaryText").textContent = "Gagal memuat data investigasi. Silakan periksa koneksi atau pilih scan lain.";
+      }
     }
+  } finally {
+    if (typeof hideTopLoader === "function") hideTopLoader();
   }
 }
 
@@ -439,7 +454,7 @@ function renderWorkspaceFindings(findings) {
           <span class="text-xs text-muted">Quality Gate: <strong>12-Point Cryptographically Verified</strong></span>
           <div class="flex-row-gap">
             <button class="btn btn-secondary btn-xs" onclick="downloadSingleFindingPoC('${esc(f.id)}')">💾 Export PoC (.py)</button>
-            <button class="btn btn-primary btn-xs" onclick="openFindingDetail('${esc(f.id)}')">🔒 View In-Depth Analysis & PoC</button>
+            <button class="btn btn-primary btn-xs" onclick="openFindingPocDossier('${esc(f.id)}')">🔒 View In-Depth Analysis & PoC</button>
           </div>
         </div>
       </div>
@@ -603,7 +618,14 @@ async function openArtifactPreview(artifactId) {
   if (!modal) return;
 
   modal.classList.remove("hidden");
-  if (el("wsArtModalContent")) el("wsArtModalContent").innerHTML = "<div class='p-4 text-center'>Memuat pratinjau tersanitasi...</div>";
+  if (el("wsArtModalContent")) {
+    el("wsArtModalContent").innerHTML = `
+      <div class="p-5 text-center text-muted">
+        <div class="spinner-inline mb-2">⚡</div>
+        <div>Memuat pratinjau & intelijen data terekstrak...</div>
+      </div>
+    `;
+  }
 
   try {
     const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(currentWorkspaceScanId)}/artifacts/${encodeURIComponent(artifactId)}/preview`);
@@ -619,34 +641,256 @@ async function openArtifactPreview(artifactId) {
     if (el("wsArtModalRecordCount")) el("wsArtModalRecordCount").textContent = `Total Records: ${data.record_count || 0}`;
 
     const preview = data.preview_data || {};
-    let contentHtml = "";
+    const schema = data.schema_data || {};
+    const entities = data.extracted_entities || {};
 
-    if (preview.columns && preview.rows) {
-      contentHtml = `
-        <div class="table-responsive-box">
-          <table class="ws-table">
-            <thead>
-              <tr>${preview.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr>
-            </thead>
-            <tbody>
-              ${preview.rows.map(r => `
-                <tr>${preview.columns.map(c => `<td>${esc(String(r[c] != null ? r[c] : ''))}</td>`).join("")}</tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      `;
-    } else if (preview.raw_sample) {
-      contentHtml = `<pre class="font-mono text-xs p-3 bg-dark-box"><code>${esc(preview.raw_sample)}</code></pre>`;
+    const dbName = schema.database_name || preview.database_name || "";
+    const vendor = schema.vendor || preview.vendor || "";
+    const tables = (preview.tables && preview.tables.length) ? preview.tables : (schema.tables || []);
+    const hashes = (preview.extracted_hashes && preview.extracted_hashes.length) ? preview.extracted_hashes : (entities.hashes || schema.extracted_hashes || []);
+    const users = (preview.extracted_users && preview.extracted_users.length) ? preview.extracted_users : (entities.users || schema.extracted_users || schema.real_users || []);
+    const rawSample = preview.raw_sample || "";
+
+    // Build Intelligence Summary Pills
+    let summaryHtml = `
+      <div class="art-intel-summary-bar mb-3">
+        ${dbName ? `<span class="pill pill-primary">🗄️ Database: <strong>${esc(dbName)}</strong>${vendor ? ` (${esc(vendor)})` : ''}</span>` : ''}
+        ${tables.length ? `<span class="pill pill-neutral">📑 <strong>${tables.length}</strong> Tabel Terdeteksi</span>` : ''}
+        ${hashes.length ? `<span class="pill pill-danger">🔑 <strong>${hashes.length}</strong> Hash Password</span>` : ''}
+        ${users.length ? `<span class="pill pill-warning">👤 <strong>${users.length}</strong> Akun User</span>` : ''}
+      </div>
+    `;
+
+    // Determine available tabs
+    const hasTables = tables.length > 0 || (preview.columns && preview.rows);
+    const hasHashes = hashes.length > 0;
+    const hasUsers = users.length > 0;
+    const hasRaw = Boolean(rawSample) || (preview.columns && preview.rows);
+
+    let tabsNavHtml = `
+      <div class="art-modal-tabs mb-3">
+        ${hasTables ? `<button class="art-tab-btn active" onclick="switchArtModalSubTab('tables')">📊 Tabel & Data (${tables.length || 1})</button>` : ''}
+        ${hasHashes ? `<button class="art-tab-btn ${!hasTables ? 'active' : ''}" onclick="switchArtModalSubTab('hashes')">🔑 Hash Sandi (${hashes.length})</button>` : ''}
+        ${hasUsers ? `<button class="art-tab-btn ${(!hasTables && !hasHashes) ? 'active' : ''}" onclick="switchArtModalSubTab('users')">👤 Akun Pengguna (${users.length})</button>` : ''}
+        ${hasRaw ? `<button class="art-tab-btn ${(!hasTables && !hasHashes && !hasUsers) ? 'active' : ''}" onclick="switchArtModalSubTab('raw')">📄 Raw Sample</button>` : ''}
+      </div>
+    `;
+
+    // Section 1: Tables View
+    let tablesContentHtml = "";
+    if (hasTables) {
+      if (tables.length > 0 && tables[0].columns) {
+        // Multi-table SQL view with table switcher
+        tablesContentHtml = `
+          <div id="artSubTabTables" class="art-subtab-pane active">
+            <div class="art-table-switcher mb-2">
+              <label class="text-xs text-muted font-bold mr-2">Pilih Tabel:</label>
+              <div class="art-table-pills">
+                ${tables.map((t, idx) => `
+                  <button class="btn btn-xs ${idx === 0 ? 'btn-primary active' : 'btn-secondary'} art-tbl-pill"
+                    onclick="selectArtTable(${idx})">
+                    ${esc(t.name)} ${t.sample_rows ? `(${t.sample_rows.length})` : ''}
+                  </button>
+                `).join("")}
+              </div>
+            </div>
+            <div id="artTableDisplayContainer">
+              ${renderSingleArtTable(tables[0])}
+            </div>
+          </div>
+        `;
+      } else if (preview.columns && preview.rows) {
+        // Single flat table (e.g. CSV or Generic rows)
+        tablesContentHtml = `
+          <div id="artSubTabTables" class="art-subtab-pane active">
+            <div class="table-responsive-box">
+              <table class="ws-table">
+                <thead>
+                  <tr>${preview.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr>
+                </thead>
+                <tbody>
+                  ${preview.rows.map(r => `
+                    <tr>${preview.columns.map(c => `<td>${esc(String(r[c] != null ? r[c] : ''))}</td>`).join("")}</tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }
     } else {
-      contentHtml = `<div class="p-3 text-muted">Pratinjau tidak tersedia atau data biner.</div>`;
+      tablesContentHtml = `<div id="artSubTabTables" class="art-subtab-pane ${!hasHashes && !hasUsers ? 'active' : ''}"><div class="p-3 text-muted">Tidak ada tabel terstruktur yang dapat diekstrak.</div></div>`;
     }
 
-    if (el("wsArtModalContent")) el("wsArtModalContent").innerHTML = contentHtml;
+    // Section 2: Hashes View
+    let hashesContentHtml = `
+      <div id="artSubTabHashes" class="art-subtab-pane ${!hasTables ? 'active' : ''}">
+        ${hashes.length ? `
+          <div class="table-responsive-box">
+            <table class="ws-table">
+              <thead>
+                <tr>
+                  <th>Tabel Sumber</th>
+                  <th>Kolom</th>
+                  <th>Tipe Algoritma</th>
+                  <th>Sampel Hash Kredensial</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${hashes.map(h => {
+                  const hType = (h.hash_type || 'hash').toUpperCase();
+                  const hSample = h.hash_sample || h.sample || '-';
+                  return `
+                    <tr>
+                      <td><strong>${esc(h.table || '-')}</strong></td>
+                      <td><code>${esc(h.column || '-')}</code></td>
+                      <td><span class="pill pill-danger">${esc(hType)}</span></td>
+                      <td class="font-mono text-xs text-break">${esc(hSample)}</td>
+                      <td>
+                        <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText('${esc(hSample)}'); showToast('Hash disalin!', 'success');">📋 Salin</button>
+                      </td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="p-3 text-muted">Tidak ada cryptographic hash yang terdeteksi.</div>`}
+      </div>
+    `;
+
+    // Section 3: Users View
+    let usersContentHtml = `
+      <div id="artSubTabUsers" class="art-subtab-pane ${(!hasTables && !hasHashes) ? 'active' : ''}">
+        ${users.length ? `
+          <div class="table-responsive-box">
+            <table class="ws-table">
+              <thead>
+                <tr>
+                  <th>Username / Pengguna</th>
+                  <th>Tabel / Sumber</th>
+                  <th>Email / Metadata</th>
+                  <th>Peran Terdeteksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${users.map(u => {
+                  const uName = u.username || u.identifier || '-';
+                  const uTable = u.table || (u.home ? 'passwd' : '-');
+                  const uMeta = u.email || (u.shell ? `Shell: ${u.shell}, UID: ${u.uid}` : '-');
+                  const uRole = u.role || (uName === 'root' || u.uid === 0 ? 'admin' : 'user');
+                  return `
+                    <tr>
+                      <td><strong>${esc(uName)}</strong></td>
+                      <td><code>${esc(uTable)}</code></td>
+                      <td class="text-xs text-muted">${esc(uMeta)}</td>
+                      <td><span class="pill ${uRole === 'admin' ? 'pill-danger' : 'pill-neutral'}">${esc(uRole.toUpperCase())}</span></td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="p-3 text-muted">Tidak ada akun pengguna yang terdeteksi.</div>`}
+      </div>
+    `;
+
+    // Section 4: Raw Sample View
+    let rawContentHtml = `
+      <div id="artSubTabRaw" class="art-subtab-pane ${(!hasTables && !hasHashes && !hasUsers) ? 'active' : ''}">
+        ${rawSample ? `
+          <pre class="font-mono text-xs p-3 bg-dark-box text-break" style="max-height: 380px; overflow-y: auto;"><code>${esc(rawSample)}</code></pre>
+        ` : `<div class="p-3 text-muted">Tidak ada raw sample yang tersedia.</div>`}
+      </div>
+    `;
+
+    // Store tables in window for fast tab switching
+    window.__currentArtTables = tables;
+
+    if (el("wsArtModalContent")) {
+      el("wsArtModalContent").innerHTML = `
+        ${summaryHtml}
+        ${tabsNavHtml}
+        <div class="art-subtab-contents">
+          ${tablesContentHtml}
+          ${hashesContentHtml}
+          ${usersContentHtml}
+          ${rawContentHtml}
+        </div>
+      `;
+    }
   } catch (err) {
     if (el("wsArtModalContent")) el("wsArtModalContent").innerHTML = `<div class="p-4 text-danger">Gagal memuat pratinjau: ${esc(err.message)}</div>`;
   }
 }
+
+function renderSingleArtTable(table) {
+  if (!table) return "<div class='p-2 text-muted'>Tabel kosong</div>";
+  const cols = (table.columns || []).map(c => typeof c === 'object' ? (c.name || JSON.stringify(c)) : String(c));
+  const rows = table.sample_rows || [];
+
+  return `
+    <div class="mb-2 flex-between align-center">
+      <span class="text-xs text-muted">Kolom: <strong>${cols.length}</strong> | Sampel Baris: <strong>${rows.length}</strong></span>
+      ${table.primary_key ? `<span class="pill pill-neutral text-xs">Primary Key: ${esc(table.primary_key)}</span>` : ''}
+    </div>
+    <div class="table-responsive-box">
+      <table class="ws-table">
+        <thead>
+          <tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows.map(r => `
+            <tr>
+              ${cols.map((c, i) => {
+                const val = (r && typeof r === 'object' && !Array.isArray(r)) ? r[c] : (Array.isArray(r) ? r[i] : r);
+                return `<td>${esc(String(val != null ? val : ''))}</td>`;
+              }).join("")}
+            </tr>
+          `).join("") : `<tr><td colspan="${cols.length || 1}" class="text-center p-3 text-muted">Tidak ada baris data sampel pada tabel ini.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+window.selectArtTable = function(tableIndex) {
+  const tables = window.__currentArtTables || [];
+  const t = tables[tableIndex];
+  if (!t) return;
+  document.querySelectorAll(".art-tbl-pill").forEach((btn, idx) => {
+    if (idx === tableIndex) {
+      btn.classList.add("btn-primary", "active");
+      btn.classList.remove("btn-secondary");
+    } else {
+      btn.classList.remove("btn-primary", "active");
+      btn.classList.add("btn-secondary");
+    }
+  });
+  if (el("artTableDisplayContainer")) {
+    el("artTableDisplayContainer").innerHTML = renderSingleArtTable(t);
+  }
+};
+
+window.switchArtModalSubTab = function(tabKey) {
+  document.querySelectorAll(".art-tab-btn").forEach(btn => btn.classList.remove("active"));
+  document.querySelectorAll(".art-subtab-pane").forEach(pane => pane.classList.remove("active"));
+  
+  if (tabKey === 'tables') {
+    if (el("artSubTabTables")) el("artSubTabTables").classList.add("active");
+  } else if (tabKey === 'hashes') {
+    if (el("artSubTabHashes")) el("artSubTabHashes").classList.add("active");
+  } else if (tabKey === 'users') {
+    if (el("artSubTabUsers")) el("artSubTabUsers").classList.add("active");
+  } else if (tabKey === 'raw') {
+    if (el("artSubTabRaw")) el("artSubTabRaw").classList.add("active");
+  }
+
+  // Set active button
+  const clickedBtn = event?.currentTarget;
+  if (clickedBtn) clickedBtn.classList.add("active");
+};
 
 function renderWorkspaceTimeline(timeline) {
   const stream = el("wsTimelineStream");
@@ -777,27 +1021,50 @@ function setupReportHubEvents() {
 
   const refreshBtn = el("refreshReportHubBtn");
   if (refreshBtn) {
-    refreshBtn.addEventListener("click", () => {
-      if (currentWorkspaceScanId) loadWorkspaceData(currentWorkspaceScanId);
-      else initReportHub();
+    refreshBtn.addEventListener("click", async () => {
+      if (typeof setButtonLoading === "function") setButtonLoading(refreshBtn, true, "Menyinkronkan...");
+      try {
+        if (currentWorkspaceScanId) {
+          workspaceCache.delete(currentWorkspaceScanId);
+          await loadWorkspaceData(currentWorkspaceScanId);
+        } else {
+          await initReportHub();
+        }
+      } finally {
+        if (typeof setButtonLoading === "function") setButtonLoading(refreshBtn, false);
+      }
     });
   }
 
-  // Workspace Tab Switching
+  // Unified Workspace Tab Switching (Buttons & Mobile Select)
+  const switchWorkspaceSubTab = (tabName) => {
+    if (!tabName) return;
+    document.querySelectorAll(".ws-tab-btn").forEach(b => {
+      if (b.getAttribute("data-ws-tab") === tabName) b.classList.add("active");
+      else b.classList.remove("active");
+    });
+    const mobileSelect = el("wsMobileNavSelect");
+    if (mobileSelect && mobileSelect.value !== tabName) mobileSelect.value = tabName;
+
+    document.querySelectorAll(".ws-tab-content").forEach(c => c.classList.add("hidden"));
+    const targetPane = el(`wsTab${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`);
+    if (targetPane) targetPane.classList.remove("hidden");
+    activeWorkspaceTab = tabName;
+  };
+
   document.querySelectorAll(".ws-tab-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("click", () => {
       const tabName = btn.getAttribute("data-ws-tab");
-      if (!tabName) return;
-
-      document.querySelectorAll(".ws-tab-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-
-      document.querySelectorAll(".ws-tab-content").forEach(c => c.classList.add("hidden"));
-      const targetPane = el(`wsTab${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`);
-      if (targetPane) targetPane.classList.remove("hidden");
-      activeWorkspaceTab = tabName;
+      switchWorkspaceSubTab(tabName);
     });
   });
+
+  const mobileNavSelect = el("wsMobileNavSelect");
+  if (mobileNavSelect) {
+    mobileNavSelect.addEventListener("change", (e) => {
+      switchWorkspaceSubTab(e.target.value);
+    });
+  }
 
   // Async Export triggers
   document.querySelectorAll(".ws-btn-export").forEach((btn) => {
@@ -929,7 +1196,7 @@ window.downloadSingleFindingPoC = function(findingId) {
 };
 
 // Open Comprehensive Finding PoC Dossier Modal
-window.openFindingDetail = async function(findingId) {
+window.openFindingPocDossier = async function(findingId) {
   let modal = el("wsFindingPocModal");
   if (!modal) {
     console.warn("wsFindingPocModal not found in DOM");
@@ -951,8 +1218,7 @@ window.openFindingDetail = async function(findingId) {
   try {
     let dossier = finding?.poc_dossier;
     if (!dossier) {
-      const headers = token ? { "Authorization": `Bearer ${token}` } : {};
-      const res = await fetch(`/api/findings/${findingId}/poc`, { headers });
+      const res = await authFetch(`${API_BASE}/findings/${encodeURIComponent(findingId)}/poc`);
       if (res.ok) {
         const data = await res.json();
         dossier = data.dossier;
