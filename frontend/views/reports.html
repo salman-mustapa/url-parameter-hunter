@@ -1,153 +1,474 @@
-<!-- VIEW 4: PUSAT LAPORAN KEAMANAN & ASSESSMENT CENTER (V5 §31-§35) -->
+<!-- VIEW 4: DEDICATED INVESTIGATION WORKSPACE & SECURITY REPORTING (§11-§27) -->
 <section id="viewReports" class="tab-view hidden">
-  <!-- Reports Level Breadcrumb Navigation -->
+  <!-- Investigation Workspace Breadcrumb -->
   <nav id="reportsBreadcrumb" class="breadcrumb-nav">
     <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
     <span class="breadcrumb-sep">›</span>
     <a href="#" class="breadcrumb-link" data-action="goDashboard">Dashboard</a>
     <span class="breadcrumb-sep">›</span>
-    <a href="#" class="breadcrumb-link" data-action="goReports">📑 Pusat Laporan</a>
-    <span class="breadcrumb-sep">›</span>
-    <span id="reportsBreadcrumbScan" class="breadcrumb-current">Semua Laporan</span>
+    <span class="breadcrumb-current">🔍 Investigation Workspace</span>
   </nav>
 
-  <div class="card sketch-card reports-hub-card">
-    <div class="card-header-flex">
-      <div class="title-with-icon">
-        <span class="section-icon">📑</span>
+  <div class="card sketch-card workspace-container">
+    <!-- Workspace Top Header Bar -->
+    <div class="workspace-header-bar">
+      <div class="workspace-identity">
+        <div class="workspace-icon">🛡️</div>
         <div>
-          <h2>Pusat Laporan & Professional Disclosure Hub</h2>
-          <div class="pill-muted text-xs">Arsitektur Pelaporan Eksekutif, Bukti Tervalidasi E3/E4, dan Panduan Remediasi.</div>
+          <div class="workspace-title-row">
+            <h2 id="wsTargetName">Target: -</h2>
+            <span id="wsStatusBadge" class="status-badge status-active">INITIALIZING</span>
+            <span id="wsEngineBadge" class="pill pill-primary">⚡ Autonomous Adversary Engine</span>
+            <span id="wsLevelBadge" class="pill pill-danger">L4 HIGH RISK</span>
+          </div>
+          <div class="workspace-meta-row">
+            <span class="meta-item font-mono" id="wsInvestigationId">ID: -</span>
+            <span class="meta-item">⏱ Duration: <strong id="wsDuration">00m 00s</strong></span>
+            <span class="meta-item">Coverage: <strong id="wsCoverage">0%</strong></span>
+            <span class="meta-item">Started: <span id="wsStartTime">-</span></span>
+          </div>
         </div>
       </div>
-      <div class="report-top-selector">
-        <label class="text-xs font-bold">Pilih Sesi Scan Target:</label>
-        <select id="reportScanSelect" class="custom-select" style="min-width: 260px;"></select>
-        <button id="refreshReportHubBtn" class="btn btn-secondary btn-sm">🔄 Refresh</button>
+      <div class="workspace-selector-actions">
+        <select id="reportScanSelect" class="custom-select ws-select" title="Pilih Investigation"></select>
+        <button id="refreshReportHubBtn" class="btn btn-secondary btn-sm" title="Refresh Telemetri">🔄 Refresh</button>
       </div>
     </div>
 
-    <!-- 1. Executive Summary & Risk Scoring (§31) -->
-    <div class="report-executive-banner">
-      <div class="exec-banner-left">
-        <span class="exec-target-badge" id="reportTargetBadge">TARGET: -</span>
-        <h3 id="reportExecTitle" class="exec-title">Security Assessment Summary</h3>
-        <p id="reportExecDesc" class="exec-desc">
-          Ringkasan penilaian keamanan komprehensif berdasarkan telemetri tervalidasi dan audit Proof Quality Gate.
+    <!-- Workspace Sub-Navigation Tabs (§11) -->
+    <div class="workspace-nav-tabs">
+      <button class="ws-tab-btn active" data-ws-tab="overview">📊 Overview</button>
+      <button class="ws-tab-btn" data-ws-tab="assets">🌐 Assets Explorer (<span id="wsTabCountAssets">0</span>)</button>
+      <button class="ws-tab-btn" data-ws-tab="services">📡 Services & Ports (<span id="wsTabCountServices">0</span>)</button>
+      <button class="ws-tab-btn" data-ws-tab="endpoints">🔗 Endpoints (<span id="wsTabCountEndpoints">0</span>)</button>
+      <button class="ws-tab-btn" data-ws-tab="findings">🔒 Findings (<span id="wsTabCountFindings" class="text-danger font-bold">0</span>)</button>
+      <button class="ws-tab-btn" data-ws-tab="chains">⛓️ Attack Chains</button>
+      <button class="ws-tab-btn" data-ws-tab="evidence">📎 Evidence & Proofs</button>
+      <button class="ws-tab-btn" data-ws-tab="artifacts">📁 Files & Extracted Data (<span id="wsTabCountArtifacts">0</span>)</button>
+      <button class="ws-tab-btn" data-ws-tab="timeline">⏱️ Timeline</button>
+      <button class="ws-tab-btn" data-ws-tab="exports">📦 Async Exports</button>
+    </div>
+
+    <!-- TAB 1: OVERVIEW PANEL (§12) -->
+    <div id="wsTabOverview" class="ws-tab-content active">
+      <!-- High Level Counter Cards -->
+      <div class="ws-stats-grid">
+        <div class="ws-stat-card">
+          <span class="ws-stat-val" id="wsStatAssets">0</span>
+          <span class="ws-stat-lbl">Discovered Assets</span>
+        </div>
+        <div class="ws-stat-card">
+          <span class="ws-stat-val" id="wsStatServices">0</span>
+          <span class="ws-stat-lbl">Services & Ports</span>
+        </div>
+        <div class="ws-stat-card">
+          <span class="ws-stat-val" id="wsStatEndpoints">0</span>
+          <span class="ws-stat-lbl">Discovered URLs</span>
+        </div>
+        <div class="ws-stat-card">
+          <span class="ws-stat-val" id="wsStatTechs">0</span>
+          <span class="ws-stat-lbl">Identified Techs</span>
+        </div>
+        <div class="ws-stat-card">
+          <span class="ws-stat-val text-danger" id="wsStatFindings">0</span>
+          <span class="ws-stat-lbl">Confirmed Vulnerabilities</span>
+        </div>
+        <div class="ws-stat-card">
+          <span class="ws-stat-val" id="wsStatArtifacts">0</span>
+          <span class="ws-stat-lbl">Extracted Artifacts</span>
+        </div>
+      </div>
+
+      <!-- Severity Matrix & Confidence Breakdown -->
+      <div class="ws-matrix-row">
+        <!-- Severity Breakdown -->
+        <div class="ws-box">
+          <h3 class="ws-box-title">🛡️ Security Findings Severity Distribution</h3>
+          <div class="ws-sev-grid">
+            <div class="ws-sev-item critical">
+              <span class="ws-sev-count" id="wsSevCrit">0</span>
+              <span class="ws-sev-label">CRITICAL</span>
+            </div>
+            <div class="ws-sev-item high">
+              <span class="ws-sev-count" id="wsSevHigh">0</span>
+              <span class="ws-sev-label">HIGH</span>
+            </div>
+            <div class="ws-sev-item medium">
+              <span class="ws-sev-count" id="wsSevMed">0</span>
+              <span class="ws-sev-label">MEDIUM</span>
+            </div>
+            <div class="ws-sev-item low">
+              <span class="ws-sev-count" id="wsSevLow">0</span>
+              <span class="ws-sev-label">LOW</span>
+            </div>
+            <div class="ws-sev-item info">
+              <span class="ws-sev-count" id="wsSevInfo">0</span>
+              <span class="ws-sev-label">INFO</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Confidence Breakdown -->
+        <div class="ws-box">
+          <h3 class="ws-box-title">🔬 Proof Quality & Confidence Matrix</h3>
+          <div class="ws-conf-grid">
+            <div class="ws-conf-item">
+              <span class="ws-conf-badge bg-confirmed">CONFIRMED (E3/E4)</span>
+              <strong id="wsConfConfirmed">0</strong>
+            </div>
+            <div class="ws-conf-item">
+              <span class="ws-conf-badge bg-likely">LIKELY VALIDATED</span>
+              <strong id="wsConfLikely">0</strong>
+            </div>
+            <div class="ws-conf-item">
+              <span class="ws-conf-badge bg-potential">POTENTIAL RISK</span>
+              <strong id="wsConfPotential">0</strong>
+            </div>
+            <div class="ws-conf-item">
+              <span class="ws-conf-badge bg-inconclusive">INCONCLUSIVE</span>
+              <strong id="wsConfInconclusive">0</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Executive Summary Banner -->
+      <div class="ws-exec-summary-card">
+        <h3 class="ws-box-title">📑 Executive Summary & Attack Surface Assessment</h3>
+        <p id="wsExecSummaryText" class="ws-exec-text">
+          Memuat ringkasan telemetri investigasi...
         </p>
-        <div class="exec-meta-chips">
-          <span class="pill pill-neutral font-mono" id="reportScanIdChip">Scan ID: -</span>
-          <span class="pill pill-neutral" id="reportDateChip">Tanggal: -</span>
-          <span class="pill pill-success" id="reportAuthChip">Scope: AUTHORIZED</span>
+      </div>
+    </div>
+
+    <!-- TAB 2: ASSETS EXPLORER (§13) -->
+    <div id="wsTabAssets" class="ws-tab-content hidden">
+      <div class="table-toolbar">
+        <input type="text" id="wsAssetSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Cari hostname, IP, atau status asset..." />
+      </div>
+      <div class="table-responsive-box">
+        <table class="ws-table">
+          <thead>
+            <tr>
+              <th>Hostname / Domain</th>
+              <th>IP Address</th>
+              <th>Asset Type</th>
+              <th>Status</th>
+              <th>First Seen</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="wsAssetsTbody">
+            <tr><td colspan="6" class="table-loading">Memuat data aset...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 3: SERVICES & PORTS (§14) -->
+    <div id="wsTabServices" class="ws-tab-content hidden">
+      <div class="table-toolbar">
+        <input type="text" id="wsServiceSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Filter port, nama service, banner, atau host..." />
+      </div>
+      <div class="table-responsive-box">
+        <table class="ws-table">
+          <thead>
+            <tr>
+              <th>Host Target</th>
+              <th>Port</th>
+              <th>Protocol</th>
+              <th>Service</th>
+              <th>Product / Version</th>
+              <th>Banner</th>
+              <th>TLS</th>
+              <th>Type / Auth Surface</th>
+            </tr>
+          </thead>
+          <tbody id="wsServicesTbody">
+            <tr><td colspan="8" class="table-loading">Memuat daftar port dan service...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 4: ENDPOINTS & URLS (§15) -->
+    <div id="wsTabEndpoints" class="ws-tab-content hidden">
+      <div class="table-toolbar">
+        <input type="text" id="wsEndpointSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Cari endpoint URL, method, atau parameter..." />
+      </div>
+      <div class="table-responsive-box">
+        <table class="ws-table">
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>URL Endpoint</th>
+              <th>Status Code</th>
+              <th>Content-Type</th>
+              <th>Title</th>
+            </tr>
+          </thead>
+          <tbody id="wsEndpointsTbody">
+            <tr><td colspan="5" class="table-loading">Memuat endpoint URL...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 5: SECURITY FINDINGS DETAIL (§16) -->
+    <div id="wsTabFindings" class="ws-tab-content hidden">
+      <div class="table-toolbar flex-between">
+        <div class="flex-row-gap">
+          <input type="text" id="wsFindingSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Cari temuan, CVE, CWE, atau parameter..." />
+          <select id="wsFindingSevFilter" class="custom-select ws-filter-select">
+            <option value="ALL">Semua Severity</option>
+            <option value="CRITICAL">Critical Only</option>
+            <option value="HIGH">High Only</option>
+            <option value="MEDIUM">Medium Only</option>
+            <option value="LOW">Low Only</option>
+            <option value="INFO">Info Only</option>
+          </select>
         </div>
       </div>
-      <div class="exec-banner-right">
-        <div class="risk-gauge-card">
-          <span class="risk-gauge-label">Composite Risk Rating</span>
-          <span class="risk-gauge-val" id="reportRiskGauge">0.0</span>
-          <span class="risk-gauge-status" id="reportRiskStatus">INFORMATIONAL</span>
+      <div id="wsFindingsContainer" class="ws-findings-container">
+        <div class="empty-msg">Memuat daftar temuan keamanan...</div>
+      </div>
+    </div>
+
+    <!-- TAB 6: ATTACK CHAINS (§25) -->
+    <div id="wsTabChains" class="ws-tab-content hidden">
+      <div class="ws-box">
+        <div class="flex-between">
+          <h3 class="ws-box-title">⛓️ Visual Attack Surface & Exploit Chain Flow</h3>
+          <button id="wsReloadAttackGraphBtn" class="btn btn-secondary btn-xs">🔄 Refresh Graph</button>
+        </div>
+        <p class="section-subtext">Visualisasi pemetaan eksploitasi bertingkat dari Asset Target → Port Terbuka → Service / Web App → Titik Kerentanan → Ekstraksi Bukti / Data.</p>
+        <div id="wsAttackGraphCanvas" class="ws-graph-canvas">
+          <div class="empty-msg">Memuat visualisasi rantai serangan...</div>
         </div>
       </div>
     </div>
 
-    <!-- 2. Telemetry & Attack Surface Exposure Breakdown -->
-    <div class="report-metrics-grid">
-      <div class="rep-stat-card">
-        <span class="rep-stat-num" id="repStatAssets">0</span>
-        <span class="rep-stat-title">Subdomain Terpetakan</span>
-      </div>
-      <div class="rep-stat-card">
-        <span class="rep-stat-num" id="repStatPorts">0</span>
-        <span class="rep-stat-title">Port Terbuka</span>
-      </div>
-      <div class="rep-stat-card">
-        <span class="rep-stat-num" id="repStatUrls">0</span>
-        <span class="rep-stat-title">Endpoint URL</span>
-      </div>
-      <div class="rep-stat-card">
-        <span class="rep-stat-num" id="repStatParams">0</span>
-        <span class="rep-stat-title">Parameter Discovered</span>
-      </div>
-      <div class="rep-stat-card">
-        <span class="rep-stat-num text-danger" id="repStatFindings">0</span>
-        <span class="rep-stat-title">Temuan Terkonfirmasi</span>
-      </div>
-    </div>
-
-    <!-- 3. Professional Export & Disclosure Suite (§31-§35) -->
-    <div class="report-export-section">
-      <h3 class="section-title-sm">📦 1-Click Professional Export Suite (V7.1 Architecture)</h3>
-      <p class="section-subtext">Hasilkan laporan terstruktur siap kirim untuk eksekutif, auditor, bug bounty platform, maupun riset CVE.</p>
-
-      <div class="export-suite-grid">
-        <!-- PDF -->
-        <div class="export-card">
-          <div class="export-card-icon">📑</div>
-          <div class="export-card-content">
-            <h4>Executive Audit Report (PDF)</h4>
-            <p>Laporan resmi berstandar audit korporat lengkap dengan kop dokumen, ringkasan telemetri, matriks port, dan PoC.</p>
-          </div>
-          <button id="hubPdfBtn" class="btn btn-primary btn-sm">📥 Unduh PDF</button>
-        </div>
-
-        <!-- HTML -->
-        <div class="export-card">
-          <div class="export-card-icon">🌐</div>
-          <div class="export-card-content">
-            <h4>Interactive HTML Report</h4>
-            <p>Laporan mandiri interaktif dengan visualizer pohon aset, pencarian temuan, dan syntax highlight.</p>
-          </div>
-          <button id="hubHtmlBtn" class="btn btn-secondary btn-sm">👁️ Buka HTML</button>
-        </div>
-
-        <!-- Bug Bounty MD -->
-        <div class="export-card">
-          <div class="export-card-icon">🎯</div>
-          <div class="export-card-content">
-            <h4>Bug Bounty Submission (.md)</h4>
-            <p>Format terstandarisasi HackerOne / Bugcrowd lengkap dengan CVSS vector, preconditions, dan impact.</p>
-          </div>
-          <button id="hubBountyBtn" class="btn btn-secondary btn-sm">📋 Unduh Markdown</button>
-        </div>
-
-        <!-- CVE Research MD -->
-        <div class="export-card">
-          <div class="export-card-icon">🔬</div>
-          <div class="export-card-content">
-            <h4>CVE-Ready Research (.md)</h4>
-            <p>Format pelaporan riset kerentanan untuk pengajuan CVE ID atau publikasi zero-day terkoordinasi.</p>
-          </div>
-          <button id="hubCveBtn" class="btn btn-secondary btn-sm">🔬 Unduh Research</button>
-        </div>
-
-        <!-- Evidence Bundle JSON -->
-        <div class="export-card">
-          <div class="export-card-icon">🔒</div>
-          <div class="export-card-content">
-            <h4>Evidence Package Bundle (.json)</h4>
-            <p>Paket bukti terenkapsulasi dengan tanda tangan integritas hash SHA-256 dan log verifikasi.</p>
-          </div>
-          <button id="hubJsonBtn" class="btn btn-secondary btn-sm">📦 Unduh JSON</button>
-        </div>
-
-        <!-- Reproduction Guide MD -->
-        <div class="export-card">
-          <div class="export-card-icon">🧪</div>
-          <div class="export-card-content">
-            <h4>Reproduction Guide (.md)</h4>
-            <p>Panduan langkah reproduksi terisolasi langkah-demi-langkah bagi tim pengembang software.</p>
-          </div>
-          <button id="hubReproBtn" class="btn btn-secondary btn-sm">🧪 Unduh Panduan</button>
+    <!-- TAB 7: EVIDENCE & PROOFS (§17) -->
+    <div id="wsTabEvidence" class="ws-tab-content hidden">
+      <div class="ws-box">
+        <h3 class="ws-box-title">📎 Cryptographic Evidence Packages & SHA-256 Provenance</h3>
+        <p class="section-subtext">Paket bukti interaksi HTTP request/response tervalidasi dengan segel waktu dan hash integritas anti-tamper.</p>
+        <div id="wsEvidenceList" class="ws-evidence-list">
+          <div class="empty-msg">Belum ada paket evidence terekam pada sesi ini.</div>
         </div>
       </div>
     </div>
 
-    <!-- 4. Validated Findings Table in Report Hub -->
-    <div class="report-findings-section">
-      <h3 class="section-title-sm">🛡️ Matriks Temuan Keamanan Tervalidasi (Proof Quality Gate)</h3>
-      <div id="reportHubFindingsContainer" class="table-responsive-box mt-2">
-        <div class="empty-msg">Pilih scan untuk melihat matriks temuan tervalidasi.</div>
+    <!-- TAB 8: FILES & EXTRACTED ARTIFACTS (§18, §19, §20, §21) -->
+    <div id="wsTabArtifacts" class="ws-tab-content hidden">
+      <div class="ws-box">
+        <h3 class="ws-box-title">📁 Extracted Data Tables & Sensitive Document Classification</h3>
+        <p class="section-subtext">Klasifikasi dokumen sensitif otomatis (PUBLIC, INTERNAL, CONFIDENTIAL, SENSITIVE, HIGHLY_SENSITIVE) dan pratinjau tabel tersanitasi aman.</p>
+        <div class="table-responsive-box mt-2">
+          <table class="ws-table">
+            <thead>
+              <tr>
+                <th>Nama File / Artifact</th>
+                <th>Classification</th>
+                <th>Category</th>
+                <th>Record Count</th>
+                <th>Size</th>
+                <th>SHA-256 Hash</th>
+                <th>Preview & Details</th>
+              </tr>
+            </thead>
+            <tbody id="wsArtifactsTbody">
+              <tr><td colspan="7" class="table-loading">Memuat artefak terekstrak...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
+
+    <!-- TAB 9: TIMELINE (§26) -->
+    <div id="wsTabTimeline" class="ws-tab-content hidden">
+      <div class="ws-box">
+        <h3 class="ws-box-title">⏱️ Real-time Investigation Telemetry & Audit Stream</h3>
+        <div id="wsTimelineStream" class="ws-timeline-stream">
+          <div class="empty-msg">Memuat log investigasi...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 10: ASYNC EXPORTS HUB (§22, §23, §24) -->
+    <div id="wsTabExports" class="ws-tab-content hidden">
+      <div class="ws-box">
+        <h3 class="ws-box-title">📦 Asynchronous Export Queue & Report Dossier Hub</h3>
+        <p class="section-subtext">Laporan dan dataset dihasilkan secara asinkron di latar belakang tanpa memblokir peramban.</p>
+        
+        <div class="ws-export-grid">
+          <!-- 1. Full PDF -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">📑</div>
+            <div class="ws-exp-body">
+              <h4>Full Investigation Report (PDF)</h4>
+              <p>Laporan audit komprehensif lengkap dengan diagram, telemetri, matriks temuan, dan mitigasi.</p>
+            </div>
+            <button class="btn btn-primary btn-sm ws-btn-export" data-format="full_pdf">⚡ Generate PDF</button>
+          </div>
+
+          <!-- 2. Executive PDF -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">👔</div>
+            <div class="ws-exp-body">
+              <h4>Executive Summary (PDF)</h4>
+              <p>Ringkasan risiko tinggi untuk jajaran manajemen eksekutif dan C-level.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="executive_pdf">⚡ Generate Summary</button>
+          </div>
+
+          <!-- 3. Technical PDF -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">🔧</div>
+            <div class="ws-exp-body">
+              <h4>Technical Findings Dossier (PDF)</h4>
+              <p>Dokumentasi mendalam setiap kerentanan, HTTP PoC curl, dan langkah remediasi.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="technical_pdf">⚡ Generate Technical</button>
+          </div>
+
+          <!-- 4. Findings CSV -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">📊</div>
+            <div class="ws-exp-body">
+              <h4>Security Findings (CSV)</h4>
+              <p>Seluruh temuan dalam format spreadsheet tabular UTF-8 dengan CVSS, CWE, dan PoC.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="findings_csv">⚡ Generate CSV</button>
+          </div>
+
+          <!-- 5. Findings XLSX -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">📗</div>
+            <div class="ws-exp-body">
+              <h4>Security Findings Workbook (XLSX)</h4>
+              <p>Buku kerja Excel dengan styling profesional dan pemetaan tab per kategori.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="findings_xlsx">⚡ Generate XLSX</button>
+          </div>
+
+          <!-- 6. Investigation JSON -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">💾</div>
+            <div class="ws-exp-body">
+              <h4>Investigation Dump (JSON)</h4>
+              <p>Seluruh dataset terstruktur: assets, ports, URLs, findings, dan telemetry data.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="investigation_json">⚡ Generate JSON</button>
+          </div>
+
+          <!-- 7. Assets Inventory CSV -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">🌐</div>
+            <div class="ws-exp-body">
+              <h4>Asset Inventory (CSV)</h4>
+              <p>Daftar lengkap seluruh hostname subdomain dan IP address yang teridentifikasi.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="assets_csv">⚡ Generate Asset CSV</button>
+          </div>
+
+          <!-- 8. Services Inventory CSV -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">📡</div>
+            <div class="ws-exp-body">
+              <h4>Service & Port Matrix (CSV)</h4>
+              <p>Inventaris port standar dan non-standar, banner produk, dan versi layanan.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="services_csv">⚡ Generate Service CSV</button>
+          </div>
+
+          <!-- 9. Evidence Index JSON -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">🔒</div>
+            <div class="ws-exp-body">
+              <h4>Evidence Index Package (JSON)</h4>
+              <p>Indeks kriptografis seluruh paket bukti temuan dengan stempel hash SHA-256.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="evidence_index_json">⚡ Generate Index</button>
+          </div>
+
+          <!-- 10. Artifact Manifest JSON -->
+          <div class="ws-export-card">
+            <div class="ws-exp-icon">🗄️</div>
+            <div class="ws-exp-body">
+              <h4>Artifacts & Data Manifest (JSON)</h4>
+              <p>Manifest klasifikasi dokumen, dump database, dan record count artefak.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm ws-btn-export" data-format="artifact_manifest_json">⚡ Generate Manifest</button>
+          </div>
+        </div>
+
+        <!-- Active / Completed Export Jobs List -->
+        <h4 class="mt-4 font-bold text-sm">📥 Daftar File Export Siap Unduh</h4>
+        <div class="table-responsive-box mt-2">
+          <table class="ws-table">
+            <thead>
+              <tr>
+                <th>Format Export</th>
+                <th>Nama File</th>
+                <th>Status</th>
+                <th>Ukuran</th>
+                <th>SHA-256</th>
+                <th>Waktu Selesai</th>
+                <th>Download</th>
+              </tr>
+            </thead>
+            <tbody id="wsExportJobsTbody">
+              <tr><td colspan="7" class="table-loading">Memuat daftar tugas export...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div>
 </section>
+
+<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
+<div id="wsArtifactModal" class="modal-backdrop hidden">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-header">
+      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
+      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="artifact-meta-bar mb-3">
+        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
+        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
+        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
+      </div>
+      <div id="wsArtModalContent" class="artifact-preview-body">
+        Memuat pratinjau...
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
+<div id="wsFindingPocModal" class="modal-backdrop hidden">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-header flex-between">
+      <div class="flex-row-gap align-center flex-wrap">
+        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
+        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
+      </div>
+      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
+    </div>
+    <div class="modal-body" id="wsPocModalBody">
+      <!-- Dynamic PoC Dossier Content -->
+    </div>
+    <div class="modal-footer flex-between">
+      <span class="text-xs text-muted font-mono">100% Deterministic Reproducible Security Proof</span>
+      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
+    </div>
+  </div>
+</div>
+

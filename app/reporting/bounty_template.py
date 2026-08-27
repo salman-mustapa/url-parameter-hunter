@@ -20,19 +20,21 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.reporting.poc_builder import PocBuilder
 from app.validation.result import NormalizedValidationResult
 
 
 class BugBountyReportGenerator:
-    """Generates standardized markdown bug bounty vulnerability reports (V5 §32)."""
+    """Generates standardized, audit-grade markdown bug bounty vulnerability reports (V5 §32)."""
 
     @classmethod
     def generate_finding_report(
         cls,
         finding: NormalizedValidationResult,
         researcher_alias: str = "BugHunter-AI",
+        screenshot_path: Optional[str] = None,
     ) -> str:
-        """Render a finding into standard Bug Bounty Markdown format."""
+        """Render a finding into comprehensive Bug Bounty Markdown format with complete PoC."""
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         sev = finding.severity.upper()
         cvss_score = finding.cvss_score or (9.8 if sev == "CRITICAL" else (8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 3.5)))
@@ -44,17 +46,33 @@ class BugBountyReportGenerator:
         ev_data = f"{finding.endpoint_url}:{finding.title}:{finding.evidence_level}:{finding.actual_result}"
         ev_hash = hashlib.sha256(ev_data.encode()).hexdigest()
 
-        repro_steps_md = ""
-        if finding.reproduction_steps:
-            repro_steps_md = "\n".join(f"{i+1}. {step}" for i, step in enumerate(finding.reproduction_steps))
-        else:
-            repro_steps_md = (
-                f"1. Send an HTTP request to the target endpoint: `{finding.endpoint_url}`\n"
-                f"2. Supply the controlled validation payload.\n"
-                f"3. Observe response behavior confirming {finding.vulnerability_type}."
-            )
+        # Build PoC Dossier
+        dossier = PocBuilder.generate_dossier(
+            title=finding.title,
+            finding_type=finding.vulnerability_type,
+            severity=finding.severity,
+            target_url=finding.endpoint_url or f"https://{finding.target_host}/",
+            target_host=finding.target_host,
+            parameter=finding.parameter,
+            method=finding.request_metadata.get("method", "GET") if finding.request_metadata else "GET",
+            headers=finding.request_metadata.get("headers") if finding.request_metadata else {},
+            payload=finding.poc_payload,
+            cwe_id=finding.cwe_id,
+            cve_id=finding.cve_id,
+            cvss_score=cvss_score,
+            description=finding.description,
+            technical_details=finding.root_cause,
+            evidence={
+                "curl": finding.poc_command,
+                "response_headers": finding.response_metadata.get("headers", {}) if finding.response_metadata else {},
+                "response_status": finding.response_metadata.get("status_code", 200) if finding.response_metadata else 200,
+                "response_body": str(finding.actual_result or ""),
+            },
+            has_real_screenshot=bool(screenshot_path and os.path.exists(screenshot_path)),
+            screenshot_url=screenshot_path,
+        )
 
-        poc_cmd = finding.poc_command or finding.poc_payload or f"curl -i -s -k '{finding.endpoint_url}'"
+        repro_steps_md = "\n".join(f"{i+1}. {step}" for i, step in enumerate(dossier["reproduction_steps"]))
 
         # Framework Mapping Lookups (§60)
         from app.ai.cybersecurity_skills import skills_hub
@@ -86,7 +104,17 @@ class BugBountyReportGenerator:
         d3fend = ", ".join(f"`{x}`" for x in framework_data.get("d3fend", ["D3-SPP"]))
         mitre_f3 = ", ".join(f"`{x}`" for x in framework_data.get("mitre_f3", ["FA0001"]))
 
-        playbook_items = "\n".join(f"- {step}" for step in (finding.remediation.splitlines() if finding.remediation else framework_data.get("remediations", [])))
+        playbook_items = "\n".join(f"- {step}" for step in (finding.remediation.splitlines() if finding.remediation else dossier["remediation_playbook"]))
+
+        # Visual screenshot proof section
+        if screenshot_path and os.path.exists(screenshot_path):
+            screenshot_section = f"""### 📸 Visual Evidence (Real Browser Screenshot)
+![Visual Proof Capture]({screenshot_path})
+*Image Hash: `{ev_hash[:16]}` | Captured during live automated browser verification.*"""
+        else:
+            screenshot_section = f"""### 📸 Visual Evidence Status
+> [!NOTE]
+> {dossier['screenshot']['explanation_if_none']}"""
 
         report_md = f"""# [{sev}] {finding.title}
 
@@ -100,7 +128,7 @@ class BugBountyReportGenerator:
 
 - **Target Asset:** `{finding.target_host}`
 - **Endpoint URL:** `{finding.endpoint_url or 'N/A'}`
-- **Affected Parameter:** `{finding.parameter or 'N/A'}`
+- **Affected Parameter:** `{dossier['parameter']}`
 - **Vulnerability Type:** `{finding.vulnerability_type}`
 - **CWE:** {cwe_display}
 - **CVE Identifier:** {cve_display}
@@ -128,21 +156,36 @@ class BugBountyReportGenerator:
 
 ---
 
-## Steps to Reproduce (PoC)
+## Complete Proof of Concept (PoC) & Exploitation Dossier
 
+### 1. Step-by-Step Manual Reproduction Guide
 {repro_steps_md}
 
-### Proof of Concept Command
-
-```bash
-{poc_cmd}
+### 2. Standalone Python PoC Script
+```python
+{dossier['python_poc']}
 ```
 
-### Expected Behavior
-{finding.expected_result or 'The application should enforce authorization, sanitize input, or reject unauthorized requests with HTTP 401/403/404.'}
+### 3. cURL CLI Reproduction Command
+```bash
+{dossier['curl_command']}
+```
 
-### Actual Observed Behavior
-{finding.actual_result or 'The application processed unauthorized input or returned sensitive internal data without validation.'}
+### 4. Wire-Level HTTP Request Proof
+```http
+{dossier['raw_http_request']}
+```
+
+### 5. Wire-Level HTTP Response Proof
+```http
+{dossier['raw_http_response']}
+```
+
+{screenshot_section}
+
+### Expected vs Observed Behavior
+- **Expected Secure Behavior:** {dossier['expected_behavior']}
+- **Actual Vulnerable Behavior:** {dossier['actual_behavior']}
 
 ---
 
@@ -160,13 +203,12 @@ class BugBountyReportGenerator:
 
 ---
 
-## Supporting Evidence
+## Supporting Evidence & Provenance
 
 - **Evidence Level:** `{finding.evidence_level}`
 - **Evidence Integrity Hash (SHA-256):** `{ev_hash}`
 - **Assessment Timestamp:** `{now_str}`
 - **Validation Adapter:** `{finding.adapter_name}`
-- **Screenshot Proof:** Attached in report package where visual confirmation applies.
 
 ---
 
@@ -183,4 +225,5 @@ class BugBountyReportGenerator:
 
 # Module-level singleton
 bug_bounty_generator = BugBountyReportGenerator()
+
 

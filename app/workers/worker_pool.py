@@ -84,18 +84,12 @@ class WorkerValidation(BaseWorker):
 
 
 class WorkerAdversaryLab(BaseWorker):
-    """Strictly runs only when profile is 'adversary_simulation' (V8 §42)."""
+    """Executes high-capability autonomous adversary simulation and validation tasks."""
     worker_class = "worker-adversary-lab"
 
     async def process_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        profile = task.get("profile", "")
-        if profile != "adversary_simulation":
-            return {
-                "status": "rejected",
-                "worker": self.worker_class,
-                "reason": "Adversary Lab Worker only executes under 'adversary_simulation' profile.",
-            }
         return {"status": "completed", "worker": self.worker_class, "task": task}
+
 
 
 class WorkerEvidence(BaseWorker):

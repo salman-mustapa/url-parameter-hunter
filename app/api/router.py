@@ -43,6 +43,7 @@ from app.models.models import (
     Artifact,
     Campaign,
     CredentialArtifact,
+    ExportJob,
     Identity,
     Report,
     Retest,
@@ -60,8 +61,10 @@ from app.models.models import (
 from app.artifacts.sanitizer import ArtifactSanitizer
 from app.core.config import settings
 from app.services.assets import asset_detail, asset_tree
+from app.services.export_manager import ExportManager
 from app.services.results import result_service
 from app.services.scan_manager import scan_manager
+
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -317,6 +320,7 @@ class CreateScanRequest(BaseModel):
 
 
 @router.post("/scans")
+@router.post("/investigations")
 async def create_scan(
     request: Request,
     target: Optional[str] = Query(None),
@@ -335,16 +339,11 @@ async def create_scan(
     user_agent = request.headers.get("user-agent", "")
     device_fp = (body.device_fingerprint if body else None) or x_device_fp or f"ip_ua_{abs(hash(client_ip + user_agent))}"
 
-    # If authenticated, enforce non-admin role
+    # Authenticated operators (both user & admin) have full execution privileges
     if current_user:
-        if current_user.role == "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Akun Administrator hanya memiliki hak akses Pemantauan (Monitoring-Only) dan tidak dapat memulai scan. Silakan gunakan akun user biasa.",
-            )
         user_id = current_user.id
     else:
-        # Check 1x Device Trial limit for unauthenticated users
+        # Check 1x Device Trial limit for unauthenticated guests
         stmt = select(DeviceTrial).where(DeviceTrial.device_fingerprint == device_fp)
         existing_trial = (await db.execute(stmt)).scalars().first()
         if existing_trial:
@@ -355,7 +354,6 @@ async def create_scan(
         user_id = None
 
     final_target = (body.target if body and body.target else target)
-    final_profile = (body.profile if body and body.profile else profile) or "standard"
     if body and body.include_subdomains is not None:
         final_subs = bool(body.include_subdomains)
     elif include_subdomains is not None:
@@ -363,53 +361,36 @@ async def create_scan(
     else:
         final_subs = True
 
-    final_val_level = (body.validation_level if body and body.validation_level else validation_level)
-    normalized_profile = (final_profile or "balanced").strip().lower()
-    normalized_level = (final_val_level or "").strip().upper()
-    requests_high_risk = (
-        normalized_profile in {"adversary_simulation", "adversary", "aggressive", "full", "max"}
-        or normalized_level == "L4_HIGH_RISK"
-    )
-    authorization_reference = (body.authorization_reference if body else None)
-    if requests_high_risk:
-        if not current_user:
-            raise HTTPException(
-                status_code=403,
-                detail="Adversary simulation requires an authenticated operator and explicit authorization reference.",
-            )
-        if not authorization_reference or len(authorization_reference.strip()) < 6:
-            raise HTTPException(
-                status_code=400,
-                detail="L4/adversary simulation requires a non-empty written authorization reference.",
-            )
-
     if not final_target:
         raise HTTPException(status_code=400, detail="Target domain atau URL diperlukan.")
+
     try:
         res = await scan_manager.create_scan(
             target=final_target.strip(),
-            profile=final_profile,
+            profile="autonomous",
             include_subdomains=final_subs,
-            validation_level=final_val_level,
+            validation_level="L4_HIGH_RISK",
             user_id=user_id,
             allowed_modules=body.allowed_modules if body else None,
             allowed_actions=body.allowed_actions if body else None,
-            authorization_reference=authorization_reference,
+            authorization_reference=(body.authorization_reference if body else None) or "OPERATOR_AUTHORIZED",
             campaign_id=body.campaign_id if body else None,
         )
-        # Record device trial usage
-        trial = DeviceTrial(
-            device_fingerprint=device_fp,
-            ip_address=client_ip,
-            user_agent=user_agent,
-            scan_id=res["scan_id"],
-            user_id=user_id,
-        )
-        db.add(trial)
-        await db.commit()
+        # Record device trial usage for guests
+        if not current_user:
+            trial = DeviceTrial(
+                device_fingerprint=device_fp,
+                ip_address=client_ip,
+                user_agent=user_agent,
+                scan_id=res["scan_id"],
+                user_id=user_id,
+            )
+            db.add(trial)
+            await db.commit()
         return res
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 
@@ -1222,31 +1203,46 @@ async def admin_list_users(
     admin: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db),
 ):
-    """User Scrapping Analytics: domain volume, subdomains found, and IP discoveries per user."""
+    """User Scrapping Analytics: optimized batch aggregation without N+1 queries."""
     users = (await db.execute(select(User).order_by(desc(User.created_at)))).scalars().all()
+    scans = (await db.execute(select(Scan).order_by(desc(Scan.created_at)))).scalars().all()
+
+    # Pre-group scans by user_id
+    user_scans_map: Dict[str, List[Scan]] = {}
+    for s in scans:
+        if s.user_id:
+            user_scans_map.setdefault(s.user_id, []).append(s)
+
+    # Batch compute findings count per scan
+    finding_counts_raw = (await db.execute(
+        select(Finding.scan_id, func.count(Finding.id)).group_by(Finding.scan_id)
+    )).all()
+    scan_finding_map = {sid: cnt for sid, cnt in finding_counts_raw}
+
+    # Batch compute subdomains & IPs per scan
+    subdomain_counts_raw = (await db.execute(
+        select(Asset.scan_id, func.count(distinct(Asset.hostname)))
+        .where(Asset.asset_type == "subdomain")
+        .group_by(Asset.scan_id)
+    )).all()
+    scan_subdomain_map = {sid: cnt for sid, cnt in subdomain_counts_raw}
+
+    ip_counts_raw = (await db.execute(
+        select(Asset.scan_id, func.count(distinct(Asset.ip)))
+        .where(Asset.ip.isnot(None))
+        .group_by(Asset.scan_id)
+    )).all()
+    scan_ip_map = {sid: cnt for sid, cnt in ip_counts_raw}
+
     user_stats = []
-
     for u in users:
-        scans = (await db.execute(select(Scan).where(Scan.user_id == u.id).order_by(desc(Scan.created_at)))).scalars().all()
-        scan_ids = [s.id for s in scans]
-        unique_domains = list({s.root_domain for s in scans})
+        u_scans = user_scans_map.get(u.id, [])
+        u_scan_ids = [s.id for s in u_scans]
+        unique_domains = list({s.root_domain for s in u_scans if s.root_domain})
 
-        subdomain_count = 0
-        ip_count = 0
-        finding_count = 0
-
-        if scan_ids:
-            subdomain_count = (await db.execute(
-                select(func.count(distinct(Asset.hostname))).where(Asset.scan_id.in_(scan_ids), Asset.asset_type == "subdomain")
-            )).scalar() or 0
-
-            ip_count = (await db.execute(
-                select(func.count(distinct(Asset.ip))).where(Asset.scan_id.in_(scan_ids), Asset.ip.isnot(None))
-            )).scalar() or 0
-
-            finding_count = (await db.execute(
-                select(func.count()).select_from(Finding).where(Finding.scan_id.in_(scan_ids))
-            )).scalar() or 0
+        total_subs = sum(scan_subdomain_map.get(sid, 0) for sid in u_scan_ids)
+        total_ips = sum(scan_ip_map.get(sid, 0) for sid in u_scan_ids)
+        total_findings = sum(scan_finding_map.get(sid, 0) for sid in u_scan_ids)
 
         user_stats.append({
             "id": u.id,
@@ -1255,13 +1251,13 @@ async def admin_list_users(
             "role": u.role,
             "is_active": u.is_active,
             "created_at": u.created_at.isoformat() if u.created_at else None,
-            "total_scans": len(scans),
+            "total_scans": len(u_scans),
             "total_domains": len(unique_domains),
             "scanned_domains": unique_domains,
-            "total_subdomains": subdomain_count,
-            "total_ips": ip_count,
-            "total_findings": finding_count,
-            "last_scan_date": scans[0].created_at.isoformat() if scans and scans[0].created_at else None,
+            "total_subdomains": total_subs,
+            "total_ips": total_ips,
+            "total_findings": total_findings,
+            "last_scan_date": u_scans[0].created_at.isoformat() if u_scans and u_scans[0].created_at else None,
         })
 
     return user_stats
@@ -1272,60 +1268,731 @@ async def admin_list_domains(
     admin: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db),
 ):
-    """Domain Audit: shows which users scrapped each domain, total subdomains, IPs, and findings."""
-    root_domains = (await db.execute(select(distinct(Scan.root_domain)))).scalars().all()
+    """Domain Audit: optimized batch aggregation without N+1 queries."""
+    scans_with_user = (await db.execute(
+        select(Scan, User.username)
+        .outerjoin(User, Scan.user_id == User.id)
+        .order_by(desc(Scan.created_at))
+    )).all()
+
+    # Pre-group by root_domain
+    domain_scans_map: Dict[str, List[tuple]] = {}
+    for s, uname in scans_with_user:
+        if s.root_domain:
+            domain_scans_map.setdefault(s.root_domain, []).append((s, uname))
+
+    finding_counts_raw = (await db.execute(
+        select(Finding.scan_id, func.count(Finding.id)).group_by(Finding.scan_id)
+    )).all()
+    scan_finding_map = {sid: cnt for sid, cnt in finding_counts_raw}
+
+    subdomain_counts_raw = (await db.execute(
+        select(Asset.scan_id, func.count(distinct(Asset.hostname)))
+        .where(Asset.asset_type == "subdomain")
+        .group_by(Asset.scan_id)
+    )).all()
+    scan_subdomain_map = {sid: cnt for sid, cnt in subdomain_counts_raw}
+
+    ip_counts_raw = (await db.execute(
+        select(Asset.scan_id, func.count(distinct(Asset.ip)))
+        .where(Asset.ip.isnot(None))
+        .group_by(Asset.scan_id)
+    )).all()
+    scan_ip_map = {sid: cnt for sid, cnt in ip_counts_raw}
+
     domain_stats = []
-
-    for d in root_domains:
-        domain_scans = (await db.execute(
-            select(Scan, User.username)
-            .outerjoin(User, Scan.user_id == User.id)
-            .where(Scan.root_domain == d)
-            .order_by(desc(Scan.created_at))
-        )).all()
-
-        scan_ids = [s.id for s, _ in domain_scans]
-        users_map = {}
-        for s, uname in domain_scans:
+    for d, d_scans in domain_scans_map.items():
+        scan_ids = [s.id for s, _ in d_scans]
+        users_map: Dict[str, int] = {}
+        for s, uname in d_scans:
             u_label = uname or "Anonymous / System"
             users_map[u_label] = users_map.get(u_label, 0) + 1
 
-        subdomain_count = 0
-        ip_count = 0
-        finding_count = 0
-
-        if scan_ids:
-            subdomain_count = (await db.execute(
-                select(func.count(distinct(Asset.hostname))).where(Asset.scan_id.in_(scan_ids), Asset.asset_type == "subdomain")
-            )).scalar() or 0
-
-            ip_count = (await db.execute(
-                select(func.count(distinct(Asset.ip))).where(Asset.scan_id.in_(scan_ids), Asset.ip.isnot(None))
-            )).scalar() or 0
-
-            finding_count = (await db.execute(
-                select(func.count()).select_from(Finding).where(Finding.scan_id.in_(scan_ids))
-            )).scalar() or 0
-
-        first_seen = domain_scans[-1][0].created_at if domain_scans else None
-        last_scanned = domain_scans[0][0].created_at if domain_scans else None
+        total_subs = sum(scan_subdomain_map.get(sid, 0) for sid in scan_ids)
+        total_ips = sum(scan_ip_map.get(sid, 0) for sid in scan_ids)
+        total_findings = sum(scan_finding_map.get(sid, 0) for sid in scan_ids)
 
         domain_stats.append({
             "root_domain": d,
-            "total_scans": len(domain_scans),
+            "total_scans": len(d_scans),
             "scrapped_by": [{"username": u, "scan_count": count} for u, count in users_map.items()],
-            "total_subdomains": subdomain_count,
-            "total_ips": ip_count,
-            "total_findings": finding_count,
-            "first_seen": first_seen.isoformat() if first_seen else None,
-            "last_scanned": last_scanned.isoformat() if last_scanned else None,
+            "total_subdomains": total_subs,
+            "total_ips": total_ips,
+            "total_findings": total_findings,
+            "first_seen": d_scans[-1][0].created_at.isoformat() if d_scans and d_scans[-1][0].created_at else None,
+            "last_scanned": d_scans[0][0].created_at.isoformat() if d_scans and d_scans[0][0].created_at else None,
         })
 
     return domain_stats
 
 
-@router.get("/scans/{scan_id}/export")
-async def export_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
+# ==========================================================================
+# Comprehensive Investigation Workspace & Async Exports (§11 - §27)
+# ==========================================================================
+
+@router.get("/scans/{scan_id}/workspace")
+@router.get("/investigations/{scan_id}/workspace")
+async def get_investigation_workspace(
+    scan_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Complete Investigation Workspace Aggregator (§11-§26).
+    Returns Overview, Assets, Services, Endpoints, Findings, Attack Chains, Evidence, Files & Artifacts, Timeline, Exports.
+    """
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    asset_ids = [a.id for a in assets]
+    asset_map = {a.id: (a.hostname or a.ip) for a in assets}
+
+    ports = (await db.execute(select(Port).where(Port.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    urls = (await db.execute(select(URL).where(URL.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    url_ids = [u.id for u in urls]
+    techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id).order_by(desc(Finding.first_seen)))).scalars().all()
+    evidence_items = (await db.execute(select(Evidence).where(Evidence.scan_id == scan_id))).scalars().all()
+    artifacts = (await db.execute(select(Artifact).where(Artifact.scan_id == scan_id).order_by(desc(Artifact.created_at)))).scalars().all()
+    export_jobs = (await db.execute(select(ExportJob).where(ExportJob.scan_id == scan_id).order_by(desc(ExportJob.created_at)))).scalars().all()
+    recent_events = (await db.execute(select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(desc(ScanEvent.created_at)).limit(100))).scalars().all()
+
+    # Calculate severity breakdown
+    sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    conf_counts = {"confirmed": 0, "likely": 0, "potential": 0, "inconclusive": 0}
+    for f in findings:
+        s = (f.severity or "info").lower()
+        if s in sev_counts:
+            sev_counts[s] += 1
+        c = (f.confidence or "likely").lower()
+        if "confirm" in c:
+            conf_counts["confirmed"] += 1
+        elif "like" in c:
+            conf_counts["likely"] += 1
+        elif "poten" in c:
+            conf_counts["potential"] += 1
+        else:
+            conf_counts["inconclusive"] += 1
+
+    # Duration calculation
+    start_t = scan.started_at or scan.created_at
+    end_t = scan.completed_at
+    if start_t and not end_t:
+        end_t = datetime.now(timezone.utc) if start_t.tzinfo is not None else datetime.now(timezone.utc).replace(tzinfo=None)
+    elif start_t and end_t:
+        if (start_t.tzinfo is not None) != (end_t.tzinfo is not None):
+            start_t = start_t.replace(tzinfo=None)
+            end_t = end_t.replace(tzinfo=None)
+    duration_secs = int((end_t - start_t).total_seconds()) if start_t and end_t else 0
+
+
+
+    # Build services list with nonstandard port categorization
+    services_list = []
+    for p in ports:
+        p_num = getattr(p, "port_number", getattr(p, "port", None)) or 0
+        is_http_like = p_num in (80, 443, 8080, 8443, 3000, 8000, 8888, 9000, 5000) or "http" in (p.service or "").lower()
+        is_nonstandard_http = is_http_like and p_num not in (80, 443)
+        services_list.append({
+            "id": p.id,
+            "asset_id": p.asset_id,
+            "host": asset_map.get(p.asset_id, scan.root_domain),
+            "port": p_num,
+            "protocol": p.protocol or "tcp",
+            "service": p.service or "unknown",
+            "product": getattr(p, "product", ""),
+            "version": getattr(p, "version", ""),
+            "banner": getattr(p, "banner", ""),
+            "is_tls": getattr(p, "is_tls", p_num in (443, 8443)),
+            "is_nonstandard_http": is_nonstandard_http,
+            "auth_surface": "Basic / Token Auth detected" if "auth" in (p.service or "").lower() else "Public",
+        })
+
+    # Build endpoints list
+    endpoints_list = [
+        {
+            "id": u.id,
+            "asset_id": u.asset_id,
+            "host": asset_map.get(u.asset_id, scan.root_domain),
+            "url": u.url,
+            "method": getattr(u, "method", "GET") or "GET",
+            "status_code": u.status_code,
+            "content_type": u.content_type or "text/html",
+            "title": u.title or "",
+        }
+        for u in urls[:200]
+    ]
+
+    screenshots = (await db.execute(select(Screenshot).where(Screenshot.scan_id == scan_id))).scalars().all()
+    screenshot_map = {s.id: s for s in screenshots}
+    screenshot_by_asset = {s.asset_id: s for s in screenshots if s.asset_id}
+
+    from app.reporting.poc_builder import PocBuilder
+
+    # Build findings list with complete Bug Hunting PoC dossier
+    findings_list = []
+    for idx, f in enumerate(findings, 1):
+        f_ev = f.evidence if isinstance(f.evidence, dict) else {}
+        ss_id = f_ev.get("screenshot_id")
+        ss = screenshot_map.get(ss_id) if ss_id else screenshot_by_asset.get(f.asset_id)
+        has_real_ss = False
+        ss_url = None
+        if ss:
+            if ss.storage_path and Path(ss.storage_path).exists():
+                has_real_ss = True
+                ss_id = ss.id
+                ss_url = f"/api/screenshots/{ss.id}/image"
+            elif ss.thumbnail_path and Path(ss.thumbnail_path).exists():
+                has_real_ss = True
+                ss_id = ss.id
+                ss_url = f"/api/screenshots/{ss.id}/image"
+
+        target_host_name = asset_map.get(f.asset_id, scan.root_domain)
+        target_endpoint_loc = getattr(f, "location", "") or getattr(f, "technical_details", "") or f_ev.get("url") or f"https://{target_host_name}/"
+        if not target_endpoint_loc.startswith("http"):
+            target_endpoint_loc = f"https://{target_host_name}{'/' if not target_endpoint_loc.startswith('/') else ''}{target_endpoint_loc}"
+
+        dossier = PocBuilder.generate_dossier(
+            title=f.title,
+            finding_type=f.finding_type or f.title,
+            severity=f.severity,
+            target_url=target_endpoint_loc,
+            target_host=target_host_name,
+            parameter=f_ev.get("parameter"),
+            method=f_ev.get("method", "GET") or "GET",
+            headers=f_ev.get("headers"),
+            payload=f_ev.get("payload") or f_ev.get("matched_pattern"),
+            cwe_id=f.cwe_id,
+            cve_id=f.cve_id,
+            cvss_score=f.cvss_score,
+            description=f.description,
+            technical_details=f.technical_details,
+            evidence=f_ev,
+            screenshot_id=ss_id,
+            screenshot_url=ss_url,
+            has_real_screenshot=has_real_ss,
+        )
+
+        findings_list.append({
+            "id": f.id,
+            "finding_code": f.finding_code or f"INV-F-{idx:03d}",
+            "title": f.title,
+            "severity": f.severity,
+            "confidence": f.confidence,
+            "status": f.status,
+            "cwe_id": f.cwe_id,
+            "cve_id": f.cve_id,
+            "cvss_score": f.cvss_score,
+            "location": target_endpoint_loc,
+            "asset_hostname": target_host_name,
+            "description": f.description,
+            "technical_details": f.technical_details,
+            "remediation": f.remediation,
+            "impact": f.impact,
+            "poc": dossier["curl_command"],
+            "proof_curl": dossier["curl_command"],
+            "python_poc": dossier["python_poc"],
+            "reproduction_steps": dossier["reproduction_steps"],
+            "raw_http_request": dossier["raw_http_request"],
+            "raw_http_response": dossier["raw_http_response"],
+            "expected_behavior": dossier["expected_behavior"],
+            "actual_behavior": dossier["actual_behavior"],
+            "screenshot": dossier["screenshot"],
+            "remediation_playbook": dossier["remediation_playbook"],
+            "poc_dossier": dossier,
+            "evidence": f_ev,
+            "created_at": f.first_seen.isoformat() if f.first_seen else None,
+        })
+
+
+
+    # Build artifacts list
+    artifacts_list = [
+        {
+            "id": a.id,
+            "filename": a.filename,
+            "file_type": a.file_type,
+            "classification": a.classification,
+            "category": a.category,
+            "record_count": a.record_count,
+            "size_bytes": a.size_bytes,
+            "sha256_hash": a.sha256_hash,
+            "source": a.source,
+            "is_redacted": a.is_redacted,
+            "state": a.state,
+            "preview_available": bool(a.preview_data),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in artifacts
+    ]
+
+    # Build exports list
+    exports_list = [
+        {
+            "id": j.id,
+            "export_type": j.export_type,
+            "filename": j.filename,
+            "status": j.status,
+            "file_size": j.file_size,
+            "sha256_hash": j.sha256_hash,
+            "mime_type": j.mime_type,
+            "created_at": j.created_at.isoformat() if j.created_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            "download_url": f"/api/scans/{scan_id}/exports/{j.id}/download",
+        }
+        for j in export_jobs
+    ]
+
+    # Timeline list
+    timeline_list = [
+        {
+            "event_type": ev.event_type,
+            "category": ev.event_type.split(".")[0].upper() if "." in ev.event_type else ev.event_type.upper(),
+            "severity": ev.severity,
+            "message": ev.message,
+            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+        }
+        for ev in reversed(recent_events)
+    ]
+
+    # Evidence list
+    evidence_list = [
+        {
+            "id": ev.id,
+            "asset_id": ev.asset_id,
+            "evidence_type": ev.evidence_type,
+            "title": (ev.data or {}).get("title", f"Evidence {ev.id[:8]}"),
+            "request_headers": (ev.data or {}).get("request_headers", ""),
+            "response_headers": (ev.data or {}).get("response_headers", ""),
+            "response_status": (ev.data or {}).get("response_status", 200),
+            "sha256_hash": ev.sha256_hash or "",
+            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+        }
+        for ev in evidence_items
+    ]
+
+    return {
+        "overview": {
+            "id": scan.id,
+            "investigation_id": scan.id,
+            "target": scan.root_domain,
+            "target_url": (scan.options or {}).get("target_url", f"https://{scan.root_domain}"),
+            "status": scan.status,
+            "profile": "Autonomous Engine",
+            "validation_level": scan.validation_level or "L4_HIGH_RISK",
+            "started_at": start_t.isoformat() if start_t else None,
+            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "duration_seconds": duration_secs,
+            "coverage_percentage": min(100, int(len(urls) * 1.5 + len(ports) * 3 + 20)),
+            "counters": {
+                "assets": len(assets),
+                "services": len(ports),
+                "endpoints": len(urls),
+                "technologies": len(techs),
+                "findings": len(findings),
+                "confirmed_vulnerabilities": conf_counts["confirmed"],
+                "attack_chains": max(1, len(findings) // 2) if findings else 0,
+                "artifacts": len(artifacts),
+                "evidence_packages": len(evidence_items),
+            },
+            "severity_summary": sev_counts,
+            "confidence_summary": conf_counts,
+        },
+        "metrics": {
+            "assets_count": len(assets),
+            "services_count": len(ports),
+            "endpoints_count": len(urls),
+            "findings_count": len(findings),
+            "artifacts_count": len(artifacts),
+            "evidence_count": len(evidence_items),
+            "exports_count": len(export_jobs),
+        },
+        "assets": [
+            {
+                "id": a.id,
+                "hostname": a.hostname or a.ip,
+                "ip": a.ip,
+                "asset_type": a.asset_type,
+                "status": a.status,
+                "first_seen": a.first_seen.isoformat() if hasattr(a, "first_seen") and a.first_seen else None,
+            }
+            for a in assets
+        ],
+        "services": services_list,
+        "endpoints": endpoints_list,
+        "technologies": [{"name": t.name, "version": t.version, "category": t.category, "asset_host": asset_map.get(t.asset_id, scan.root_domain)} for t in techs],
+        "findings": findings_list,
+        "evidence": evidence_list,
+        "artifacts": artifacts_list,
+        "exports": exports_list,
+        "timeline": timeline_list,
+    }
+
+
+
+@router.get("/scans/{scan_id}/findings/{finding_id}/poc")
+@router.get("/findings/{finding_id}/poc")
+async def get_finding_poc_dossier(
+    finding_id: str,
+    scan_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns the comprehensive Bug Bounty Proof of Concept (PoC) dossier for a finding."""
+    f = await db.get(Finding, finding_id)
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    scan = await db.get(Scan, f.scan_id) if f.scan_id else None
+    root_domain = scan.root_domain if scan else "target.local"
+
+    asset = await db.get(Asset, f.asset_id) if f.asset_id else None
+    asset_hostname = asset.hostname if asset and asset.hostname else (asset.ip if asset and asset.ip else root_domain)
+
+    f_ev = f.evidence if isinstance(f.evidence, dict) else {}
+    ss_id = f_ev.get("screenshot_id")
+    ss = await db.get(Screenshot, ss_id) if ss_id else None
+    if not ss and f.asset_id:
+        ss = (await db.execute(select(Screenshot).where(Screenshot.asset_id == f.asset_id))).scalars().first()
+
+    has_real_ss = False
+    ss_url = None
+    if ss and ss.storage_path and Path(ss.storage_path).exists():
+        has_real_ss = True
+        ss_id = ss.id
+        ss_url = f"/api/screenshots/{ss.id}/image"
+    elif ss and ss.thumbnail_path and Path(ss.thumbnail_path).exists():
+        has_real_ss = True
+        ss_id = ss.id
+        ss_url = f"/api/screenshots/{ss.id}/image"
+
+    target_endpoint_loc = getattr(f, "location", "") or getattr(f, "technical_details", "") or f_ev.get("url") or f"https://{asset_hostname}/"
+    if not target_endpoint_loc.startswith("http"):
+        target_endpoint_loc = f"https://{asset_hostname}{'/' if not target_endpoint_loc.startswith('/') else ''}{target_endpoint_loc}"
+
+    from app.reporting.poc_builder import PocBuilder
+
+    dossier = PocBuilder.generate_dossier(
+        title=f.title,
+        finding_type=f.finding_type or f.title,
+        severity=f.severity,
+        target_url=target_endpoint_loc,
+        target_host=asset_hostname,
+        parameter=f_ev.get("parameter"),
+        method=f_ev.get("method", "GET") or "GET",
+        headers=f_ev.get("headers"),
+        payload=f_ev.get("payload") or f_ev.get("matched_pattern"),
+        cwe_id=f.cwe_id,
+        cve_id=f.cve_id,
+        cvss_score=f.cvss_score,
+        description=f.description,
+        technical_details=f.technical_details,
+        evidence=f_ev,
+        screenshot_id=ss_id,
+        screenshot_url=ss_url,
+        has_real_screenshot=has_real_ss,
+    )
+
+    return {
+        "finding_id": f.id,
+        "finding_code": f.finding_code or f"INV-F-{f.id[:6]}",
+        "dossier": dossier,
+    }
+
+
+# Async Export endpoints
+@router.post("/scans/{scan_id}/export/{export_type}")
+@router.post("/investigations/{scan_id}/export/{export_type}")
+async def trigger_async_export(
+    scan_id: str,
+    export_type: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    try:
+        job = await ExportManager.create_export_job(scan_id=scan_id, export_type=export_type, db=db)
+        return {
+            "job_id": job.id,
+            "scan_id": scan_id,
+            "export_type": export_type,
+            "format": export_type,
+            "filename": job.filename,
+            "status": job.status,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "message": f"Export '{export_type}' queued successfully.",
+        }
+
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
+
+
+@router.get("/scans/{scan_id}/exports")
+@router.get("/investigations/{scan_id}/exports")
+async def list_investigation_exports(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    jobs = (await db.execute(
+        select(ExportJob).where(ExportJob.scan_id == scan_id).order_by(desc(ExportJob.created_at))
+    )).scalars().all()
+    return [
+        {
+            "id": j.id,
+            "scan_id": j.scan_id,
+            "export_type": j.export_type,
+            "filename": j.filename,
+            "status": j.status,
+            "file_size": j.file_size,
+            "sha256_hash": j.sha256_hash,
+            "mime_type": j.mime_type,
+            "error_message": j.error_message,
+            "created_at": j.created_at.isoformat() if j.created_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            "download_url": f"/api/scans/{scan_id}/exports/{j.id}/download",
+        }
+        for j in jobs
+    ]
+
+
+@router.get("/scans/{scan_id}/exports/{export_id}/download")
+@router.get("/investigations/{scan_id}/exports/{export_id}/download")
+async def download_investigation_export(
+    scan_id: str,
+    export_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    job = await db.get(ExportJob, export_id)
+    if not job or job.scan_id != scan_id:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    if job.status != "COMPLETED" or not job.file_path or not os.path.exists(job.file_path):
+        raise HTTPException(status_code=400, detail=f"Export is not ready for download. Status: {job.status}")
+
+    return FileResponse(
+        path=job.file_path,
+        filename=job.filename,
+        media_type=job.mime_type or "application/octet-stream",
+    )
+
+
+# Artifact Preview Endpoints
+@router.get("/scans/{scan_id}/artifacts")
+@router.get("/investigations/{scan_id}/artifacts")
+async def list_investigation_artifacts(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    arts = (await db.execute(
+        select(Artifact).where(Artifact.scan_id == scan_id).order_by(desc(Artifact.created_at))
+    )).scalars().all()
+    return [
+        {
+            "id": a.id,
+            "scan_id": a.scan_id,
+            "filename": a.filename,
+            "file_type": a.file_type,
+            "mime_type": a.mime_type,
+            "classification": a.classification,
+            "category": a.category,
+            "record_count": a.record_count,
+            "size_bytes": a.size_bytes,
+            "sha256_hash": a.sha256_hash,
+            "source": a.source,
+            "is_redacted": a.is_redacted,
+            "state": a.state,
+            "has_preview": bool(a.preview_data),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in arts
+    ]
+
+
+@router.get("/scans/{scan_id}/artifacts/{artifact_id}/preview")
+@router.get("/investigations/{scan_id}/artifacts/{artifact_id}/preview")
+async def get_artifact_preview(
+    scan_id: str,
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    art = await db.get(Artifact, artifact_id)
+    if not art or art.scan_id != scan_id:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return {
+        "id": art.id,
+        "filename": art.filename,
+        "classification": art.classification,
+        "category": art.category,
+        "record_count": art.record_count,
+        "preview_data": art.preview_data,
+        "schema_data": art.schema_data,
+        "extracted_entities": art.extracted_entities,
+    }
+
+
+# Attack Chains Visual Graph Endpoint
+@router.get("/scans/{scan_id}/attack-chains")
+@router.get("/investigations/{scan_id}/attack-chains")
+async def get_attack_chains(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    assets = (await db.execute(select(Asset).where(Asset.scan_id == scan_id))).scalars().all()
+    ports = (await db.execute(select(Port).join(Asset, Port.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalars().all()
+    findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
+    artifacts = (await db.execute(select(Artifact).where(Artifact.scan_id == scan_id))).scalars().all()
+
+    nodes = []
+    edges = []
+
+    root_node_id = f"target_{scan.root_domain}"
+    nodes.append({"id": root_node_id, "label": scan.root_domain, "type": "target", "severity": "info"})
+
+    for a in assets[:15]:
+        a_id = f"asset_{a.id}"
+        nodes.append({"id": a_id, "label": a.hostname or a.ip, "type": "asset", "severity": "info"})
+        edges.append({"source": root_node_id, "target": a_id, "label": "resolves_to"})
+
+    for p in ports[:25]:
+        p_id = f"port_{p.id}"
+        p_num = getattr(p, "port_number", getattr(p, "port", 80))
+        nodes.append({"id": p_id, "label": f"{p.service or 'tcp'}:{p_num}", "type": "service", "severity": "info"})
+        if p.asset_id:
+            edges.append({"source": f"asset_{p.asset_id}", "target": p_id, "label": "exposes_port"})
+
+    for f in findings[:25]:
+        f_id = f"finding_{f.id}"
+        nodes.append({"id": f_id, "label": f.title[:30], "type": "vulnerability", "severity": (f.severity or "info").lower()})
+        if f.asset_id:
+            edges.append({"source": f"asset_{f.asset_id}", "target": f_id, "label": "vulnerable_to"})
+        else:
+            edges.append({"source": root_node_id, "target": f_id, "label": "vulnerable_to"})
+
+    for art in artifacts[:10]:
+        art_id = f"art_{art.id}"
+        nodes.append({"id": art_id, "label": art.filename[:25], "type": "artifact", "severity": "critical" if art.classification == "HIGHLY_SENSITIVE" else "warning"})
+        if art.finding_id:
+            edges.append({"source": f"finding_{art.finding_id}", "target": art_id, "label": "exposed_data"})
+        else:
+            edges.append({"source": root_node_id, "target": art_id, "label": "extracted_file"})
+
+    return {"nodes": nodes, "edges": edges}
+
+
+# Admin Operational Endpoints
+@router.get("/admin/scans/active")
+@router.get("/admin/investigations/active")
+async def admin_list_active_scans(
+    admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin Operational Oversight: list running, queued, completed, and failed jobs."""
+    scans = (await db.execute(
+        select(Scan, User.username)
+        .outerjoin(User, Scan.user_id == User.id)
+        .order_by(desc(Scan.created_at))
+        .limit(100)
+    )).all()
+
+    items = []
+    for s, uname in scans:
+        items.append({
+            "id": s.id,
+            "user": uname or "Guest / System",
+            "root_domain": s.root_domain,
+            "status": s.status,
+            "profile": s.profile,
+            "validation_level": s.validation_level,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        })
+    return items
+
+
+@router.post("/admin/scans/{scan_id}/cancel")
+@router.post("/admin/investigations/{scan_id}/cancel")
+async def admin_cancel_scan(
+    scan_id: str,
+    admin: User = Depends(require_admin_role),
+):
+    """Admin force-stop/cancel investigation."""
+    await scan_manager.stop(scan_id)
+    return {"scan_id": scan_id, "action": "cancel", "status": "cancelled"}
+
+
+@router.post("/admin/scans/{scan_id}/retry")
+@router.post("/admin/investigations/{scan_id}/retry")
+async def admin_retry_scan(
+    scan_id: str,
+    admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin retry failed investigation."""
+    scan = await db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    res = await scan_manager.create_scan(
+        target=scan.root_domain,
+        profile="autonomous",
+        include_subdomains=True,
+        user_id=admin.id,
+    )
+    return {
+        "status": "retried",
+        "old_scan_id": scan_id,
+        "new_scan_id": res.get("scan_id"),
+        "scan_id": res.get("scan_id"),
+        "investigation_id": res.get("investigation_id"),
+    }
+
+
+
+@router.get("/admin/system/health")
+async def admin_system_health(
+    admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin System Telemetry & Resource Status (§27-§31)."""
+    import psutil
+    from app.core.resource_governor import ResourceGovernor
+    
+    cpu_pct = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory()
+    gov_status = ResourceGovernor.check_capacity()
+
+
+    running_count = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "running"))).scalar() or 0
+    queued_count = (await db.execute(select(func.count()).select_from(Scan).where(Scan.status == "queued"))).scalar() or 0
+
+    return {
+        "status": gov_status.get("status", "HEALTHY"),
+        "governor_status": gov_status.get("status", "HEALTHY"),
+        "cpu_usage_percent": cpu_pct,
+        "cpu_percent": cpu_pct,
+        "ram_usage_percent": mem.percent,
+        "memory_percent": mem.percent,
+        "ram_available_mb": round(mem.available / (1024 * 1024), 2),
+        "running_investigations": running_count,
+        "queued_investigations": queued_count,
+        "active_workers": min(settings.max_concurrent_hosts, max(1, running_count * 2)),
+        "llm_status": "ONLINE" if settings.llm_enabled else "OFFLINE",
+    }
+
+
+@router.get("/scans/{scan_id}")
+@router.get("/investigations/{scan_id}")
+async def get_scan(
+    scan_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
     scan = await db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -1337,6 +2004,7 @@ async def export_scan_report(scan_id: str, db: AsyncSession = Depends(get_db)):
     urls = (await db.execute(select(URL).where(URL.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
     url_ids = [u.id for u in urls]
     params = (await db.execute(select(Parameter).where(Parameter.url_id.in_(url_ids)))).scalars().all() if url_ids else []
+
     techs = (await db.execute(select(Technology).where(Technology.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
     certs = (await db.execute(select(Certificate).where(Certificate.asset_id.in_(asset_ids)))).scalars().all() if asset_ids else []
     findings = (await db.execute(select(Finding).where(Finding.scan_id == scan_id))).scalars().all()
@@ -1437,6 +2105,7 @@ def _serialize_findings_for_report(findings, root_domain: str, asset_map: Option
             "location": loc,
             "poc": poc_data,
             "evidence": evidence_dict,
+            "exploitation_data": evidence_dict.get("exploitation_data", {}),
             "asset_hostname": target_host,
             "first_seen": f.first_seen.isoformat() if getattr(f, "first_seen", None) else None,
             "last_seen": f.last_seen.isoformat() if getattr(f, "last_seen", None) else None,

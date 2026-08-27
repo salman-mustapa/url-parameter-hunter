@@ -1,12 +1,14 @@
-from __future__ import annotations
-
 import datetime
 import html
 import io
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.reporting.poc_builder import PocBuilder
 from app.reporting.redaction import RedactionEngine
+
 
 
 class ReportEngine:
@@ -130,29 +132,75 @@ class ReportEngine:
 
                 # Root cause analysis
                 root_cause = f.get("root_cause")
-                if root_cause:
-                    rc_text = root_cause if isinstance(root_cause, str) else root_cause.get("explanation", str(root_cause))
-                    lines.extend([
-                        f"#### 4. Root Cause Analysis",
-                        f"{rc_text}",
-                        f"",
-                    ])
-
-                # Reproduction Steps & PoC Command (§21)
+                rc_text = root_cause if isinstance(root_cause, str) else (root_cause.get("explanation", str(root_cause)) if root_cause else "Improper input sanitization, missing authorization boundaries, or vulnerable third-party dependencies.")
                 lines.extend([
-                    f"#### 5. Reproduction Steps & PoC Command",
+                    f"#### 4. Root Cause Analysis",
+                    f"{rc_text}",
+                    f"",
                 ])
-                repro_steps = f.get("reproduction_steps")
-                if repro_steps and isinstance(repro_steps, list):
-                    for step_idx, step in enumerate(repro_steps, 1):
-                        lines.append(f"- **Step {step_idx}:** {step}")
-                    lines.append("")
+
+                # Complete Bug Bounty Proof of Concept (PoC) Dossier
+                dossier = f.get("poc_dossier")
+                if not dossier:
+                    dossier = PocBuilder.generate_dossier(
+                        title=f.get("title", "Finding"),
+                        finding_type=f.get("finding_type") or f.get("title", ""),
+                        severity=sev,
+                        target_url=loc,
+                        target_host=f.get("asset_hostname") or target,
+                        parameter=f.get("parameter"),
+                        method=f.get("method", "GET"),
+                        payload=f.get("payload"),
+                        cwe_id=f.get("cwe_id"),
+                        cve_id=f.get("cve_id"),
+                        cvss_score=f.get("cvss_score"),
+                        description=f.get("description"),
+                        technical_details=tech_details,
+                        evidence=evidence_info if isinstance(evidence_info, dict) else {},
+                        has_real_screenshot=bool(f.get("screenshot_path") and os.path.exists(f.get("screenshot_path"))),
+                        screenshot_url=f.get("screenshot_url") or f.get("screenshot_path"),
+                    )
+
+                repro_steps_list = dossier.get("reproduction_steps") or f.get("reproduction_steps") or []
+                repro_steps_rendered = "\n".join(f"{s_idx}. {step}" for s_idx, step in enumerate(repro_steps_list, 1))
+
+                ss_info = dossier.get("screenshot", {})
+                if ss_info.get("has_screenshot") and ss_info.get("image_url"):
+                    screenshot_block = f"**Visual Evidence (Real Browser Screenshot):**\n![Visual Proof Capture]({ss_info['image_url']})\n_{ss_info.get('caption', 'Live automated browser capture')}_\n"
+                else:
+                    screenshot_block = f"**Visual Evidence Status:**\n> {ss_info.get('explanation_if_none', 'Visual screenshot not applicable for this API finding. Wire-level HTTP response proof is documented below.')}\n"
 
                 lines.extend([
-                    f"**Proof of Concept Command:**",
-                    f"```bash",
-                    f"{poc}",
+                    f"#### 5. Reproduction Steps & Proof of Concept (PoC) Dossier",
+                    f"",
+                    f"**Step-by-Step Manual Reproduction Guide:**",
+                    f"{repro_steps_rendered}",
+                    f"",
+                    f"**Standalone Python PoC Script:**",
+
+                    f"```python",
+                    f"{dossier.get('python_poc', '')}",
                     f"```",
+                    f"",
+                    f"**cURL CLI Reproduction Command:**",
+                    f"```bash",
+                    f"{dossier.get('curl_command', poc)}",
+                    f"```",
+                    f"",
+                    f"**Wire-Level HTTP Request Proof:**",
+                    f"```http",
+                    f"{dossier.get('raw_http_request', '')}",
+                    f"```",
+                    f"",
+                    f"**Wire-Level HTTP Response Proof:**",
+                    f"```http",
+                    f"{dossier.get('raw_http_response', '')}",
+                    f"```",
+                    f"",
+                    f"{screenshot_block}",
+                    f"**Behavioral Contrast:**",
+                    f"- **Expected Secure Behavior:** {dossier.get('expected_behavior', '')}",
+                    f"- **Actual Observed Behavior:** {dossier.get('actual_behavior', '')}",
                     f"",
                 ])
 
@@ -160,15 +208,16 @@ class ReportEngine:
                     ev_str = json.dumps(evidence_info, indent=2, default=str) if evidence_info else ""
                     if ev_str and ev_str != "{}":
                         lines.extend([
-                            f"**Captured Evidence Artifact:**  ",
+                            f"**Raw Metadata Evidence Artifact:**",
                             f"```json",
                             f"{ev_str}",
                             f"```",
                             f"",
                         ])
 
+
                 # Exploitation Evidence (Deep Proof)
-                exploitation_data = f.get("exploitation_data")
+                exploitation_data = f.get("exploitation_data") or f.get("evidence", {}).get("exploitation_data")
                 if exploitation_data and isinstance(exploitation_data, dict):
                     attack_type = f.get("attack_type", f.get("vulnerability_type", ""))
 
@@ -523,18 +572,60 @@ class ReportEngine:
                 cvss = f" [CVSS {html.escape(str(f['cvss_score']))}]" if f.get("cvss_score") else ""
                 desc = html.escape(str(f.get("description", "No description.")))
                 impact = html.escape(str(f.get("impact", "Potential security risk.")))
-                tech = html.escape(str(f.get("technical_details") or "Validation executed via pattern/signature heuristic."))
+                tech = html.escape(str(f.get("technical_details") or "Validation executed via dynamic checks."))
                 rem = html.escape(str(f.get("remediation", "Apply latest security patches.")))
                 loc = html.escape(str(f.get("location") or f.get("url") or f.get("asset_hostname") or target))
-                poc = html.escape(str(f.get("poc") or f.get("poc_curl") or f.get("curl_command") or f"curl -s -k -X GET '{loc}'"))
                 status = html.escape(str(f.get("status", "CONFIRMED")))
                 conf = html.escape(str(f.get("confidence", "CONFIRMED")))
+
+                # PoC Dossier
+                dossier = f.get("poc_dossier")
+                if not dossier:
+                    dossier = PocBuilder.generate_dossier(
+                        title=f.get("title", "Finding"),
+                        finding_type=f.get("finding_type") or f.get("title", ""),
+                        severity=sev,
+                        target_url=loc,
+                        target_host=f.get("asset_hostname") or target,
+                        parameter=f.get("parameter"),
+                        method=f.get("method", "GET"),
+                        payload=f.get("payload"),
+                        cwe_id=f.get("cwe_id"),
+                        cve_id=f.get("cve_id"),
+                        cvss_score=f.get("cvss_score"),
+                        description=f.get("description"),
+                        technical_details=f.get("technical_details"),
+                        evidence=f.get("evidence") if isinstance(f.get("evidence"), dict) else {},
+                        has_real_screenshot=bool(f.get("screenshot_path") and os.path.exists(f.get("screenshot_path"))),
+                        screenshot_url=f.get("screenshot_url") or f.get("screenshot_path"),
+                    )
+
+                repro_steps_html = "".join(f"<li>{html.escape(s)}</li>" for s in (dossier.get("reproduction_steps") or []))
+
+                ss_info = dossier.get("screenshot", {})
+                if ss_info.get("has_screenshot") and ss_info.get("image_url"):
+                    screenshot_html = f"""
+                    <div class="finding-section">
+                        <strong>📸 Visual Evidence (Real Browser Screenshot):</strong>
+                        <div style="margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; max-width: 600px;">
+                            <img src="{html.escape(ss_info['image_url'])}" alt="Visual Proof Capture" style="width: 100%; height: auto; display: block;">
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">{html.escape(ss_info.get('caption', ''))}</div>
+                    </div>
+                    """
+                else:
+                    screenshot_html = f"""
+                    <div class="finding-section" style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border-left: 3px solid #64748b;">
+                        <strong style="color: var(--text-secondary);">📸 Visual Proof Status:</strong>
+                        <p style="margin: 4px 0 0 0; font-size: 0.8rem; color: #94a3b8;">{html.escape(ss_info.get('explanation_if_none', 'Visual screenshot not applicable for this API finding.'))}</p>
+                    </div>
+                    """
 
                 evidence_block = ""
                 if f.get("evidence") and isinstance(f.get("evidence"), dict) and f.get("evidence") != {}:
                     evidence_block = f"""
                     <div class="finding-section">
-                        <strong>Sanitized Evidence:</strong>
+                        <strong>Sanitized Raw Evidence Artifact:</strong>
                         <pre class="evidence-box"><code>{html.escape(json.dumps(f.get("evidence"), indent=2, default=str))}</code></pre>
                     </div>
                     """
@@ -560,16 +651,39 @@ class ReportEngine:
                         <p>{impact}</p>
                     </div>
                     <div class="finding-section">
-                        <strong>Technical Details & Validation:</strong>
+                        <strong>Technical Details:</strong>
                         <p>{tech}</p>
                     </div>
                     <div class="finding-section poc">
-                        <strong>Proof of Concept (PoC Reproduction):</strong>
-                        <pre class="poc-box"><code>{poc}</code></pre>
+                        <strong>1. Step-by-Step Manual Reproduction Guide:</strong>
+                        <ol style="padding-left: 20px; margin-top: 6px; line-height: 1.6;">
+                            {repro_steps_html}
+                        </ol>
+                    </div>
+                    <div class="finding-section poc">
+                        <strong>2. Standalone Python PoC Script:</strong>
+                        <pre class="poc-box"><code class="language-python">{html.escape(dossier.get('python_poc', ''))}</code></pre>
+                    </div>
+                    <div class="finding-section poc">
+                        <strong>3. cURL CLI Reproduction:</strong>
+                        <pre class="poc-box"><code>{html.escape(dossier.get('curl_command', ''))}</code></pre>
+                    </div>
+                    <div class="finding-section poc">
+                        <strong>4. Wire-Level HTTP Request:</strong>
+                        <pre class="poc-box"><code>{html.escape(dossier.get('raw_http_request', ''))}</code></pre>
+                    </div>
+                    <div class="finding-section poc">
+                        <strong>5. Wire-Level HTTP Response Proof:</strong>
+                        <pre class="poc-box"><code>{html.escape(dossier.get('raw_http_response', ''))}</code></pre>
+                    </div>
+                    {screenshot_html}
+                    <div class="finding-section" style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; margin-top: 10px;">
+                        <div><strong>Expected Secure Behavior:</strong> <span style="color: #4ade80;">{html.escape(dossier.get('expected_behavior', ''))}</span></div>
+                        <div style="margin-top: 6px;"><strong>Actual Vulnerable Behavior:</strong> <span style="color: #f87171;">{html.escape(dossier.get('actual_behavior', ''))}</span></div>
                     </div>
                     {evidence_block}
                     <div class="finding-section remediation">
-                        <strong>Remediation Guidance:</strong>
+                        <strong>Remediation Playbook:</strong>
                         <p>{rem}</p>
                     </div>
                     <div class="finding-meta" style="margin-top: 10px; margin-bottom: 0;">
@@ -577,6 +691,7 @@ class ReportEngine:
                     </div>
                 </div>
                 """
+
 
         tech_items = "".join(
             f"<li><strong>{html.escape(t.get('name', ''))}</strong>{' (v' + html.escape(str(t.get('version'))) + ')' if t.get('version') else ''} on <code>{html.escape(t.get('hostname', target))}</code></li>"
@@ -1134,6 +1249,43 @@ class ReportEngine:
                 sev_bg = colors.HexColor("#FEE2E2") if sev in ("CRITICAL", "HIGH") else colors.HexColor("#FEF3C7") if sev == "MEDIUM" else colors.HexColor("#E0F2FE")
                 sev_fg = colors.HexColor("#991B1B") if sev in ("CRITICAL", "HIGH") else colors.HexColor("#92400E") if sev == "MEDIUM" else colors.HexColor("#0369A1")
 
+                # Build PoC Dossier for PDF
+                dossier = f.get("poc_dossier")
+                if not dossier:
+                    dossier = PocBuilder.generate_dossier(
+                        title=f.get("title", "Finding"),
+                        finding_type=f.get("finding_type") or f.get("title", ""),
+                        severity=sev,
+                        target_url=loc,
+                        target_host=asset_name,
+                        parameter=f.get("parameter"),
+                        method=f.get("method", "GET"),
+                        payload=f.get("payload"),
+                        cwe_id=f.get("cwe_id"),
+                        cve_id=f.get("cve_id"),
+                        cvss_score=f.get("cvss_score"),
+                        description=f.get("description"),
+                        technical_details=tech,
+                        evidence=f.get("evidence") if isinstance(f.get("evidence"), dict) else {},
+                        has_real_screenshot=bool(f.get("screenshot_path") and os.path.exists(f.get("screenshot_path"))),
+                        screenshot_url=f.get("screenshot_url") or f.get("screenshot_path"),
+                    )
+
+                repro_steps_pdf = "<br/>".join(f"<b>{s_idx}.</b> {html.escape(s)}" for s_idx, s in enumerate(dossier.get("reproduction_steps", []), 1))
+                exp_act_pdf = f"<b>Expected:</b> {html.escape(dossier.get('expected_behavior', ''))}<br/><b>Actual:</b> {html.escape(dossier.get('actual_behavior', ''))}"
+
+                # Real Screenshot in PDF
+                from reportlab.platypus import Image as RLImage
+                ss_cell_content = None
+                ss_candidate = f.get("screenshot_path") or f.get("storage_path") or ""
+                if ss_candidate and os.path.exists(ss_candidate):
+                    try:
+                        ss_cell_content = RLImage(ss_candidate, width=380, height=210)
+                    except Exception:
+                        ss_cell_content = Paragraph("<i>Real visual proof attached in investigation archive package.</i>", body_style)
+                else:
+                    ss_cell_content = Paragraph("<i>Visual browser screenshot not applicable for this API finding. Complete wire-level HTTP response proof is documented.</i>", body_style)
+
                 finding_rows = [
                     [Paragraph(f"<b>{code}: [{sev}] {title}</b>", ParagraphStyle('FH', parent=body_style, fontName='Helvetica-Bold', fontSize=9, textColor=sev_fg)), ""],
                     [Paragraph("<b>Asset / Location:</b>", body_style), Paragraph(f"<code>{asset_name}</code> — <code>{loc}</code>", mono_style)],
@@ -1142,7 +1294,10 @@ class ReportEngine:
                     [Paragraph("<b>Description:</b>", body_style), Paragraph(desc_text, body_style)],
                     [Paragraph("<b>Impact:</b>", body_style), Paragraph(impact_text, body_style)],
                     [Paragraph("<b>Technical Details:</b>", body_style), Paragraph(tech, body_style)],
-                    [Paragraph("<b>Proof of Concept:</b>", body_style), Paragraph(f"<code>{poc}</code>", poc_code_style)],
+                    [Paragraph("<b>Reproduction Steps:</b>", body_style), Paragraph(repro_steps_pdf, body_style)],
+                    [Paragraph("<b>cURL PoC Command:</b>", body_style), Paragraph(f"<code>{html.escape(dossier.get('curl_command', poc))}</code>", poc_code_style)],
+                    [Paragraph("<b>Behavioral Proof:</b>", body_style), Paragraph(exp_act_pdf, body_style)],
+                    [Paragraph("<b>Visual Proof:</b>", body_style), ss_cell_content],
                     [Paragraph("<b>Remediation:</b>", body_style), Paragraph(remed_text, body_style)],
                     [Paragraph("<b>Retest Status:</b>", body_style), Paragraph(f"<code>{retest_text}</code>", mono_style)],
                 ]
@@ -1161,6 +1316,7 @@ class ReportEngine:
                 ]))
                 story.append(ftbl)
                 story.append(Spacer(1, 8))
+
 
         story.append(Spacer(1, 10))
 

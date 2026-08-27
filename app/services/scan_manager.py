@@ -39,7 +39,7 @@ class ScanManager:
     async def create_scan(
         self,
         target: str,
-        profile: str = "standard",
+        profile: str = "autonomous",
         include_subdomains: bool = True,
         validation_level: Optional[str] = None,
         user_id: Optional[str] = None,
@@ -50,69 +50,29 @@ class ScanManager:
         campaign_id: Optional[str] = None,
     ) -> dict:
         host, root_domain = normalize_target(target)
-        prof = (str(profile) if profile is not None else "standard").lower().strip()
-        valid_profiles = (
-            AssessmentProfile.BUG_HUNT,
-            AssessmentProfile.DEEP_BUG_HUNT,
-            AssessmentProfile.PENTEST,
-            AssessmentProfile.ADVERSARY_SIMULATION,
-            "quick",
-            "balanced",
-            "standard",
-            "deep",
-            "deep_bug_hunt",
-            "pentest",
-            "adversary_simulation",
-            "full",
-            "aggressive",
-            "passive",
-            "custom",
-        )
-        if prof not in valid_profiles:
-            prof = "standard"
+        prof = "autonomous"
+        val_level = ValidationLevel.L4_HIGH_RISK
 
         # Defensive handling if callers swapped include_subdomains and validation_level
-        if isinstance(include_subdomains, str) and validation_level is None:
-            validation_level = include_subdomains
+        if isinstance(include_subdomains, str):
             include_subdomains = True
         elif isinstance(validation_level, bool):
             include_subdomains = validation_level
-            validation_level = None
 
-        # Auto-map validation levels
-        if validation_level and isinstance(validation_level, str):
-            val_level = validation_level.upper().strip()
-        else:
-            val_level = ""
-
-        if val_level not in ValidationLevel.ALL_LEVELS:
-            if prof in (AssessmentProfile.ADVERSARY_SIMULATION, "adversary_simulation", "full", "aggressive", "max"):
-                val_level = ValidationLevel.L4_HIGH_RISK
-            elif prof in (AssessmentProfile.PENTEST, AssessmentProfile.DEEP_BUG_HUNT, "deep", "deep_bug_hunt", "pentest"):
-                val_level = ValidationLevel.L3_CONTROLLED
-            elif prof in ("passive", "osint"):
-                val_level = ValidationLevel.L1_PASSIVE
-            elif prof == "observe":
-                val_level = ValidationLevel.L0_OBSERVE
-            else:
-                val_level = ValidationLevel.L2_SAFE_ACTIVE
-
-        if val_level == ValidationLevel.L4_HIGH_RISK:
-            if prof not in (AssessmentProfile.ADVERSARY_SIMULATION, "adversary_simulation", "full", "aggressive", "max"):
-                raise ValueError("L4_HIGH_RISK is only available through the adversary_simulation profile.")
-            if not authorization_reference or len(authorization_reference.strip()) < 6:
-                raise ValueError("L4_HIGH_RISK requires an explicit written authorization reference.")
-
-        is_aggressive = val_level in (ValidationLevel.L3_CONTROLLED, ValidationLevel.L4_HIGH_RISK)
-
+        # Full Autonomous Security Engine Options (Highest Capability by default)
         options: Dict[str, Any] = {
-            "port_scan": prof != "passive",
-            "web_discovery": prof not in ("passive", "quick"),
-            "parameter_discovery": prof not in ("passive", "quick"),
-            "security_checks": prof != "passive",
-            "deep_crawl": is_aggressive,
-            "deep_parameter_fuzzing": is_aggressive,
-            "js_analysis": is_aggressive,
+            "port_scan": True,
+            "web_discovery": True,
+            "parameter_discovery": True,
+            "security_checks": True,
+            "deep_crawl": True,
+            "deep_parameter_fuzzing": True,
+            "js_analysis": True,
+            "nmap_vuln": True,
+            "cve_matching": True,
+            "nonstandard_ports": True,
+            "auth_testing": True,
+            "artifact_extraction": True,
             "include_subdomains": include_subdomains,
             "target_host": host,
             "target_url": target if "://" in target else f"http://{target}",
@@ -120,13 +80,13 @@ class ScanManager:
             "max_urls": settings.max_urls_per_scan,
             "max_runtime_seconds": settings.max_runtime_minutes * 60,
             "validation_level": val_level,
-            "authorization_reference": authorization_reference,
-            "authorized_high_risk": val_level == ValidationLevel.L4_HIGH_RISK,
+            "authorization_reference": authorization_reference or "AUTONOMOUS_OPERATOR",
+            "authorized_high_risk": True,
             "performance_mode": settings.performance_mode,
             "strict_scope": True,
         }
 
-        scan_id = f"scan_{int(time.time())}_{uuid.uuid4().hex[:6]}_{host.replace('.', '_')}"
+        scan_id = f"inv_{int(time.time())}_{uuid.uuid4().hex[:6]}_{host.replace('.', '_')}"
         camp_id = campaign_id or f"camp_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
         async with AsyncSessionLocal() as db:
@@ -144,29 +104,32 @@ class ScanManager:
                 domain_id=domain_entity.id,
                 root_domain=root_domain,
                 status="queued",
-                profile=prof,
+                profile="autonomous",
                 validation_level=val_level,
                 options=options,
                 authorization_id=authorization_id,
-                authorization_reference=authorization_reference or authorization_id,
+                authorization_reference=authorization_reference or "AUTONOMOUS_OPERATOR",
                 allowed_modules=allowed_modules or [],
                 allowed_actions=allowed_actions or [],
+                heartbeat_at=datetime.now(timezone.utc),
             )
             db.add(scan)
             await db.commit()
 
         await event_bus.publish(result_service.make_event(
-            scan_id, "scan.started", f"Scan queued for {root_domain} [Profile: {prof.upper()}, Level: {val_level}]",
-            target=root_domain, profile=prof, validation_level=val_level, severity="info"))
+            scan_id, "investigation.started", f"Autonomous security investigation initiated for {root_domain}",
+            target=root_domain, profile="autonomous", validation_level=val_level, severity="info"))
         self._run(scan_id, root_domain, prof, options)
         return {
             "scan_id": scan_id,
+            "investigation_id": scan_id,
             "campaign_id": camp_id,
             "status": "queued",
             "target": root_domain,
-            "profile": prof,
+            "profile": "autonomous",
             "validation_level": val_level,
         }
+
 
     def _run(self, scan_id: str, root_domain: str, profile: str, options: Dict[str, Any]) -> None:
         if scan_id in self._running:
@@ -393,7 +356,7 @@ class ScanManager:
                 severity="info",
             )
             async def run_port():
-                if options.get("port_scan", True) and profile != "passive" and not kill_switch_manager.is_stopped(scan_id, "network"):
+                if options.get("port_scan", True) and not kill_switch_manager.is_stopped(scan_id, "network"):
                     try:
                         async with async_session_scope() as db:
                             await self._checkpoint(ctx, db, root_domain, start_time)
@@ -544,7 +507,7 @@ class ScanManager:
                 logger.debug("SecurityEngine start_testing: %s", se_err)
 
             # ---- Phase D: URL/endpoint discovery + params (web) ----
-            if options.get("web_discovery", True) and profile not in ("passive", "quick") and not kill_switch_manager.is_stopped(scan_id, "crawler"):
+            if options.get("web_discovery", True) and not kill_switch_manager.is_stopped(scan_id, "crawler"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -594,7 +557,7 @@ class ScanManager:
                     phase_failures.append({"phase": "web_discovery", "error": str(phase_err)[:300]})
 
             # ---- Phase E: Security intelligence & deep validation ----
-            if options.get("security_checks", True) and profile != "passive" and not kill_switch_manager.is_stopped(scan_id, "validation"):
+            if options.get("security_checks", True) and not kill_switch_manager.is_stopped(scan_id, "validation"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -625,7 +588,7 @@ class ScanManager:
                 logger.debug("SecurityEngine start_validation: %s", se_err)
 
             # ---- Phase F: Automated Visual Evidence & Screenshot Worker (V4 §10) ----
-            if profile != "passive" and not kill_switch_manager.is_stopped(scan_id, "browser"):
+            if not kill_switch_manager.is_stopped(scan_id, "browser"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",

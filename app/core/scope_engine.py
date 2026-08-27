@@ -27,8 +27,12 @@ def normalize_target(raw: str) -> tuple[str, str]:
         raise ValueError(f"Format domain/host '{host}' tidak valid.")
     ext = tldextract.extract(host)
     if not ext.domain or not ext.suffix:
+        labels = host.split(".")
+        if len(labels) >= 2:
+            return host, f"{labels[-2]}.{labels[-1]}"
         raise ValueError(f"Root domain untuk '{host}' tidak valid.")
     return host, f"{ext.domain}.{ext.suffix}"
+
 
 
 class ScopeEngine:

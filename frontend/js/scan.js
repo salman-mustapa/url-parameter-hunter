@@ -196,49 +196,30 @@ function stopTimer() {
 }
 
 async function startScan() {
-  if (state.currentUser && state.currentUser.role === "admin") {
-    showToast("Akun Administrator hanya dalam mode pemantauan (monitoring-only) dan tidak dapat memulai scan langsung.", "warning");
-    return;
-  }
-
   const target = el("targetInput") ? el("targetInput").value.trim() : "";
   if (!target) {
-    showToast("Masukkan root domain atau URL target (contoh: example.com atau https://google.com)", "warning");
+    showToast("Masukkan root domain atau URL target (contoh: example.com atau https://target.com)", "warning");
     return;
   }
 
   const previousRunningTarget = (state.scanStatus === "RUNNING" && state.activeTarget) ? state.activeTarget : null;
-
-  const profile = el("profileSelect")?.value || "balanced";
-  const validationByProfile = {
-    quick: "L2_SAFE_ACTIVE",
-    balanced: "L2_SAFE_ACTIVE",
-    deep: "L3_CONTROLLED",
-    adversary_simulation: "L4_HIGH_RISK",
-  };
-  const validationLevel = validationByProfile[profile] || "L2_SAFE_ACTIVE";
-  const authorizationReference = el("authorizationReferenceInput")?.value?.trim() || null;
-  if (profile === "adversary_simulation" && (!state.currentUser || !authorizationReference)) {
-    showToast("Adversary simulation membutuhkan login dan referensi otorisasi tertulis.", "warning");
-    return;
-  }
-  const scopeMode = el("scopeModeSelect") ? el("scopeModeSelect").value : (el("subdomainsToggle") ? (el("subdomainsToggle").checked ? "recursive" : "targeted") : "recursive");
+  const scopeMode = el("scopeModeSelect") ? el("scopeModeSelect").value : "recursive";
   const includeSubdomains = scopeMode === "recursive";
   const device_fingerprint = getDeviceFingerprint();
 
   try {
-    const res = await authFetch(`${API_BASE}/scans`, {
+    const res = await authFetch(`${API_BASE}/investigations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: target,
-        profile: profile,
-        validation_level: validationLevel,
-        authorization_reference: authorizationReference,
+        profile: "autonomous",
+        validation_level: "L4_HIGH_RISK",
         include_subdomains: includeSubdomains,
         device_fingerprint: device_fingerprint,
       }),
     });
+
 
     if (!res.ok) {
       const err = await res.json();

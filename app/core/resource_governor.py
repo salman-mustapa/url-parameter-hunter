@@ -32,15 +32,16 @@ class ResourceGovernor:
 
     def __init__(
         self,
-        memory_threshold_throttled: float = 75.0,
-        memory_threshold_saturated: float = 90.0,
-        cpu_threshold_throttled: float = 80.0,
-        cpu_threshold_saturated: float = 95.0,
+        memory_threshold_throttled: float = 88.0,
+        memory_threshold_saturated: float = 96.0,
+        cpu_threshold_throttled: float = 90.0,
+        cpu_threshold_saturated: float = 98.0,
     ) -> None:
         self.memory_threshold_throttled = memory_threshold_throttled
         self.memory_threshold_saturated = memory_threshold_saturated
         self.cpu_threshold_throttled = cpu_threshold_throttled
         self.cpu_threshold_saturated = cpu_threshold_saturated
+
 
     def get_system_metrics(self) -> Dict[str, Any]:
         """Collects current hardware metrics."""
@@ -83,5 +84,11 @@ class ResourceGovernor:
             return True
         return False
 
+    @classmethod
+    def check_capacity(cls) -> Dict[str, Any]:
+        return resource_governor.get_system_metrics()
+
+
 
 resource_governor = ResourceGovernor()
+

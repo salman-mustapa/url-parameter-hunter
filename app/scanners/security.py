@@ -357,6 +357,7 @@ async def _process_and_save_validated_finding(
             "ai_confidence_score": ai_triage.get("ai_confidence_score", 90),
             "ai_triage_decision": ai_triage.get("ai_decision", "CONFIRMED"),
             "mitre_attack": ai_triage.get("mitre_attack", []),
+            "exploitation_data": norm_res.exploitation_data or {},
         },
     )
 
@@ -385,6 +386,51 @@ async def _process_and_save_validated_finding(
         await db.commit()
     except Exception as commit_err:
         logger.debug("Initial finding commit note: %s", commit_err)
+
+    # Save files read via LFI as artifacts
+    expl_data = norm_res.exploitation_data or {}
+    if norm_res.vulnerability_type in ("path_traversal", "traversal") and "files_read" in expl_data:
+        for file_key, file_info in expl_data["files_read"].items():
+            file_name = file_info.get("file", "").split("/")[-1] or f"lfi_{file_key}.txt"
+            content = file_info.get("content", "")
+            if content:
+                try:
+                    await ArtifactEngine.process_discovered_artifact(
+                        ctx=ctx,
+                        db=db,
+                        url=file_info.get("url") or norm_res.endpoint_url or f"https://{target_host}/",
+                        content_bytes=content.encode("utf-8", errors="ignore"),
+                        filename=file_name,
+                        file_type="passwd_file" if "passwd" in file_key else ("env_file" if "env" in file_key else "generic"),
+                        mime_type="text/plain",
+                        asset_id=asset_id,
+                        finding_id=finding.id,
+                    )
+                except Exception as art_err:
+                    logger.debug("Failed saving LFI artifact: %s", art_err)
+        try:
+            await db.commit()
+        except Exception as commit_err:
+            logger.debug("Artifact database commit note: %s", commit_err)
+
+    elif norm_res.vulnerability_type in ("command_injection", "rce") and "passwd_content" in expl_data:
+        passwd_content = expl_data["passwd_content"]
+        if passwd_content:
+            try:
+                await ArtifactEngine.process_discovered_artifact(
+                    ctx=ctx,
+                    db=db,
+                    url=norm_res.endpoint_url or f"https://{target_host}/",
+                    content_bytes=passwd_content.encode("utf-8", errors="ignore"),
+                    filename="passwd",
+                    file_type="passwd_file",
+                    mime_type="text/plain",
+                    asset_id=asset_id,
+                    finding_id=finding.id,
+                )
+                await db.commit()
+            except Exception as art_err:
+                logger.debug("Failed saving RCE passwd artifact: %s", art_err)
 
     # 3. Capture Visual Proof Screenshot (V4 §10, V5 §2, §21)
     try:

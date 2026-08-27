@@ -967,6 +967,12 @@ class Artifact(Base):
     storage_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     quarantine_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     state: Mapped[str] = mapped_column(String, index=True, nullable=False, default="DISCOVERED")  # DISCOVERED, CLASSIFIED, ACQUISITION_PENDING, QUARANTINED, PARSED, INTELLIGENCE_EXTRACTED, CORRELATED, EVIDENCE_READY
+    classification: Mapped[str] = mapped_column(String, index=True, nullable=False, default="INTERNAL")  # PUBLIC, INTERNAL, CONFIDENTIAL, SENSITIVE, HIGHLY_SENSITIVE
+    category: Mapped[str] = mapped_column(String, index=True, nullable=False, default="generic")  # database, identity_doc, ktp, kk, passport, biodata, financial, credentials, secrets, config, pii
+    record_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    is_redacted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    preview_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     schema_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # Database name, tables, columns, indexes, types
     extracted_entities: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # Users, password hashes, tokens, API keys, PII fields
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
@@ -1027,6 +1033,26 @@ class PreconditionCheck(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# ==========================================================================
+# 30. Async Export Engine Job
+# ==========================================================================
+class ExportJob(Base):
+    """Asynchronous report and dataset export tasks."""
+    __tablename__ = "export_jobs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    scan_id: Mapped[str] = mapped_column(String, ForeignKey("scans.id", ondelete="cascade"), index=True, nullable=False)
+    export_type: Mapped[str] = mapped_column(String, index=True, nullable=False)  # full_pdf, executive_pdf, technical_pdf, findings_csv, findings_xlsx, investigation_json, assets_csv, services_csv, evidence_index, artifact_manifest
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, index=True, nullable=False, default="QUEUED")  # QUEUED, PROCESSING, COMPLETED, FAILED
+    file_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sha256_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    mime_type: Mapped[str] = mapped_column(String, nullable=False, default="application/octet-stream")
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # Backward-compatibility aliases for legacy callers
 Event = ScanEvent
 AttackChain = AttackPath
@@ -1039,5 +1065,6 @@ __all__ = [
     "Capability", "CapabilityPolicy", "Approval", "AiRun", "AiDecision", "AiToolCall", "Hypothesis",
     "AttackPath", "AttackChain", "AttackPathEdge", "CredentialArtifact", "CredentialContext", "ValidationProfile",
     "CleanupTask", "LabEnvironment", "LabTarget", "EvidenceScore", "EvidenceRequirement",
-    "Campaign", "Artifact", "Identity", "TestPlan", "PreconditionCheck",
+    "Campaign", "Artifact", "Identity", "TestPlan", "PreconditionCheck", "ExportJob",
 ]
+

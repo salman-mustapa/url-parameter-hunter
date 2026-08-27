@@ -220,6 +220,46 @@ function renderArtifactActiveTab(tabName) {
       return;
     }
 
+    // 2b. Unix passwd File Schema View
+    if (data.file_type === "passwd_file" || schema.real_users) {
+      const users = schema.real_users || [];
+      let html = `
+        <div class="db-summary-card">
+          <div><strong>Config Type:</strong> <code>UNIX PASSWD</code></div>
+          <div><strong>Total System Accounts:</strong> <span>${schema.total_entries || users.length}</span></div>
+          <div><strong>Real Users (UID &ge; 1000):</strong> <span class="severity-badge severity-high">${users.filter(u => u.uid >= 1000).length} User(s)</span></div>
+        </div>
+        <table class="detail-table" style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>UID</th>
+              <th>GID</th>
+              <th>Home Directory</th>
+              <th>Login Shell</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      users.forEach(u => {
+        const isRoot = u.username === "root";
+        const isReal = u.uid >= 1000;
+        const badge = isRoot ? '<span class="severity-badge severity-critical">root</span>' : (isReal ? '<span class="severity-badge severity-high">user</span>' : '<span class="pill-muted">system</span>');
+        html += `
+          <tr>
+            <td><code><strong>${esc(u.username)}</strong></code> ${badge}</td>
+            <td><code>${u.uid}</code></td>
+            <td><code>${u.gid}</code></td>
+            <td><code>${esc(u.home)}</code></td>
+            <td><code>${esc(u.shell)}</code></td>
+          </tr>
+        `;
+      });
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+      return;
+    }
+
     // 3. SQL Database Schema View
     const tables = schema.tables || [];
     if (!tables.length) {

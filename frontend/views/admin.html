@@ -1,21 +1,23 @@
-<!-- VIEW 6: ADMIN OVERSIGHT DASHBOARD -->
+<!-- VIEW 6: ADMIN OVERSIGHT & OPERATIONAL CONTROL DASHBOARD -->
 <section id="viewAdmin" class="tab-view hidden">
   <!-- Admin Level Breadcrumb Navigation -->
   <nav id="adminBreadcrumb" class="breadcrumb-nav">
     <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
     <span class="breadcrumb-sep">›</span>
-    <span class="breadcrumb-current">🛡️ Admin Oversight & Analytics</span>
+    <span class="breadcrumb-current">🛡️ Admin Oversight & Operational Controls</span>
   </nav>
 
   <div class="card sketch-card admin-dashboard-card">
     <div class="card-header-flex">
       <div class="title-with-icon">
         <span class="section-icon">🛡️</span>
-        <h2>Admin Oversight — Domain & User Scrapping Analytics</h2>
+        <div>
+          <h2>Admin Master Control & Telemetry Dashboard</h2>
+          <div class="pill-muted text-xs">Super-Operator Management, System Telemetry, Health Backpressure & Scrapping Analytics</div>
+        </div>
       </div>
       <button id="refreshAdminBtn" class="btn btn-secondary btn-sm">🔄 Refresh Admin Data</button>
     </div>
-    <p class="section-subtext">Pusat pengawasan platform: memantau aktivitas scrapping setiap pengguna, pemetaan domain ke pengguna, dan agregasi aset seluruh sistem.</p>
 
     <!-- Admin Global Metric Cards -->
     <div class="admin-metrics-grid">
@@ -29,7 +31,7 @@
       <div class="telemetry-card admin-metric">
         <div class="telemetry-icon">🎯</div>
         <div class="telemetry-data">
-          <span class="telemetry-label">Total Scans Dijalankan</span>
+          <span class="telemetry-label">Total Investigations</span>
           <span id="admTotalScans" class="telemetry-value">0</span>
         </div>
       </div>
@@ -65,13 +67,91 @@
 
     <!-- Admin Sub-Navigation -->
     <div class="admin-subtabs">
-      <button class="admin-subtab active" data-admin-view="users">👥 Aktivitas Scrapping Pengguna</button>
+      <button class="admin-subtab active" data-admin-view="operations">⚡ Operasional & Sesi Aktif</button>
+      <button class="admin-subtab" data-admin-view="health">💻 System Health & Governor</button>
+      <button class="admin-subtab" data-admin-view="users">👥 Aktivitas Pengguna</button>
       <button class="admin-subtab" data-admin-view="domains">🌐 Audit Pemetaan Domain</button>
-      <button class="admin-subtab" data-admin-view="ai">🤖 AI Agent & Chat Copilot</button>
+      <button class="admin-subtab" data-admin-view="ai">🤖 AI Agent & Copilot</button>
     </div>
 
-    <!-- Admin View 1: User Scrapping Analytics Table -->
-    <div id="adminUsersView" class="admin-view-content">
+    <!-- Admin View 0: Operational Controls & Active Investigations -->
+    <div id="adminOperationsView" class="admin-view-content">
+      <div class="flex-between mb-2">
+        <h3 class="ws-box-title">⚡ Antrian & Investigasi Berjalan (Active / Running Tasks)</h3>
+        <span id="admActiveCountBadge" class="pill pill-primary">0 Running</span>
+      </div>
+      <div class="table-responsive-box">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Target Domain / Host</th>
+              <th>Investigation ID</th>
+              <th>Status</th>
+              <th>User</th>
+              <th>Waktu Mulai</th>
+              <th>Coverage / Assets</th>
+              <th>Kontrol Operator</th>
+            </tr>
+          </thead>
+          <tbody id="adminActiveScansTbody">
+            <tr>
+              <td colspan="7" class="table-loading">Memuat daftar tugas investigasi...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Admin View Health: System Health & Hardware Telemetry -->
+    <div id="adminHealthView" class="admin-view-content hidden">
+      <div class="ws-matrix-row">
+        <div class="ws-box">
+          <h3 class="ws-box-title">💻 Real-Time Resource Utilization</h3>
+          <div class="health-metrics-list mt-3">
+            <div class="health-metric-row">
+              <span class="health-lbl">CPU Usage:</span>
+              <strong id="admHealthCpu" class="font-mono">0%</strong>
+              <div class="progress-bar-wrap"><div id="admHealthCpuBar" class="progress-fill" style="width: 0%;"></div></div>
+            </div>
+            <div class="health-metric-row mt-2">
+              <span class="health-lbl">RAM / Memory:</span>
+              <strong id="admHealthMem" class="font-mono">0%</strong>
+              <div class="progress-bar-wrap"><div id="admHealthMemBar" class="progress-fill" style="width: 0%;"></div></div>
+            </div>
+            <div class="health-metric-row mt-2">
+              <span class="health-lbl">Disk Storage:</span>
+              <strong id="admHealthDisk" class="font-mono">0%</strong>
+              <div class="progress-bar-wrap"><div id="admHealthDiskBar" class="progress-fill" style="width: 0%;"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ws-box">
+          <h3 class="ws-box-title">⚙️ Governor & Backpressure State</h3>
+          <div class="governor-status-card mt-3">
+            <div class="gov-row">
+              <span>Backpressure State:</span>
+              <span id="admGovState" class="pill pill-success">ACCEPTING</span>
+            </div>
+            <div class="gov-row mt-2">
+              <span>Active Worker Pool:</span>
+              <strong id="admGovWorkers" class="font-mono">Adaptive Dynamic</strong>
+            </div>
+            <div class="gov-row mt-2">
+              <span>Database Connection Pool:</span>
+              <strong id="admGovDb" class="font-mono text-success">HEALTHY</strong>
+            </div>
+            <div class="gov-row mt-2">
+              <span>AI / LLM Engine Status:</span>
+              <strong id="admGovLlm" class="font-mono">STANDBY</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin View 1: User Analytics Table -->
+    <div id="adminUsersView" class="admin-view-content hidden">
       <div class="table-responsive-box">
         <table class="admin-table">
           <thead>
@@ -96,7 +176,7 @@
       </div>
     </div>
 
-    <!-- Admin View 2: Domain Scrapping Audit Table -->
+    <!-- Admin View 2: Domain Audit Table -->
     <div id="adminDomainsView" class="admin-view-content hidden">
       <div class="table-responsive-box">
         <table class="admin-table">

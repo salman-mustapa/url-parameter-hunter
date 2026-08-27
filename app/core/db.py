@@ -233,7 +233,15 @@ async def init_db() -> None:
             ("audit_logs", "result_status", "VARCHAR DEFAULT 'SUCCESS'", "VARCHAR DEFAULT 'SUCCESS'"),
             ("audit_logs", "evidence_id", "VARCHAR", "VARCHAR"),
             ("audit_logs", "details", "JSON DEFAULT '{}'", "JSON DEFAULT '{}'::json"),
+            # artifacts (Investigation Workspace & Document Classification)
+            ("artifacts", "classification", "VARCHAR DEFAULT 'INTERNAL'", "VARCHAR DEFAULT 'INTERNAL'"),
+            ("artifacts", "category", "VARCHAR DEFAULT 'generic'", "VARCHAR DEFAULT 'generic'"),
+            ("artifacts", "record_count", "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"),
+            ("artifacts", "source", "VARCHAR", "VARCHAR"),
+            ("artifacts", "is_redacted", "BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE"),
+            ("artifacts", "preview_data", "JSON DEFAULT '{}'", "JSON DEFAULT '{}'::json"),
         ]
+
 
         if is_sqlite:
             for table_name, col_name, sqlite_type, _ in explicit_columns:

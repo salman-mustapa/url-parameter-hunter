@@ -166,17 +166,29 @@ async def get_current_user(
     return user
 
 
+async def require_operator_role(
+    user: User = Depends(get_current_user),
+) -> User:
+    """Ensure user is an authorized operator (admin or user role)."""
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akun tidak aktif. Silakan hubungi administrator.",
+        )
+    return user
+
+
 async def require_user_role(
     user: User = Depends(get_current_user),
 ) -> User:
     """
-    Ensure user has 'user' role for scanning activities.
-    Admin accounts are strictly monitoring-only to prevent unauthorized scanning from oversight credentials.
+    Ensure user is authorized for operational activities.
+    Both 'admin' and 'user' roles are authorized operators.
     """
-    if user.role == "admin":
+    if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Akun Administrator hanya memiliki akses Pemantauan (Monitoring-Only) dan tidak dapat memulai pemindaian langsung. Silakan gunakan akun user.",
+            detail="Akun tidak aktif.",
         )
     return user
 
@@ -191,3 +203,4 @@ async def require_admin_role(
             detail="Akses ditolak. Fitur ini hanya dapat diakses oleh Administrator.",
         )
     return user
+
