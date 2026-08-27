@@ -649,14 +649,40 @@ async function openArtifactPreview(artifactId) {
     const tables = (preview.tables && preview.tables.length) ? preview.tables : (schema.tables || []);
     const hashes = (preview.extracted_hashes && preview.extracted_hashes.length) ? preview.extracted_hashes : (entities.hashes || schema.extracted_hashes || []);
     const users = (preview.extracted_users && preview.extracted_users.length) ? preview.extracted_users : (entities.users || schema.extracted_users || schema.real_users || []);
-    const rawSample = preview.raw_sample || "";
+
+    // Resilient Raw Sample Synthesis: Never allow Raw Sample to be empty if file has data
+    let rawSample = preview.raw_sample || schema.raw_sample || "";
+    if (!rawSample || !rawSample.trim()) {
+      if (preview.rows && preview.rows.length) {
+        if (preview.columns && preview.columns.includes("Content")) {
+          rawSample = preview.rows.map(r => r["Content"]).join("\n");
+        } else if (preview.columns && preview.columns.includes("SQL Statement Sample")) {
+          rawSample = preview.rows.map(r => r["SQL Statement Sample"]).join("\n");
+        } else if (preview.columns) {
+          rawSample = preview.columns.join(",") + "\n" + preview.rows.map(r => preview.columns.map(c => r[c] != null ? r[c] : '').join(",")).join("\n");
+        }
+      } else if (tables && tables.length) {
+        rawSample = tables.map(t => {
+          const tName = t.name || t.table_name || 'table';
+          const cols = (t.columns || []).map(c => typeof c === 'object' ? `${c.name || c} ${c.type || ''}` : String(c)).join(",\n  ");
+          const rows = (t.sample_rows || []).slice(0, 5).map(r => {
+            if (typeof r === 'object') return `INSERT INTO \`${tName}\` VALUES (${Object.values(r).map(v => JSON.stringify(v)).join(", ")});`;
+            return String(r);
+          }).join("\n");
+          return `-- Struktur tabel \`${tName}\`\nCREATE TABLE \`${tName}\` (\n  ${cols || 'id INT'}\n);\n${rows ? rows + '\n' : ''}`;
+        }).join("\n");
+      }
+    }
+
+    const crackedCount = hashes.filter(h => h.is_cracked || h.plaintext).length;
+    const crackedUsers = hashes.filter(h => h.is_cracked || h.plaintext).map(h => `${h.associated_user || h.user || 'user'}: ${h.plaintext}`);
 
     // Build Intelligence Summary Pills
     let summaryHtml = `
       <div class="art-intel-summary-bar mb-3">
         ${dbName ? `<span class="pill pill-primary">🗄️ Database: <strong>${esc(dbName)}</strong>${vendor ? ` (${esc(vendor)})` : ''}</span>` : ''}
         ${tables.length ? `<span class="pill pill-neutral">📑 <strong>${tables.length}</strong> Tabel Terdeteksi</span>` : ''}
-        ${hashes.length ? `<span class="pill pill-danger">🔑 <strong>${hashes.length}</strong> Hash Password</span>` : ''}
+        ${hashes.length ? `<span class="pill pill-danger">🔑 <strong>${hashes.length}</strong> Hash Password ${crackedCount > 0 ? `(🔓 ${crackedCount} Terpecahkan!)` : ''}</span>` : ''}
         ${users.length ? `<span class="pill pill-warning">👤 <strong>${users.length}</strong> Akun User</span>` : ''}
       </div>
     `;
@@ -665,21 +691,21 @@ async function openArtifactPreview(artifactId) {
     const hasTables = tables.length > 0 || (preview.columns && preview.rows);
     const hasHashes = hashes.length > 0;
     const hasUsers = users.length > 0;
-    const hasRaw = Boolean(rawSample) || (preview.columns && preview.rows);
+    const hasRaw = Boolean(rawSample && rawSample.trim());
 
     let tabsNavHtml = `
       <div class="art-modal-tabs mb-3">
-        ${hasTables ? `<button class="art-tab-btn active" onclick="switchArtModalSubTab('tables')">📊 Tabel & Data (${tables.length || 1})</button>` : ''}
-        ${hasHashes ? `<button class="art-tab-btn ${!hasTables ? 'active' : ''}" onclick="switchArtModalSubTab('hashes')">🔑 Hash Sandi (${hashes.length})</button>` : ''}
-        ${hasUsers ? `<button class="art-tab-btn ${(!hasTables && !hasHashes) ? 'active' : ''}" onclick="switchArtModalSubTab('users')">👤 Akun Pengguna (${users.length})</button>` : ''}
-        ${hasRaw ? `<button class="art-tab-btn ${(!hasTables && !hasHashes && !hasUsers) ? 'active' : ''}" onclick="switchArtModalSubTab('raw')">📄 Raw Sample</button>` : ''}
+        ${hasTables ? `<button class="art-tab-btn active" onclick="switchArtModalSubTab('tables', this)">📊 Tabel & Data (${tables.length || 1})</button>` : ''}
+        ${hasHashes ? `<button class="art-tab-btn ${!hasTables ? 'active' : ''}" onclick="switchArtModalSubTab('hashes', this)">🔑 Hash Sandi (${hashes.length}) ${crackedCount > 0 ? '🔓' : ''}</button>` : ''}
+        ${hasUsers ? `<button class="art-tab-btn ${(!hasTables && !hasHashes) ? 'active' : ''}" onclick="switchArtModalSubTab('users', this)">👤 Akun Pengguna (${users.length})</button>` : ''}
+        <button class="art-tab-btn ${(!hasTables && !hasHashes && !hasUsers) ? 'active' : ''}" onclick="switchArtModalSubTab('raw', this)">📄 Raw Sample</button>
       </div>
     `;
 
     // Section 1: Tables View
     let tablesContentHtml = "";
     if (hasTables) {
-      if (tables.length > 0 && tables[0].columns) {
+      if (tables.length > 0) {
         // Multi-table SQL view with table switcher
         tablesContentHtml = `
           <div id="artSubTabTables" class="art-subtab-pane active">
@@ -688,8 +714,9 @@ async function openArtifactPreview(artifactId) {
               <div class="art-table-pills">
                 ${tables.map((t, idx) => `
                   <button class="btn btn-xs ${idx === 0 ? 'btn-primary active' : 'btn-secondary'} art-tbl-pill"
-                    onclick="selectArtTable(${idx})">
-                    ${esc(t.name)} ${t.sample_rows ? `(${t.sample_rows.length})` : ''}
+                    data-tbl-idx="${idx}"
+                    onclick="selectArtTable(${idx}, this)">
+                    ${esc(t.name || t.table_name || `Table ${idx+1}`)} ${t.sample_rows ? `(${t.sample_rows.length})` : ''}
                   </button>
                 `).join("")}
               </div>
@@ -722,33 +749,63 @@ async function openArtifactPreview(artifactId) {
       tablesContentHtml = `<div id="artSubTabTables" class="art-subtab-pane ${!hasHashes && !hasUsers ? 'active' : ''}"><div class="p-3 text-muted">Tidak ada tabel terstruktur yang dapat diekstrak.</div></div>`;
     }
 
-    // Section 2: Hashes View
+    // Section 2: Hashes View with AI Decryption Intelligence
     let hashesContentHtml = `
       <div id="artSubTabHashes" class="art-subtab-pane ${!hasTables ? 'active' : ''}">
         ${hashes.length ? `
+          <div class="ws-remediation-box mb-3" style="background: ${crackedCount > 0 ? '#FFFBEB' : '#F8FAFC'}; border-color: ${crackedCount > 0 ? '#FCD34D' : '#CBD5E1'}; color: ${crackedCount > 0 ? '#92400E' : '#334155'};">
+            <strong>🤖 AI Threat & Credential Compromise Analysis:</strong>
+            <p class="text-xs mt-1 mb-0">
+              ${crackedCount > 0 
+                ? `Ditemukan <strong>${crackedCount} kata sandi berhasil dipecahkan</strong> secara deterministik! Kredensial akun <code>${esc(crackedUsers.join(', '))}</code> menggunakan password yang rentan. Penyerang dapat memanfaatkan kredensial ini untuk login dan mengambil alih hak akses administratif.` 
+                : `Ditemukan <strong>${hashes.length} password hash kriptografis</strong>. Seluruh hash siap diekspor untuk audit password offline menggunakan John The Ripper atau Hashcat.`}
+            </p>
+          </div>
+
           <div class="table-responsive-box">
             <table class="ws-table">
               <thead>
                 <tr>
                   <th>Tabel Sumber</th>
-                  <th>Kolom</th>
+                  <th>Akun / User Terkait</th>
                   <th>Tipe Algoritma</th>
                   <th>Sampel Hash Kredensial</th>
+                  <th>🔓 Status & Password Terpecahkan (AI Engine)</th>
                   <th>Aksi</th>
                 </tr>
               </thead>
               <tbody>
                 ${hashes.map(h => {
                   const hType = (h.hash_type || 'hash').toUpperCase();
-                  const hSample = h.hash_sample || h.sample || '-';
+                  const hSample = h.hash_sample || h.sample || h.full_hash || '-';
+                  const hFull = h.full_hash || hSample;
+                  const isCracked = Boolean(h.is_cracked || h.plaintext);
+                  const plaintext = h.plaintext || '';
+                  const assocUser = h.associated_user || h.user || '-';
+
                   return `
                     <tr>
                       <td><strong>${esc(h.table || '-')}</strong></td>
-                      <td><code>${esc(h.column || '-')}</code></td>
+                      <td><code class="font-mono font-bold">${esc(assocUser)}</code></td>
                       <td><span class="pill pill-danger">${esc(hType)}</span></td>
                       <td class="font-mono text-xs text-break">${esc(hSample)}</td>
                       <td>
-                        <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText('${esc(hSample)}'); showToast('Hash disalin!', 'success');">📋 Salin</button>
+                        ${isCracked ? `
+                          <div class="flex-row-gap flex-wrap">
+                            <span class="pill pill-success font-bold font-mono">🔓 ${esc(plaintext)}</span>
+                            <span class="pill pill-neutral text-xs" style="background:#D1FAE5; color:#065F46;">CRACKED</span>
+                          </div>
+                        ` : `
+                          <span class="pill pill-neutral font-mono text-xs">🔒 Uncracked (Belum Terpecahkan)</span>
+                        `}
+                      </td>
+                      <td>
+                        <div class="flex-row-gap flex-wrap">
+                          <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText('${esc(hFull)}'); showToast('Hash disalin!', 'success');">📋 Salin Hash</button>
+                          ${isCracked ? `
+                            <button class="btn btn-success btn-xs" onclick="navigator.clipboard.writeText('${esc(plaintext)}'); showToast('Password plaintext disalin!', 'success');">🔑 Salin Pass</button>
+                          ` : ''}
+                        </div>
                       </td>
                     </tr>
                   `;
@@ -799,8 +856,12 @@ async function openArtifactPreview(artifactId) {
     // Section 4: Raw Sample View
     let rawContentHtml = `
       <div id="artSubTabRaw" class="art-subtab-pane ${(!hasTables && !hasHashes && !hasUsers) ? 'active' : ''}">
+        <div class="mb-2 flex-between align-center">
+          <span class="text-xs text-muted">Cuplikan teks mentah bersanitasi (${(rawSample || '').split('\n').length} baris)</span>
+          <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText(document.getElementById('wsArtRawCodeBlock')?.innerText || ''); showToast('Raw sample disalin!', 'success');">📋 Salin Raw</button>
+        </div>
         ${rawSample ? `
-          <pre class="font-mono text-xs p-3 bg-dark-box text-break" style="max-height: 380px; overflow-y: auto;"><code>${esc(rawSample)}</code></pre>
+          <pre class="font-mono text-xs p-3 bg-dark-box text-break" id="wsArtRawCodeBlock" style="max-height: 380px; overflow-y: auto; color: #E2E8F0; background: #0B0F19; border-radius: 6px;"><code>${esc(rawSample)}</code></pre>
         ` : `<div class="p-3 text-muted">Tidak ada raw sample yang tersedia.</div>`}
       </div>
     `;
@@ -826,19 +887,27 @@ async function openArtifactPreview(artifactId) {
 }
 
 function renderSingleArtTable(table) {
-  if (!table) return "<div class='p-2 text-muted'>Tabel kosong</div>";
-  const cols = (table.columns || []).map(c => typeof c === 'object' ? (c.name || JSON.stringify(c)) : String(c));
-  const rows = table.sample_rows || [];
+  if (!table) return "<div class='p-3 text-muted'>Tabel kosong atau belum terurai.</div>";
+  let cols = (table.columns || []).map(c => typeof c === 'object' ? (c.name || JSON.stringify(c)) : String(c));
+  const rows = table.sample_rows || table.rows || [];
+  if ((!cols || !cols.length) && rows && rows.length && typeof rows[0] === 'object') {
+    cols = Object.keys(rows[0]);
+  }
+  const tName = table.name || table.table_name || "Tabel";
 
   return `
-    <div class="mb-2 flex-between align-center">
-      <span class="text-xs text-muted">Kolom: <strong>${cols.length}</strong> | Sampel Baris: <strong>${rows.length}</strong></span>
-      ${table.primary_key ? `<span class="pill pill-neutral text-xs">Primary Key: ${esc(table.primary_key)}</span>` : ''}
+    <div class="mb-2 flex-between align-center flex-wrap gap-2">
+      <span class="text-xs text-muted">
+        Tabel: <strong class="text-primary font-mono">${esc(tName)}</strong> |
+        Kolom: <strong>${cols.length}</strong> |
+        Sampel Baris: <strong>${rows.length}</strong>
+      </span>
+      ${table.primary_key ? `<span class="pill pill-neutral text-xs font-mono">🔑 PK: ${esc(table.primary_key)}</span>` : ''}
     </div>
     <div class="table-responsive-box">
       <table class="ws-table">
         <thead>
-          <tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr>
+          <tr>${cols.length ? cols.map(c => `<th>${esc(c)}</th>`).join("") : '<th>Kolom</th>'}</tr>
         </thead>
         <tbody>
           ${rows.length ? rows.map(r => `
@@ -855,17 +924,17 @@ function renderSingleArtTable(table) {
   `;
 }
 
-window.selectArtTable = function(tableIndex) {
+window.selectArtTable = function(tableIndex, btn) {
   const tables = window.__currentArtTables || [];
   const t = tables[tableIndex];
   if (!t) return;
-  document.querySelectorAll(".art-tbl-pill").forEach((btn, idx) => {
-    if (idx === tableIndex) {
-      btn.classList.add("btn-primary", "active");
-      btn.classList.remove("btn-secondary");
+  document.querySelectorAll(".art-tbl-pill").forEach((b, idx) => {
+    if (idx === tableIndex || b === btn) {
+      b.classList.add("btn-primary", "active");
+      b.classList.remove("btn-secondary");
     } else {
-      btn.classList.remove("btn-primary", "active");
-      btn.classList.add("btn-secondary");
+      b.classList.remove("btn-primary", "active");
+      b.classList.add("btn-secondary");
     }
   });
   if (el("artTableDisplayContainer")) {
@@ -873,8 +942,8 @@ window.selectArtTable = function(tableIndex) {
   }
 };
 
-window.switchArtModalSubTab = function(tabKey) {
-  document.querySelectorAll(".art-tab-btn").forEach(btn => btn.classList.remove("active"));
+window.switchArtModalSubTab = function(tabKey, btn) {
+  document.querySelectorAll(".art-tab-btn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".art-subtab-pane").forEach(pane => pane.classList.remove("active"));
   
   if (tabKey === 'tables') {
@@ -887,9 +956,10 @@ window.switchArtModalSubTab = function(tabKey) {
     if (el("artSubTabRaw")) el("artSubTabRaw").classList.add("active");
   }
 
-  // Set active button
-  const clickedBtn = event?.currentTarget;
-  if (clickedBtn) clickedBtn.classList.add("active");
+  const targetBtn = btn || (typeof event !== 'undefined' ? (event?.currentTarget || event?.target) : null);
+  if (targetBtn && targetBtn.classList && targetBtn.classList.contains("art-tab-btn")) {
+    targetBtn.classList.add("active");
+  }
 };
 
 function renderWorkspaceTimeline(timeline) {

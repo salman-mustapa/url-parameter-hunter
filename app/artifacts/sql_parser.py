@@ -63,6 +63,12 @@ class SqlDumpParser:
         records_by_table, extracted_users, extracted_hashes, sensitive_fields = cls._extract_records_and_entities(
             content, tables, max_sample_rows=max_sample_rows
         )
+        from app.artifacts.hash_cracker import HashIntelligenceEngine
+        enriched_hashes = HashIntelligenceEngine.enrich_extracted_hashes(
+            extracted_hashes,
+            extracted_users=extracted_users,
+            database_name=db_name,
+        )
 
         total_records = sum(len(t.get("sample_rows", [])) for t in tables)
 
@@ -71,7 +77,7 @@ class SqlDumpParser:
             "database_name": db_name,
             "tables": tables,
             "extracted_users": extracted_users,
-            "extracted_hashes": extracted_hashes,
+            "extracted_hashes": enriched_hashes,
             "sensitive_fields": sensitive_fields,
             "total_tables": len(tables),
             "total_records_estimated": total_records,
@@ -161,6 +167,7 @@ class SqlDumpParser:
                     })
 
             tables.append({
+                "name": raw_name,
                 "table_name": raw_name,
                 "columns": columns,
                 "primary_keys": list(dict.fromkeys(primary_keys)),
@@ -219,6 +226,14 @@ class SqlDumpParser:
                     col_name = col_names[idx] if idx < len(col_names) else f"col_{idx}"
                     row_dict[col_name] = val
 
+                # Associate username in same row if available
+                row_user = None
+                for c_k, c_v in row_dict.items():
+                    if c_v and any(u_key in c_k.lower() for u_key in ("username", "user", "login", "nim", "email")):
+                        row_user = str(c_v)
+                        break
+
+                for col_name, val in row_dict.items():
                     if val is not None and isinstance(val, str):
                         # Detect Password Hashes
                         for hash_name, pattern in HASH_PATTERNS:
@@ -227,8 +242,11 @@ class SqlDumpParser:
                                     "table": t_name,
                                     "column": col_name,
                                     "hash_type": hash_name,
+                                    "full_hash": val,
                                     "hash_sample": val[:12] + "..." + val[-6:] if len(val) > 18 else val,
                                     "work_factor": 10 if "bcrypt" in hash_name else None,
+                                    "user": row_user or "-",
+                                    "associated_user": row_user or "-",
                                 })
                                 break
 

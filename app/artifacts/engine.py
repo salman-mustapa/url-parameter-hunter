@@ -593,7 +593,11 @@ class ArtifactEngine:
                     if rows:
                         cols = rows[0]
                         data_rows = [dict(zip(cols, r)) for r in rows[1:30]]
-                        art.preview_data = {"columns": cols, "rows": data_rows}
+                        art.preview_data = {
+                            "columns": cols,
+                            "rows": data_rows,
+                            "raw_sample": "\n".join(content_text.splitlines()[:150]),
+                        }
                         art.record_count = len(content_text.splitlines()) - 1
                 elif fn_lower.endswith(".sql") or "sql" in art.file_type:
                     parsed_sql = SqlDumpParser.parse(content_text, max_sample_rows=50)
@@ -605,11 +609,13 @@ class ArtifactEngine:
                     }
                     preview_tables = []
                     for t in parsed_sql.get("tables", [])[:20]:
+                        t_name = t.get("name") or t.get("table_name")
                         preview_tables.append({
-                            "name": t.get("name"),
+                            "name": t_name,
+                            "table_name": t_name,
                             "columns": [c.get("name") if isinstance(c, dict) else str(c) for c in t.get("columns", [])],
-                            "sample_rows": t.get("sample_rows", [])[:20],
-                            "primary_key": t.get("primary_key"),
+                            "sample_rows": t.get("sample_rows", [])[:25],
+                            "primary_key": t.get("primary_key") or (t.get("primary_keys") and t["primary_keys"][0]),
                         })
                     art.preview_data = {
                         "format": "database_tables",
@@ -621,7 +627,7 @@ class ArtifactEngine:
                         "extracted_users": parsed_sql.get("extracted_users", [])[:50],
                         "extracted_hashes": parsed_sql.get("extracted_hashes", [])[:50],
                         "sensitive_fields": parsed_sql.get("sensitive_fields", [])[:50],
-                        "raw_sample": "\n".join(content_text.splitlines()[:50]),
+                        "raw_sample": "\n".join(content_text.splitlines()[:250]),
                     }
                     art.record_count = parsed_sql.get("total_records_estimated") or len(parsed_sql.get("tables", [])) or len(content_text.splitlines())
                 elif fn_lower.endswith(".env") or "env" in art.file_type:
@@ -630,13 +636,18 @@ class ArtifactEngine:
                         if "=" in l and not l.strip().startswith("#"):
                             k, _, v = l.partition("=")
                             env_pairs.append({"Variable": k.strip(), "Value": v.strip()[:3] + "********" if len(v.strip()) > 3 else "********"})
-                    art.preview_data = {"columns": ["Variable", "Value"], "rows": env_pairs[:40]}
+                    art.preview_data = {
+                        "columns": ["Variable", "Value"],
+                        "rows": env_pairs[:40],
+                        "raw_sample": "\n".join(content_text.splitlines()[:150]),
+                    }
                     art.record_count = len(env_pairs)
                 else:
                     lines = [l for l in content_text.splitlines() if l.strip()]
                     art.preview_data = {
                         "columns": ["Line", "Content"],
-                        "rows": [{"Line": idx + 1, "Content": l[:140]} for idx, l in enumerate(lines[:30])]
+                        "rows": [{"Line": idx + 1, "Content": l[:140]} for idx, l in enumerate(lines[:40])],
+                        "raw_sample": "\n".join(content_text.splitlines()[:250]),
                     }
                     art.record_count = len(lines)
 

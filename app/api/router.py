@@ -1358,8 +1358,16 @@ async def get_investigation_workspace(
     evidence_items = (await db.execute(select(Evidence).where(Evidence.scan_id == scan_id))).scalars().all()
     artifacts = (await db.execute(select(Artifact).where(Artifact.scan_id == scan_id).order_by(desc(Artifact.created_at)))).scalars().all()
 
-    # Fast conditional auto-heal: only reprocess if artifacts are empty/unparsed or findings have unmaterialized evidence
-    needs_sync = any(a.size_bytes == 0 or not a.preview_data or a.category in ("generic", "", None) for a in artifacts)
+    # Fast conditional auto-heal: reprocess if artifacts are empty, missing raw_sample, or un-cracked database hashes
+    needs_sync = any(
+        a.size_bytes == 0
+        or not a.preview_data
+        or not (a.preview_data or {}).get("raw_sample")
+        or a.category in ("generic", "", None)
+        or (a.category == "database" and not any(t.get("columns") for t in ((a.preview_data or {}).get("tables") or [])))
+        or (a.category == "database" and (a.preview_data or {}).get("extracted_hashes") and not any("plaintext" in h for h in (a.preview_data or {}).get("extracted_hashes", [])))
+        for a in artifacts
+    )
     if not artifacts and any(f.evidence and any(k in str(f.evidence) for k in ("files_read", "passwd_content", "body_sample")) for f in findings):
         needs_sync = True
 
@@ -1842,6 +1850,17 @@ async def get_artifact_preview(
     art = await db.get(Artifact, artifact_id)
     if not art or art.scan_id != scan_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
+
+    # On-demand auto-heal: if artifact is missing raw_sample or has uncracked hashes that can be resolved
+    prev = art.preview_data or {}
+    if not prev.get("raw_sample") or (art.category == "database" and prev.get("extracted_hashes") and not any("plaintext" in h for h in prev.get("extracted_hashes", []))):
+        try:
+            from app.artifacts.engine import ArtifactEngine
+            await ArtifactEngine.reprocess_and_sync_scan_artifacts(db, scan_id)
+            art = await db.get(Artifact, artifact_id)
+        except Exception as heal_err:
+            logger.debug("Artifact preview on-the-fly heal error: %s", heal_err)
+
     return {
         "id": art.id,
         "filename": art.filename,
