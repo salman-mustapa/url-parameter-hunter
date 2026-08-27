@@ -326,20 +326,31 @@ function renderArtifactActiveTab(tabName) {
           <thead>
             <tr>
               <th>Tabel</th>
-              <th>Kolom</th>
-              <th>Tipe Algoritma Hash</th>
-              <th>Sample Hash (Masked)</th>
+              <th>Akun / User Terkait</th>
+              <th>Tipe Algoritma</th>
+              <th>Sample Hash</th>
+              <th>🔓 Status Sandi (AI Engine)</th>
             </tr>
           </thead>
           <tbody>
       `;
       hashes.forEach((h) => {
+        const isCracked = Boolean(h.is_cracked || h.plaintext);
+        const ptx = h.plaintext || '';
+        const user = h.associated_user || h.user || '-';
         html += `
           <tr>
             <td><strong>${esc(h.table)}</strong></td>
-            <td><code>${esc(h.column)}</code></td>
-            <td><span class="severity-badge severity-high">${esc(h.hash_type.toUpperCase())}</span></td>
-            <td><code>${esc(h.hash_sample)}</code></td>
+            <td><code><strong>${esc(user)}</strong></code></td>
+            <td><span class="severity-badge severity-high">${esc((h.hash_type || 'HASH').toUpperCase())}</span></td>
+            <td><code>${esc(h.hash_sample || h.sample || h.full_hash || '-')}</code></td>
+            <td>
+              ${isCracked ? `
+                <span class="pill pill-success font-bold font-mono">🔓 ${esc(ptx)}</span>
+              ` : `
+                <span class="pill-muted">🔒 Uncracked</span>
+              `}
+            </td>
           </tr>
         `;
       });

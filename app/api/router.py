@@ -1851,9 +1851,17 @@ async def get_artifact_preview(
     if not art or art.scan_id != scan_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    # On-demand auto-heal: if artifact is missing raw_sample or has uncracked hashes that can be resolved
-    prev = art.preview_data or {}
-    if not prev.get("raw_sample") or (art.category == "database" and prev.get("extracted_hashes") and not any("plaintext" in h for h in prev.get("extracted_hashes", []))):
+    # On-demand auto-heal: if artifact is missing raw_sample, tables, or has uncracked hashes
+    prev = art.preview_data if isinstance(art.preview_data, dict) else {}
+    fn_lower = (art.filename or "").lower()
+    needs_heal = (
+        not prev
+        or not prev.get("raw_sample")
+        or (art.category in ("generic", "", None) and (fn_lower.endswith(".sql") or fn_lower.endswith(".csv") or "passwd" in fn_lower))
+        or ((art.category == "database" or fn_lower.endswith(".sql")) and not prev.get("tables"))
+        or (prev.get("extracted_hashes") and not any(h.get("is_cracked") or h.get("plaintext") for h in prev.get("extracted_hashes", [])))
+    )
+    if needs_heal:
         try:
             from app.artifacts.engine import ArtifactEngine
             await ArtifactEngine.reprocess_and_sync_scan_artifacts(db, scan_id)
