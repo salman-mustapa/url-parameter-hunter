@@ -48,10 +48,12 @@ class ScopeEngine:
         allowed_modules: Optional[List[str]] = None,
         recursive: bool = True,
         authorization_id: Optional[str] = None,
+        allow_private_networks: bool = False,
     ):
         self.root_domain = root_domain.lower().strip(".")
         self.recursive = recursive
         self.authorization_id = authorization_id
+        self.allow_private_networks = bool(allow_private_networks)
 
         if not self.recursive and allowed_hosts:
             self.allowed_hosts: Set[str] = {h.lower().strip(".") for h in allowed_hosts}
@@ -86,10 +88,12 @@ class ScopeEngine:
         except ValueError:
             return False
 
-        # If explicit CIDRs configured, verify
+        # Explicit CIDRs are the only implicit authorization for non-public ranges.
         if self.allowed_cidrs:
             return any(obj in net for net in self.allowed_cidrs)
-        return True
+        if self.allow_private_networks:
+            return True
+        return bool(obj.is_global)
 
     def port_allowed(self, port: int) -> bool:
         if not self.allowed_ports:
@@ -112,7 +116,14 @@ class ScopeEngine:
             return False
         if parsed.port and not self.port_allowed(parsed.port):
             return False
-        return self.host_allowed(parsed.hostname)
+        host = parsed.hostname
+        if not self.host_allowed(host):
+            return False
+        try:
+            ipaddress.ip_address(host or "")
+        except ValueError:
+            return True
+        return self.ip_allowed(host)
 
     def assert_host(self, host: str) -> None:
         if not self.host_allowed(host):

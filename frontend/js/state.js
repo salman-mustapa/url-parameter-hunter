@@ -167,6 +167,25 @@ function getDeviceFingerprint() {
   return fpId;
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const upstreamSignal = options.signal;
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) abortFromUpstream();
+    else upstreamSignal.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    if (upstreamSignal) upstreamSignal.removeEventListener("abort", abortFromUpstream);
+  }
+}
+
+window.fetchWithTimeout = fetchWithTimeout;
+
 // Wrapper for API fetch that automatically attaches Bearer Token & Device Fingerprint
 async function authFetch(url, options = {}) {
   options.headers = options.headers || {};
@@ -177,7 +196,9 @@ async function authFetch(url, options = {}) {
   if (fp) {
     options.headers["X-Device-Fingerprint"] = fp;
   }
-  return fetch(url, options);
+  const timeoutMs = Number(options.timeoutMs || 20000);
+  delete options.timeoutMs;
+  return fetchWithTimeout(url, options, timeoutMs);
 }
 
 // --------------------------------------------------------------------------
@@ -213,4 +234,3 @@ function showToast(message, type = "info", duration = 4000) {
 }
 
 window.showToast = showToast;
-

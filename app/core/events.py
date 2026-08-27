@@ -15,6 +15,18 @@ class EventBus:
     """
 
     CHANNEL = "bughunter:events"
+    EVENT_ALIASES = {
+        "tech.identified": "TechnologyIdentified",
+        "technology.detected": "TechnologyIdentified",
+        "port.open": "PortDiscovered",
+        "port.discovered": "PortDiscovered",
+        "http.service.discovered": "HttpServiceDiscovered",
+        "url.discovered": "EndpointDiscovered",
+        "endpoint.discovered": "EndpointDiscovered",
+        "parameter.discovered": "ParameterDiscovered",
+        "artifact.discovered": "ArtifactDiscovered",
+        "finding.candidate": "CandidateCreated",
+    }
 
     def __init__(self, max_recent: int = 1000) -> None:
         self._subscribers: Dict[str, List[Any]] = {}
@@ -159,6 +171,9 @@ class EventBus:
         handlers: List[Any] = []
         if evt_type in self._subscribers:
             handlers.extend(self._subscribers[evt_type])
+        alias_type = self.EVENT_ALIASES.get(evt_type)
+        if alias_type and alias_type in self._subscribers:
+            handlers.extend(self._subscribers[alias_type])
         if "*" in self._subscribers and evt_type != "*":
             handlers.extend(self._subscribers["*"])
 

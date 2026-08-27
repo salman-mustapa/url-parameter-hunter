@@ -26,7 +26,7 @@
     container.innerHTML = '<div class="loading-spinner">Memetakan taktik & teknik MITRE ATT&CK...</div>';
 
     try {
-      const res = await fetch(`/api/scans/${encodeURIComponent(scanId)}/mitre-matrix`);
+      const res = await fetchWithTimeout(`/api/scans/${encodeURIComponent(scanId)}/mitre-matrix`);
       if (!res.ok) throw new Error('Gagal memuat matriks MITRE ATT&CK');
       const data = await res.json();
 
@@ -95,7 +95,7 @@
     container.innerHTML = '<div class="loading-spinner">Memuat galeri visual proof...</div>';
 
     try {
-      const res = await fetch(`/api/scans/${encodeURIComponent(scanId)}/screenshots`);
+      const res = await fetchWithTimeout(`/api/scans/${encodeURIComponent(scanId)}/screenshots`);
       if (!res.ok) throw new Error('Gagal memuat galeri screenshot');
       const list = await res.json();
 

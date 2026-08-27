@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from app.adapters.base.base_adapter import BaseAdapter
+from app.core.subprocess_runner import run_bounded_subprocess
 from app.scanners.http import fetch_http
 
 logger = logging.getLogger("adapter.dirsearch")
@@ -89,18 +90,7 @@ class DirsearchAdapter(BaseAdapter):
         discovered: List[Dict[str, Any]] = []
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                await asyncio.wait_for(proc.communicate(), timeout=float(max_time + 10))
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+            await run_bounded_subprocess(cmd, timeout_seconds=float(max_time + 10))
 
             if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                 with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:

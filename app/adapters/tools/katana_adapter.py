@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import shutil
 from typing import Any, Dict, List, Set
 
 from app.adapters.base.base_adapter import BaseAdapter
+from app.core.subprocess_runner import run_bounded_subprocess
 
 logger = logging.getLogger("adapter.katana")
 
@@ -46,12 +46,10 @@ class KatanaAdapter(BaseAdapter):
                     "-jsonl",
                     "-ct", "30s",
                 ]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=40.0)
+                proc_result = await run_bounded_subprocess(cmd, timeout_seconds=40.0)
+                if proc_result.timed_out:
+                    return {"status": "timeout", "target_url": target_url, "endpoints": [], "count": 0, "tool": "katana"}
+                stdout = proc_result.stdout
                 for line in stdout.decode("utf-8", errors="ignore").splitlines():
                     line = line.strip()
                     if line:

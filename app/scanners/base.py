@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
@@ -46,9 +47,17 @@ class ScanContext:
         try:
             from app.orchestration.adaptive_orchestrator import adaptive_orchestrator
             event_payload = {"scan_id": self.scan_id, "message": message, **data}
-            asyncio.create_task(adaptive_orchestrator.ingest_event(event_type, event_payload))
-        except Exception:
-            pass
+            task = asyncio.create_task(adaptive_orchestrator.ingest_event(event_type, event_payload))
+
+            def _log_ingest_error(done_task: asyncio.Task) -> None:
+                try:
+                    done_task.result()
+                except Exception as exc:
+                    logger.debug("Adaptive orchestrator ingest failed for %s: %s", event_type, exc)
+
+            task.add_done_callback(_log_ingest_error)
+        except Exception as exc:
+            logger.debug("Adaptive orchestrator dispatch failed for %s: %s", event_type, exc)
 
 
 class Scanner(Protocol):

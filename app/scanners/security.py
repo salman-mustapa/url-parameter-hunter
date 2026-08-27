@@ -525,15 +525,26 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
 
                         for u_row in asset_url_rows:
                             p_path = urlparse(u_row).path
-                            if p_path and p_path not in candidate_paths:
-                                if rule["file_type"] == "backup_sql" and p_path.lower().endswith((".sql", ".dump")):
-                                    candidate_paths.append(p_path)
-                                elif rule["file_type"] == "csv" and p_path.lower().endswith((".csv", ".tsv")):
-                                    candidate_paths.append(p_path)
-                                elif rule["file_type"] == "env_file" and "/.env" in p_path.lower():
-                                    candidate_paths.append(p_path)
-                                elif rule["file_type"] == "log_file" and p_path.lower().endswith(".log"):
-                                    candidate_paths.append(p_path)
+                            if p_path:
+                                if p_path not in candidate_paths:
+                                    if rule["file_type"] == "backup_sql" and p_path.lower().endswith((".sql", ".dump")):
+                                        candidate_paths.append(p_path)
+                                    elif rule["file_type"] == "csv" and p_path.lower().endswith((".csv", ".tsv")):
+                                        candidate_paths.append(p_path)
+                                    elif rule["file_type"] == "env_file" and "/.env" in p_path.lower():
+                                        candidate_paths.append(p_path)
+                                    elif rule["file_type"] == "log_file" and p_path.lower().endswith(".log"):
+                                        candidate_paths.append(p_path)
+
+                                # Component 6: Active crawl path-based probing (probe relative to subdir)
+                                parts = p_path.rsplit('/', 1)
+                                if len(parts) > 1 and parts[0] and parts[0] != "/":
+                                    subdir = parts[0]
+                                    for base_probe in rule.get("probe_paths") or [rule.get("probe_path", "")]:
+                                        if base_probe:
+                                            rel_path = f"{subdir}/{base_probe.lstrip('/')}"
+                                            if rel_path not in candidate_paths:
+                                                candidate_paths.append(rel_path)
 
                         for sample_path in list(dict.fromkeys(candidate_paths)):
                             if not sample_path:
@@ -654,6 +665,63 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                             results.append((asset_obj.id, target_host, norm_res, None))
                     except Exception as auth_err:
                         logger.debug("Auth validation error on %s: %s", target_host, auth_err)
+
+                    # Phase 1b: Direct Path LFI Probing (Component 1)
+                    try:
+                        subdirs = []
+                        for u_row in asset_url_rows:
+                            p_path = urlparse(u_row).path
+                            if p_path:
+                                parts = p_path.rsplit('/', 1)
+                                if len(parts) > 1 and parts[0] and parts[0] != "/":
+                                    if parts[0] not in subdirs:
+                                        subdirs.append(parts[0])
+                        lfi_findings = await path_traversal_validator.validate_direct_paths(
+                            base_url=base_url,
+                            subdirectories=subdirs,
+                            max_subdirectories=8,
+                            max_requests=72,
+                        )
+                        for lfi in lfi_findings:
+                            expl_data = getattr(lfi, "exploitation_data", {}) or {}
+                            has_deep = bool(expl_data.get("files_read"))
+                            files_count = expl_data.get("files_read_count", 0)
+                            target_file = getattr(lfi, "target_file", "/etc/passwd")
+                            technique = getattr(lfi, "technique", "direct")
+                            if has_deep:
+                                sev = "CRITICAL"
+                                ev_level = "E4"
+                                title = f"Direct Path Traversal / LFI — {files_count} Files Read ({technique})"
+                                desc = f"Direct LFI vulnerability found at {lfi.url}. Allowed reading {target_file} + {files_count} additional files via {technique} technique."
+                            else:
+                                sev = "HIGH"
+                                ev_level = "E3"
+                                title = f"Direct Path Traversal LFI ({technique})"
+                                desc = f"Direct LFI vulnerability found at {lfi.url}. Returned {target_file} contents."
+                            norm_res = NormalizedValidationResult(
+                                adapter_name="path_traversal_validator",
+                                vulnerability_type="path_traversal",
+                                title=title,
+                                severity=sev,
+                                confidence=lfi.confidence,
+                                evidence_level=ev_level,
+                                target_host=target_host,
+                                endpoint_url=lfi.url,
+                                parameter="DIRECT_PATH",
+                                cwe_id="CWE-22",
+                                description=desc,
+                                impact_matrix=getattr(lfi, "impact_matrix", {}) or {"confidentiality": "HIGH", "integrity": "LOW", "availability": "LOW", "data_exposure": "HIGH"},
+                                remediation="Ensure path requests are strictly routed within a whitelist of public files. Avoid resolving path sequences containing traversal operators.",
+                                poc_payload=lfi.probe,
+                                poc_command=lfi.poc_curl,
+                                reproduction_steps=getattr(lfi, "reproduction_steps", []),
+                                request_metadata={"url": lfi.url, "method": "GET", "payload": lfi.probe, "technique": technique},
+                                response_metadata=lfi.evidence if isinstance(getattr(lfi, "evidence", None), dict) else {},
+                                exploitation_data=expl_data,
+                            )
+                            results.append((asset_obj.id, target_host, norm_res, None))
+                    except Exception as lfi_err:
+                        logger.debug("Direct LFI probing error on %s: %s", base_url, lfi_err)
 
             except Exception as asset_err:
                 logger.debug("Sensitive file audit error on %s: %s", target_host, asset_err)

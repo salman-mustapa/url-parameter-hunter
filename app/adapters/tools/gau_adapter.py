@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
 from typing import Any, Dict, List, Set
 
 from app.adapters.base.base_adapter import BaseAdapter
+from app.core.subprocess_runner import run_bounded_subprocess
 
 logger = logging.getLogger("adapter.gau")
 
@@ -36,12 +36,10 @@ class GauAdapter(BaseAdapter):
         if self._binary_path:
             try:
                 cmd = [self._binary_path, domain]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=35.0)
+                proc_result = await run_bounded_subprocess(cmd, timeout_seconds=35.0)
+                if proc_result.timed_out:
+                    return {"status": "timeout", "domain": domain, "urls": [], "count": 0, "tool": "gau"}
+                stdout = proc_result.stdout
                 for line in stdout.decode("utf-8", errors="ignore").splitlines():
                     line = line.strip()
                     if line and line.startswith(("http://", "https://")):

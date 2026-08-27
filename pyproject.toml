@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.7.1",
     "pydantic-settings>=2.2.1",
     "redis>=5.0.4",
+    "psutil>=5.9.0",
     "python-multipart>=0.0.9",
     "python-dotenv>=1.0.1",
     "dnspython>=2.6.1",
@@ -37,3 +38,7 @@ packages = ["app"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

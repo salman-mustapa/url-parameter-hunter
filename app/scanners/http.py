@@ -126,7 +126,11 @@ async def get_shared_client() -> httpx.AsyncClient:
         async with _SHARED_CLIENT_LOCK:
             if _SHARED_CLIENT is None:
                 # Use connection limits to avoid socket exhaustion and reuse connections (Keep-Alive)
-                limits = httpx.Limits(max_keepalive_connections=50, max_connections=150, keepalive_expiry=30.0)
+                limits = httpx.Limits(
+                    max_keepalive_connections=max(1, settings.max_http_keepalive_connections),
+                    max_connections=max(1, settings.max_http_connections),
+                    keepalive_expiry=30.0,
+                )
                 _SHARED_CLIENT = httpx.AsyncClient(
                     limits=limits,
                     follow_redirects=False,
@@ -175,6 +179,14 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
     """HTTP/HTTPS probe for an individual asset."""
     host = asset.hostname
     if not host or not ctx.scope.host_allowed(host):
+        return
+    if asset.ip and not ctx.scope.ip_allowed(asset.ip):
+        await ctx.emit(
+            "scope.ip_blocked",
+            f"HTTP probing blocked for non-authorized resolved address on {host}.",
+            host=host,
+            severity="warn",
+        )
         return
 
     # Standard and Extended Web Endpoint Candidates

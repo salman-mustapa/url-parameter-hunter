@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
+from app.core.config import settings
+from app.core.resource_governor import resource_governor
 from app.core.session_context import SessionContext
 from app.scanners.base import ScanContext
 from app.validation.service_validators import get_service_validator, service_validator_registry
@@ -27,6 +29,109 @@ from app.orchestration.attack_opportunity import AttackOpportunity, opportunity_
 
 logger = logging.getLogger("orchestration.cve_pipeline")
 
+HIGH_RISK_NSE_PORTS = {
+    21, 22, 23, 25, 80, 139, 443, 445, 1433, 3306, 3389, 8080, 8443,
+}
+
+
+async def trigger_host_nmap_vuln_pipeline(
+    ctx: ScanContext,
+    asset_id: str,
+    host: str,
+    ports: Sequence[int],
+) -> Dict[str, Any]:
+    """Run one bounded, safe NSE scan per host and persist confirmed script results."""
+    option = ctx.options.get("nmap_vuln_scan")
+    enabled = (
+        bool(option)
+        if option is not None
+        else settings.nmap_vuln_enabled or ctx.profile == "adversary_simulation"
+    )
+    if not enabled:
+        return {"status": "disabled", "findings": []}
+    if not ctx.scope.host_allowed(host):
+        return {"status": "blocked", "error": "Target is outside authorized scope", "findings": []}
+    if not resource_governor.should_admit_task(is_high_priority=True):
+        await ctx.emit(
+            "scan.throttled",
+            f"Nmap vulnerability checks deferred for {host}: resource pressure is high.",
+            host=host,
+            severity="warn",
+        )
+        return {"status": "throttled", "findings": []}
+
+    selected_ports = sorted({int(p) for p in ports if int(p) in HIGH_RISK_NSE_PORTS})
+    selected_ports = selected_ports[: max(1, settings.nmap_vuln_max_ports)]
+    if not selected_ports:
+        return {"status": "skipped", "findings": []}
+
+    from app.adapters.tools.nmap_adapter import NmapAdapter
+
+    adapter = NmapAdapter()
+    if not await adapter.healthcheck():
+        return {"status": "unavailable", "error": "Nmap binary not found", "findings": []}
+
+    ports_csv = ",".join(str(port) for port in selected_ports)
+    await ctx.emit(
+        "scan.cve",
+        f"Running bounded safe NSE checks on {host} ports {ports_csv}.",
+        host=host,
+        ports=selected_ports,
+    )
+    result = await adapter.execute_vuln_scan(host, ports_csv)
+    if result.get("status") != "success":
+        await ctx.emit(
+            "scan.cve.warning",
+            f"Nmap NSE checks on {host} ended with status {result.get('status', 'error')}.",
+            host=host,
+            error=result.get("error", ""),
+            severity="warn",
+        )
+        return result
+
+    async with AsyncSessionLocal() as db:
+        for item in result.get("findings", []):
+            cves = item.get("cves") or []
+            finding = await result_service.upsert_finding(
+                db,
+                scan_id=ctx.scan_id,
+                asset_id=asset_id,
+                finding_type="nmap_script_vuln",
+                title=(
+                    f"Nmap NSE: {item.get('script_id', 'vuln')} on "
+                    f"{host}:{item.get('port', 'unknown')}"
+                ),
+                severity=item.get("severity", "MEDIUM"),
+                confidence="CONFIRMED",
+                cve_id=cves[0] if cves else None,
+                description=(
+                    "A non-destructive Nmap NSE script returned an explicit VULNERABLE state. "
+                    "Review the captured script output and independently confirm remediation."
+                ),
+                evidence={
+                    "nmap_output": item.get("output", "")[:16000],
+                    "script_id": item.get("script_id", ""),
+                    "service": item.get("service", "unknown"),
+                    "port": item.get("port"),
+                    "cves": cves,
+                },
+                poc_command=(
+                    f"nmap -sV -p {item.get('port')} --script 'vuln and safe' {host}"
+                ),
+                exploitability_state="VALIDATED",
+            )
+            if finding:
+                await ctx.emit(
+                    "port.vulnerability",
+                    f"NSE validation confirmed: {finding.title}",
+                    host=host,
+                    port=item.get("port"),
+                    cve_id=cves[0] if cves else None,
+                    severity=item.get("severity", "MEDIUM"),
+                )
+        await db.commit()
+    return result
+
 
 async def trigger_immediate_cve_pipeline(
     ctx: ScanContext,
@@ -36,7 +141,15 @@ async def trigger_immediate_cve_pipeline(
     port: int,
 ):
     """Executes the complete service discovery to active validation pipeline in the background."""
+    session: Optional[SessionContext] = None
     try:
+        if not ctx.scope.host_allowed(host) or not ctx.scope.port_allowed(port):
+            logger.warning("Blocked out-of-scope service validation for %s:%d", host, port)
+            return
+        if not resource_governor.should_admit_task(is_high_priority=True):
+            logger.info("Resource pressure blocked service validation for %s:%d", host, port)
+            return
+
         from app.scanners.port import COMMON_PORTS, _grab_banner
         
         # 1. Service Identification
@@ -56,9 +169,14 @@ async def trigger_immediate_cve_pipeline(
             return
 
         # 3. Product / Version Fingerprinting
-        fp = await validator.fingerprint(host, port, banner)
+        step_timeout = max(5.0, min(30.0, settings.http_timeout_seconds * 3))
+        fp = await asyncio.wait_for(
+            validator.fingerprint(host, port, banner), timeout=step_timeout
+        )
         product = fp.get("product") or validator.name
-        version = await validator.identify_version(host, port, banner)
+        version = await asyncio.wait_for(
+            validator.identify_version(host, port, banner), timeout=step_timeout
+        )
         
         service_info = {
             "product": product,
@@ -85,6 +203,10 @@ async def trigger_immediate_cve_pipeline(
                 )
                 db.add(port_rec)
                 await db.flush()
+            else:
+                port_rec.state = "open"
+                if banner:
+                    port_rec.banner = banner
 
             svc_rec = (await db.execute(
                 select(Service).where(Service.asset_id == asset_id, Service.port_id == port_rec.id)
@@ -111,14 +233,18 @@ async def trigger_immediate_cve_pipeline(
             await db.commit()
 
         # 4. Generate Opportunities (includes version CVEs & configuration checks)
-        opps = await validator.generate_opportunities(host, port, service_info)
-        
+        opps = await asyncio.wait_for(
+            validator.generate_opportunities(host, port, service_info), timeout=step_timeout
+        )
+
         session = SessionContext(base_url=f"http://{host}:{port}", rate_limiter=ctx.rate_limiter)
 
         # 5. Immediate Active Validation
-        for opp in opps:
+        for opp in opps[:12]:
             try:
-                result = await validator.validate(opp, session)
+                result = await asyncio.wait_for(
+                    validator.validate(opp, session), timeout=step_timeout
+                )
                 
                 # 6. Evidence Collection
                 if result.is_vulnerable:
@@ -131,7 +257,7 @@ async def trigger_immediate_cve_pipeline(
                             finding_type=result.attack_type,
                             title=result.message or f"{opp.metadata.get('cve_id', 'Vulnerability')} on {host}:{port}",
                             severity=result.severity,
-                            confidence=f"{result.confidence:.2f}",
+                            confidence="CONFIRMED" if result.confidence >= 0.8 else "VALIDATED",
                             cwe_id=result.cwe_id,
                             cve_id=opp.metadata.get("cve_id"),
                             description=result.message,
@@ -178,3 +304,6 @@ async def trigger_immediate_cve_pipeline(
                 logger.error("Validation failed for opportunity %s on %s:%d: %s", opp.hypothesis, host, port, val_err, exc_info=True)
     except Exception as exc:
         logger.error("Error running immediate CVE pipeline on %s:%d: %s", host, port, exc, exc_info=True)
+    finally:
+        if session is not None:
+            await session.close()

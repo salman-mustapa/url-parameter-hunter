@@ -58,6 +58,7 @@ from app.models.models import (
     User,
 )
 from app.artifacts.sanitizer import ArtifactSanitizer
+from app.core.config import settings
 from app.services.assets import asset_detail, asset_tree
 from app.services.results import result_service
 from app.services.scan_manager import scan_manager
@@ -96,14 +97,14 @@ class AIConfigRequest(BaseModel):
 
 
 @router.get("/ai/config")
-async def get_ai_config():
+async def get_ai_config(_admin: User = Depends(require_admin_role)):
     """Get active AI provider configuration, model info, and status."""
     from app.ai.gateway import ai_gateway
     return ai_gateway.get_config()
 
 
 @router.post("/ai/config")
-async def update_ai_config(body: AIConfigRequest):
+async def update_ai_config(body: AIConfigRequest, _admin: User = Depends(require_admin_role)):
     """Update active AI provider configuration dynamically at runtime."""
     from app.ai.gateway import ai_gateway
     cfg = body.model_dump()
@@ -112,7 +113,7 @@ async def update_ai_config(body: AIConfigRequest):
 
 
 @router.post("/ai/gateway/test")
-async def test_ai_gateway_connection(body: AIConfigRequest):
+async def test_ai_gateway_connection(body: AIConfigRequest, _admin: User = Depends(require_admin_role)):
     """Test connection and measure response latency against candidate AI provider."""
     from app.ai.gateway import ai_gateway
     cfg = body.model_dump()
@@ -181,7 +182,14 @@ async def register(
         await db.commit()
 
     token = create_access_token(new_user.id, new_user.username, new_user.role)
-    response.set_cookie(key="auth_token", value=token, httponly=True, samesite="lax", max_age=86400 * 7)
+    response.set_cookie(
+        key="auth_token",
+        value=token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        max_age=86400 * 7,
+    )
 
     return {
         "access_token": token,
@@ -224,7 +232,14 @@ async def login(
         await db.commit()
 
     token = create_access_token(user.id, user.username, user.role)
-    response.set_cookie(key="auth_token", value=token, httponly=True, samesite="lax", max_age=86400 * 7)
+    response.set_cookie(
+        key="auth_token",
+        value=token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        max_age=86400 * 7,
+    )
 
     return {
         "access_token": token,
@@ -291,12 +306,12 @@ async def change_password(
 # ==========================================================================
 class CreateScanRequest(BaseModel):
     target: Optional[str] = None
-    profile: Optional[str] = "adversary_simulation"  # Default Full Power Aggressive Pentest
+    profile: Optional[str] = "balanced"
     include_subdomains: Optional[bool] = True
-    validation_level: Optional[str] = "aggressive"
+    validation_level: Optional[str] = "L2_SAFE_ACTIVE"
     allowed_modules: Optional[List[str]] = None
     allowed_actions: Optional[List[str]] = None
-    authorization_reference: Optional[str] = "AUTO-AUTH-ENTERPRISE"
+    authorization_reference: Optional[str] = None
     campaign_id: Optional[str] = None
     device_fingerprint: Optional[str] = None
 
@@ -349,6 +364,24 @@ async def create_scan(
         final_subs = True
 
     final_val_level = (body.validation_level if body and body.validation_level else validation_level)
+    normalized_profile = (final_profile or "balanced").strip().lower()
+    normalized_level = (final_val_level or "").strip().upper()
+    requests_high_risk = (
+        normalized_profile in {"adversary_simulation", "adversary", "aggressive", "full", "max"}
+        or normalized_level == "L4_HIGH_RISK"
+    )
+    authorization_reference = (body.authorization_reference if body else None)
+    if requests_high_risk:
+        if not current_user:
+            raise HTTPException(
+                status_code=403,
+                detail="Adversary simulation requires an authenticated operator and explicit authorization reference.",
+            )
+        if not authorization_reference or len(authorization_reference.strip()) < 6:
+            raise HTTPException(
+                status_code=400,
+                detail="L4/adversary simulation requires a non-empty written authorization reference.",
+            )
 
     if not final_target:
         raise HTTPException(status_code=400, detail="Target domain atau URL diperlukan.")
@@ -361,7 +394,7 @@ async def create_scan(
             user_id=user_id,
             allowed_modules=body.allowed_modules if body else None,
             allowed_actions=body.allowed_actions if body else None,
-            authorization_reference=body.authorization_reference if body else None,
+            authorization_reference=authorization_reference,
             campaign_id=body.campaign_id if body else None,
         )
         # Record device trial usage
@@ -525,34 +558,56 @@ async def stop_scan(scan_id: str):
 
 
 @router.get("/scans/{scan_id}/events")
-async def scan_events(scan_id: str):
+async def scan_events(scan_id: str, request: Request):
     async def gen():
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, settings.sse_client_queue_size))
+
+        async def enqueue(payload: dict) -> None:
+            item = json.dumps(payload, default=str)
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            await queue.put(item)
 
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(
-                select(ScanEvent).where(ScanEvent.scan_id == scan_id).order_by(ScanEvent.created_at.asc())
+                select(ScanEvent)
+                .where(ScanEvent.scan_id == scan_id)
+                .order_by(ScanEvent.created_at.desc())
+                .limit(settings.sse_replay_limit)
             )).scalars().all()
-            for ev in rows:
-                await queue.put(json.dumps({
+            for ev in reversed(rows):
+                await enqueue({
                     "scan_id": scan_id,
                     "event_type": ev.event_type,
+                    "type": ev.event_type,
                     "category": ev.event_type.split(".")[0].upper() if "." in ev.event_type else ev.event_type.upper(),
                     "severity": ev.severity,
                     "message": ev.message,
                     "data": ev.data or {},
                     "created_at": ev.created_at.isoformat() if ev.created_at else None,
-                }, default=str))
+                })
 
         async def handler(ev: dict):
             if ev.get("scan_id") == scan_id:
-                await queue.put(json.dumps(ev, default=str))
+                await enqueue(ev)
 
         event_bus.subscribe("*", handler)
         try:
             while True:
+                if await request.is_disconnected():
+                    break
                 try:
-                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    item = await asyncio.wait_for(queue.get(), timeout=settings.sse_keepalive_seconds)
+                    try:
+                        decoded = json.loads(item)
+                        event_id = decoded.get("event_id") or decoded.get("created_at") or decoded.get("timestamp")
+                    except Exception:
+                        event_id = None
+                    if event_id:
+                        yield f"id: {event_id}\n"
                     yield f"data: {item}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
@@ -940,6 +995,9 @@ async def delete_scan(scan_id: str, db: AsyncSession = Depends(get_db)):
 
     # 2. Clean up in-memory engines
     try:
+        from app.core.security_engine import security_engine
+        from app.core.state_machine import state_machine_manager
+
         if scan_id in security_engine._app_models:
             del security_engine._app_models[scan_id]
         if scan_id in security_engine._reasoning_layers:
@@ -1380,6 +1438,8 @@ def _serialize_findings_for_report(findings, root_domain: str, asset_map: Option
             "poc": poc_data,
             "evidence": evidence_dict,
             "asset_hostname": target_host,
+            "first_seen": f.first_seen.isoformat() if getattr(f, "first_seen", None) else None,
+            "last_seen": f.last_seen.isoformat() if getattr(f, "last_seen", None) else None,
             "retest_status": "PENDING",
         })
     return serialized

@@ -20,7 +20,9 @@ from app.models.models import User
 logger = logging.getLogger("auth")
 
 # JWT & Cryptographic Secret
-SECRET_KEY = getattr(settings, "jwt_secret", "hunter_aja_super_secret_jwt_key_2026_pentest_secure")
+SECRET_KEY = settings.jwt_secret or "development-only-change-me"
+if not settings.jwt_secret:
+    logger.warning("JWT_SECRET is not configured; using a development-only fallback secret.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_SECONDS = 86400 * 7  # 7 days
 

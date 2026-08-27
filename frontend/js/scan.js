@@ -14,8 +14,8 @@ function updateScanStatusUI(statusText) {
   const isRunning = state.scanStatus === "RUNNING";
   const isPaused = state.scanStatus === "PAUSED";
   const isQueued = state.scanStatus === "QUEUED";
-  const isFailed = state.scanStatus === "FAILED" || state.scanStatus === "PARTIAL_FAILURE";
-  const isStopped = state.scanStatus === "STOPPED";
+  const isFailed = ["FAILED", "PARTIAL_FAILURE", "DEGRADED", "TIMEOUT"].includes(state.scanStatus);
+  const isStopped = ["STOPPED", "CANCELLED"].includes(state.scanStatus);
   const isCompleted = state.scanStatus === "COMPLETED";
 
   if (badge) {
@@ -209,9 +209,19 @@ async function startScan() {
 
   const previousRunningTarget = (state.scanStatus === "RUNNING" && state.activeTarget) ? state.activeTarget : null;
 
-  // Always use deep profile & L4 High-Risk for full aggressive multi-tool capabilities
-  const profile = "deep";
-  const validationLevel = "L4_HIGH_RISK";
+  const profile = el("profileSelect")?.value || "balanced";
+  const validationByProfile = {
+    quick: "L2_SAFE_ACTIVE",
+    balanced: "L2_SAFE_ACTIVE",
+    deep: "L3_CONTROLLED",
+    adversary_simulation: "L4_HIGH_RISK",
+  };
+  const validationLevel = validationByProfile[profile] || "L2_SAFE_ACTIVE";
+  const authorizationReference = el("authorizationReferenceInput")?.value?.trim() || null;
+  if (profile === "adversary_simulation" && (!state.currentUser || !authorizationReference)) {
+    showToast("Adversary simulation membutuhkan login dan referensi otorisasi tertulis.", "warning");
+    return;
+  }
   const scopeMode = el("scopeModeSelect") ? el("scopeModeSelect").value : (el("subdomainsToggle") ? (el("subdomainsToggle").checked ? "recursive" : "targeted") : "recursive");
   const includeSubdomains = scopeMode === "recursive";
   const device_fingerprint = getDeviceFingerprint();
@@ -224,6 +234,7 @@ async function startScan() {
         target: target,
         profile: profile,
         validation_level: validationLevel,
+        authorization_reference: authorizationReference,
         include_subdomains: includeSubdomains,
         device_fingerprint: device_fingerprint,
       }),
@@ -322,7 +333,7 @@ async function syncScanStatus() {
       updateCounterDisplays();
     }
     const st = (scan.status || "").toUpperCase();
-    if (st === "COMPLETED" || st === "STOPPED" || st === "FAILED") {
+    if (["COMPLETED", "STOPPED", "FAILED", "PARTIAL_FAILURE", "DEGRADED", "TIMEOUT", "CANCELLED"].includes(st)) {
       updateScanStatusUI(st);
       stopTimer();
       clearInterval(state.treePollInterval);
@@ -417,7 +428,12 @@ function connectEventSource(scanId) {
 
   es.onmessage = (e) => {
     try {
-      const ev = JSON.parse(e.data);
+      const raw = JSON.parse(e.data);
+      const ev = {
+        ...(raw.data && typeof raw.data === "object" ? raw.data : {}),
+        ...raw,
+        event_type: raw.event_type || raw.type || "",
+      };
       if (typeof addEventToStream === "function") addEventToStream(ev);
       processEventTelemetry(ev);
     } catch (err) {
@@ -427,6 +443,11 @@ function connectEventSource(scanId) {
 
   es.onerror = () => {
     console.debug("SSE connection closed or re-negotiating.");
+    const terminal = ["COMPLETED", "FAILED", "STOPPED", "PARTIAL_FAILURE", "DEGRADED", "TIMEOUT", "CANCELLED"].includes((state.scanStatus || "").toUpperCase());
+    if (terminal && state.es) {
+      state.es.close();
+      state.es = null;
+    }
   };
 }
 
@@ -485,16 +506,23 @@ function processEventTelemetry(ev) {
     if (typeof refreshAssetTree === "function") refreshAssetTree();
     if (typeof loadFindings === "function") loadFindings();
     if (typeof loadReportHubData === "function" && state.activeScanId) loadReportHubData(state.activeScanId);
-    if (state.es) state.es.close();
-  } else if (type === "scan.failed" || type === "scan.stopped" || (ev.message && typeof ev.message === "string" && ev.message.includes("Scan stopped"))) {
-    updateScanStatusUI(type === "scan.failed" ? "FAILED" : "STOPPED");
+    if (state.es) {
+      state.es.close();
+      state.es = null;
+    }
+  } else if (["scan.failed", "scan.stopped", "scan.degraded", "scan.timeout", "scan.cancelled"].includes(type) || (ev.message && typeof ev.message === "string" && ev.message.includes("Scan stopped"))) {
+    const terminalStatus = type === "scan.timeout" ? "TIMEOUT" : (type === "scan.degraded" ? "DEGRADED" : (type === "scan.failed" ? "FAILED" : "STOPPED"));
+    updateScanStatusUI(terminalStatus);
     stopTimer();
     clearInterval(state.treePollInterval);
     clearInterval(state.statusPollInterval);
     if (typeof refreshAssetTree === "function") refreshAssetTree();
     if (typeof loadFindings === "function") loadFindings();
     if (typeof loadReportHubData === "function" && state.activeScanId) loadReportHubData(state.activeScanId);
-    if (state.es) state.es.close();
+    if (state.es) {
+      state.es.close();
+      state.es = null;
+    }
   }
 
   updateCounterDisplays();

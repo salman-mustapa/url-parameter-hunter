@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import AsyncSessionLocal
+from app.core.config import settings
 from app.core.sanitizer import sanitize_text
 from app.findings.dedup import FindingDedup
 from app.models.models import Asset, AuditLog, Finding, Observation, Scan, ScanEvent
@@ -22,8 +23,9 @@ class ResultService:
         self.dialect = dialect
         self._asset_cache: dict[tuple[str, str, str], str] = {}
         self._lock = asyncio.Lock()
-        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
+        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=max(100, settings.result_event_queue_size))
         self._flush_task: Optional[asyncio.Task] = None
+        self._dropped_events = 0
 
     def _ensure_worker(self) -> None:
         try:
@@ -128,7 +130,35 @@ class ResultService:
                 "data": event_data,
             })
         except asyncio.QueueFull:
-            pass
+            self._dropped_events += 1
+            try:
+                self._event_queue.get_nowait()
+                self._event_queue.task_done()
+                self._event_queue.put_nowait({
+                    "scan_id": scan_id,
+                    "event_type": event_type,
+                    "severity": severity,
+                    "message": message,
+                    "data": event_data,
+                })
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                pass
+            if self._dropped_events == 1 or self._dropped_events % 100 == 0:
+                logger.warning(
+                    "Result event queue saturated; dropped %d oldest event(s).",
+                    self._dropped_events,
+                )
+
+    async def close(self) -> None:
+        """Flush queued events and terminate the background writer cleanly."""
+        task = self._flush_task
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._flush_task = None
 
     async def upsert_asset(
         self,

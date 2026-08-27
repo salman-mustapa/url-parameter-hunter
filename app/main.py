@@ -30,13 +30,29 @@ async def lifespan(app: FastAPI):
     # Connect EventBus to Redis (§9, §42) — falls back to in-memory if unavailable
     await event_bus.connect_redis(settings.redis_url)
     
-    # Auto-resume pending/running scans on startup
-    from app.services.scan_manager import scan_manager
-    asyncio.create_task(scan_manager.resume_pending_scans())
+    # Auto-resume is configurable because small SQLite/local deployments can
+    # lock up if many interrupted scans rehydrate at once.
+    if settings.auto_resume_scans_on_startup:
+        from app.services.scan_manager import scan_manager
+
+        task = asyncio.create_task(
+            scan_manager.resume_pending_scans(max_scans=settings.max_auto_resume_scans)
+        )
+
+        def _log_resume_error(done_task: asyncio.Task) -> None:
+            try:
+                done_task.result()
+            except Exception as exc:
+                logger.warning("Auto-resume scans failed: %s", exc)
+
+        task.add_done_callback(_log_resume_error)
+    else:
+        logger.info("Auto-resume pending scans disabled; startup stays idle until a scan is requested.")
 
     logger.info("Bug Hunter v%s started. DB ready.", settings.app_version)
     yield
     await event_bus.close()
+    await result_service.close()
 
 
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -95,7 +111,7 @@ async def custom_redoc():
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"})
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
 
 # ---- frontend SPA ----

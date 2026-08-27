@@ -152,13 +152,17 @@ class AdaptiveOrchestrator:
             if initial_state == TaskState.READY:
                 # Map 0-100 priority to P0-P4 scheduler tiers
                 tier = 0 if priority >= 95 else (1 if priority >= 80 else (2 if priority >= 50 else (3 if priority >= 20 else 4)))
-                resource_scheduler.enqueue_task(
+                enqueued = resource_scheduler.enqueue_task(
                     task_id=task_id,
                     module_name=task_type,
                     target=target,
                     priority=tier,
                     payload={"task": task.to_dict()},
                 )
+                if not enqueued:
+                    self.tasks.pop(task_id, None)
+                    self._idempotency_registry.discard(idem_key)
+                    return None
 
             logger.info("Submitted task %s [%s on %s] Priority: %d State: %s", task_id, task_type, target, priority, initial_state.value)
             return task
@@ -168,9 +172,11 @@ class AdaptiveOrchestrator:
         if not self._is_active or self._paused:
             return []
 
+        event_scan_id = event_data.get("scan_id") or self.scan_id
+
         # Check kill switch
-        if kill_switch_manager.is_stopped(self.scan_id):
-            logger.info("Kill switch active for %s, skipping event ingestion", self.scan_id)
+        if kill_switch_manager.is_stopped(event_scan_id):
+            logger.info("Kill switch active for %s, skipping event ingestion", event_scan_id)
             return []
 
         opportunities = opportunity_engine.evaluate_event(event_type, event_data)
@@ -187,7 +193,7 @@ class AdaptiveOrchestrator:
                 priority=opp.priority,
                 worker_class=opp.recommended_worker,
                 dependencies=[],  # Fast path validation runs immediately
-                context=opp.context,
+                context={"scan_id": event_scan_id, "trigger_event": event_type, **opp.context},
                 parent_task_id=parent_id,
                 lineage_reason=lineage,
             )
@@ -195,11 +201,18 @@ class AdaptiveOrchestrator:
                 created_tasks.append(task)
                 # Emit live event to UI
                 await event_bus.publish({
+                    "scan_id": event_scan_id,
+                    "event_type": "orchestrator.opportunity_escalated",
                     "type": "orchestrator.opportunity_escalated",
-                    "opportunity": opp.to_dict(),
-                    "task_id": task.task_id,
-                    "target": opp.target_url,
-                    "priority": opp.priority,
+                    "category": "ORCHESTRATOR",
+                    "severity": "info",
+                    "message": f"Adaptive orchestrator escalated {opp.opportunity_type.value} on {opp.target_url}",
+                    "data": {
+                        "opportunity": opp.to_dict(),
+                        "task_id": task.task_id,
+                        "target": opp.target_url,
+                        "priority": opp.priority,
+                    },
                     "timestamp": time.time(),
                 })
 
@@ -225,13 +238,17 @@ class AdaptiveOrchestrator:
                     if not unmet:
                         other_task.status = TaskState.READY
                         tier = 0 if other_task.priority >= 95 else (1 if other_task.priority >= 80 else 2)
-                        resource_scheduler.enqueue_task(
+                        enqueued = resource_scheduler.enqueue_task(
                             task_id=other_id,
                             module_name=other_task.task_type,
                             target=other_task.target,
                             priority=tier,
                             payload={"task": other_task.to_dict()},
                         )
+                        if not enqueued:
+                            other_task.status = TaskState.BLOCKED
+                            other_task.error = "scheduler_queue_saturated"
+                            continue
                         logger.info("Unblocked dependent task %s [%s] -> READY", other_id, other_task.task_type)
 
     async def mark_task_failed(self, task_id: str, error_msg: str) -> None:
@@ -246,13 +263,19 @@ class AdaptiveOrchestrator:
                 task.status = TaskState.READY
                 task.error = f"Retry {task.retry_count}: {error_msg}"
                 tier = 0 if task.priority >= 95 else (1 if task.priority >= 80 else 2)
-                resource_scheduler.enqueue_task(
+                enqueued = resource_scheduler.enqueue_task(
                     task_id=task_id,
                     module_name=task.task_type,
                     target=task.target,
                     priority=tier,
                     payload={"task": task.to_dict()},
                 )
+                if not enqueued:
+                    task.status = TaskState.FAILED
+                    task.completed_at = time.time()
+                    task.error = "scheduler_queue_saturated"
+                    logger.error("Task %s retry rejected because scheduler queue is saturated.", task_id)
+                    return
                 logger.warning("Task %s failed (%s), scheduled retry %d/%d", task_id, error_msg, task.retry_count, task.max_retries)
             else:
                 task.status = TaskState.FAILED

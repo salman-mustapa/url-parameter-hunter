@@ -5,6 +5,7 @@ import logging
 import re
 import socket
 from typing import Any, List, Optional
+from urllib.parse import urljoin, urlparse
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.tools.nmap_adapter import NmapAdapter
 from app.core.config import settings
 from app.core.rate_limit import RateLimiter
+from app.core.resource_governor import resource_governor
 from app.core.resource_guard import resource_guard
+from app.core.resource_monitor import ResourceMonitor
 from app.core.sanitizer import clean_banner, sanitize_text
 from app.models.models import Asset, Port, Service
 from app.scanners.base import ScanContext
@@ -154,15 +157,13 @@ async def _grab_banner(host: str, port: int, timeout: float = 1.2) -> str | None
 
     def do_grab():
         try:
-            s = socket.create_connection((host, port), timeout=timeout)
-            s.settimeout(timeout)
-            if port in (80, 8080, 8443, 8000, 3000, 5000, 2082, 2083, 2086, 2087, 8888, 8880, 9000):
-                s.sendall(b"HEAD / HTTP/1.0\r\nHost: " + host.encode() + b"\r\n\r\n")
-            elif port in (21, 25, 110, 143):
-                pass
-            raw = s.recv(512)
-            s.close()
-            return clean_banner(raw)
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                sock.settimeout(timeout)
+                if port in (80, 8080, 8443, 8000, 3000, 5000, 2082, 2083, 2086, 2087, 8888, 8880, 9000):
+                    safe_host = host.encode("ascii", errors="ignore")[:253]
+                    sock.sendall(b"HEAD / HTTP/1.0\r\nHost: " + safe_host + b"\r\n\r\n")
+                raw = sock.recv(512)
+                return clean_banner(raw)
         except Exception:
             return None
 
@@ -181,6 +182,201 @@ async def _check_port(host: str, port: int, timeout: float) -> bool:
         return True
     except Exception:
         return False
+
+
+async def _probe_http_on_port(ctx: ScanContext, db: AsyncSession, asset_id: str, host: str, port: int) -> None:
+    """Perform HTTP probe on non-standard open port to detect web services, redirect mapping, and login forms."""
+    if port in (80, 443):
+        return
+
+    from app.models.models import URL
+    from app.scanners.http import fetch_http
+
+    for proto in ["http", "https"]:
+        url = f"{proto}://{host}:{port}/"
+        if not ctx.scope.url_allowed(url):
+            continue
+        try:
+            current_url = url
+            resp = None
+            for _ in range(max(0, settings.nonstandard_http_probe_max_redirects) + 1):
+                if not ctx.scope.url_allowed(current_url):
+                    await ctx.emit(
+                        "scope.redirect_blocked",
+                        f"Blocked out-of-scope redirect while probing {url}.",
+                        source_url=url,
+                        blocked_url=current_url,
+                        severity="warn",
+                    )
+                    resp = None
+                    break
+                resp = await fetch_http(
+                    current_url,
+                    timeout=min(5.0, settings.http_timeout_seconds),
+                    max_bytes=max(32768, settings.nonstandard_http_probe_max_bytes),
+                )
+                if resp is None:
+                    break
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = resp.headers.get("location")
+                if not location:
+                    break
+                next_url = urljoin(current_url, location)
+                if next_url == current_url:
+                    break
+                current_url = next_url
+
+            if resp is None:
+                continue
+            if resp.status_code < 500:
+                detected_url = current_url
+                if not ctx.scope.url_allowed(detected_url):
+                    continue
+                body = resp.text.lower()
+                headers_str = "".join(f"{k}: {v}\n" for k, v in resp.headers.items()).lower()
+
+                content_type = "web_page"
+                tech = None
+                if any(k in body for k in ["pma_username", "pma_password", "welcome to phpmyadmin", "phpmyadmin"]):
+                    tech = "phpMyAdmin"
+                    content_type = "login_form"
+                elif any(k in body for k in ["jenkins", "j_username", "j_password"]):
+                    tech = "Jenkins"
+                    content_type = "login_form"
+                elif any(k in body or k in headers_str for k in ["webmin", "session login", "mini_httpd"]):
+                    tech = "Webmin"
+                    content_type = "login_form"
+                elif any(k in body for k in ["tomcat", "manager app", "tomcat manager"]):
+                    tech = "Tomcat"
+                    content_type = "login_form"
+                elif "login" in body and ("username" in body or "password" in body or "email" in body):
+                    content_type = "login_form"
+
+                server_hdr = resp.headers.get("server", "")
+                if server_hdr:
+                    await ctx.emit(
+                        "tech.identified",
+                        f"Technology identified on {host}:{port}: Server Banner: {server_hdr}",
+                        host=host,
+                        port=port,
+                        technology=server_hdr,
+                    )
+
+                if tech:
+                    await ctx.emit(
+                        "tech.identified",
+                        f"Technology identified on {host}:{port}: {tech}",
+                        host=host,
+                        port=port,
+                        technology=tech,
+                    )
+
+                # Emit http.service.discovered event
+                await ctx.emit(
+                    "http.service.discovered",
+                    f"HTTP Service discovered on {host}:{port} ({detected_url})",
+                    host=host,
+                    port=port,
+                    url=detected_url,
+                    content_type=content_type,
+                    technology=tech,
+                    severity="info",
+                )
+
+                # Save to DB
+                existing_url = (await db.execute(
+                    select(URL).where(URL.asset_id == asset_id, URL.url == detected_url)
+                )).scalar_one_or_none()
+
+                if not existing_url:
+                    parsed_det = urlparse(detected_url)
+                    new_url = URL(
+                        asset_id=asset_id,
+                        url=detected_url,
+                        path=parsed_det.path or "/",
+                        status_code=resp.status_code,
+                        content_type=content_type,
+                    )
+                    db.add(new_url)
+                    await db.flush()
+
+                credential_option = ctx.options.get("credential_audit")
+                credential_audit_enabled = (
+                    bool(credential_option)
+                    if credential_option is not None
+                    else settings.credential_audit_enabled
+                    or ctx.profile == "adversary_simulation"
+                )
+
+                # Credential checks are opt-in except in explicitly authorized adversary simulation.
+                if content_type == "login_form" and credential_audit_enabled:
+                    from app.validation.brute_force import controlled_brute_force_validator
+                    from app.services.results import result_service
+                    from app.validation.result import NormalizedValidationResult
+
+                    brute_cands = []
+                    if tech == "phpMyAdmin":
+                        brute_cands = await controlled_brute_force_validator.validate_phpmyadmin(
+                            detected_url,
+                            max_attempts=settings.credential_audit_max_attempts,
+                            delay_seconds=settings.credential_audit_delay_seconds,
+                        )
+                    else:
+                        brute_cands = await controlled_brute_force_validator.validate_login_portal(
+                            detected_url,
+                            max_attempts=settings.credential_audit_max_attempts,
+                            delay_seconds=settings.credential_audit_delay_seconds,
+                        )
+
+                    for cand in brute_cands:
+                        norm_res = NormalizedValidationResult(
+                            adapter_name="controlled_brute_force",
+                            vulnerability_type=cand.finding_type,
+                            title=cand.title,
+                            severity=cand.severity,
+                            confidence=cand.confidence,
+                            evidence_level=cand.evidence_level,
+                            target_host=host,
+                            endpoint_url=cand.url,
+                            cwe_id="CWE-287" if cand.finding_type == "default_credentials" else "CWE-307",
+                            description=f"Authentication policy validation on non-standard port login form {cand.url}: {cand.title}.",
+                            impact_matrix=cand.impact_matrix,
+                            remediation=cand.remediation,
+                            poc_command=cand.poc_curl,
+                            reproduction_steps=cand.reproduction_steps,
+                            request_metadata={"url": cand.url, "technique": cand.technique, "discovery_method": "port_probe"},
+                            response_metadata=cand.evidence,
+                            actual_result=cand.title,
+                            expected_result="Application should enforce rate-limiting / lockout and reject default passwords.",
+                        )
+                        try:
+                            await result_service.upsert_finding(
+                                db,
+                                scan_id=ctx.scan_id,
+                                asset_id=asset_id,
+                                finding_type=norm_res.vulnerability_type,
+                                title=norm_res.title,
+                                severity=norm_res.severity,
+                                confidence=norm_res.confidence,
+                                evidence_level=norm_res.evidence_level,
+                                cwe_id=norm_res.cwe_id,
+                                cvss_score=norm_res.cvss_score,
+                                description=norm_res.description,
+                                impact=norm_res.business_impact or "Credential compromise",
+                                technical_details=norm_res.technical_details,
+                                remediation=norm_res.remediation,
+                                root_cause=norm_res.root_cause or "Default credentials left unchanged.",
+                                expected_result=norm_res.expected_result,
+                                actual_result=norm_res.actual_result,
+                                evidence=norm_res.response_metadata,
+                            )
+                            logger.info("CONFIRMED PORT SERVICE BRUTE FORCE FINDING on %s:%d: %s", host, port, cand.title)
+                        except Exception as save_err:
+                            logger.debug("Failed to save port brute force finding: %s", save_err)
+                break
+        except Exception:
+            continue
 
 
 async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
@@ -217,7 +413,15 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     ports_to_scan = priority_ports + other_ports
 
     limiter = RateLimiter(settings.port_rps)
-    asset_sem = asyncio.Semaphore(10)
+    requested_asset_concurrency = min(settings.max_concurrent_hosts, settings.max_port_hosts)
+    asset_concurrency = ResourceMonitor.calculate_optimal_concurrency(
+        max(1, requested_asset_concurrency)
+    )
+    asset_sem = asyncio.Semaphore(max(1, asset_concurrency))
+    port_probe_sem = asyncio.Semaphore(max(1, settings.max_concurrent_port_probes))
+    service_validation_sem = asyncio.Semaphore(
+        max(1, settings.max_concurrent_service_validations)
+    )
 
     from app.core.db import AsyncSessionLocal
 
@@ -236,10 +440,20 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                     found_ips = list(dict.fromkeys(
                         a[4][0] for a in addr_info if a[0] in (socket.AF_INET, socket.AF_INET6)
                     ))
+                    found_ips = [ip for ip in found_ips if ctx.scope.ip_allowed(ip)]
                     if found_ips:
                         resolved_ip = found_ips[0]
                 except Exception:
                     pass
+
+            if resolved_ip and not ctx.scope.ip_allowed(resolved_ip):
+                await ctx.emit(
+                    "scope.ip_blocked",
+                    f"Resolved address blocked by network scope policy for {target_host}.",
+                    host=target_host,
+                    severity="warn",
+                )
+                return
 
             probe_target = hostname or resolved_ip
             if not probe_target:
@@ -250,20 +464,27 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             open_ports: list[int] = []
 
             async def probe_single(p: int):
-                await limiter.wait()
-                is_open = await _check_port(probe_target, p, timeout)
-                if not is_open and resolved_ip and resolved_ip != probe_target:
-                    is_open = await _check_port(resolved_ip, p, timeout)
-                if is_open:
-                    open_ports.append(p)
-                    # Trigger immediate background analysis without waiting for complete port scan to finish
-                    from app.orchestration.cve_pipeline import trigger_immediate_cve_pipeline
-                    asyncio.create_task(
-                        trigger_immediate_cve_pipeline(ctx, asset_id, probe_target, resolved_ip, p)
-                    )
+                if not ctx.scope.port_allowed(p):
+                    return
+                async with port_probe_sem:
+                    await limiter.wait()
+                    is_open = await _check_port(probe_target, p, timeout)
+                    if not is_open and resolved_ip and resolved_ip != probe_target:
+                        is_open = await _check_port(resolved_ip, p, timeout)
+                    if is_open:
+                        open_ports.append(p)
+                        await ctx.emit(
+                            "scan.port",
+                            f"Open port detected early: {target_host}:{p}/tcp",
+                            host=target_host,
+                            port=p,
+                            severity="info",
+                        )
 
-            chunk_size = 60
+            chunk_size = max(1, settings.max_concurrent_port_probes)
             for i in range(0, len(ports_to_scan), chunk_size):
+                if not resource_governor.should_admit_task(is_high_priority=True):
+                    await asyncio.sleep(0.2)
                 chunk = ports_to_scan[i:i + chunk_size]
                 await asyncio.gather(*[probe_single(p) for p in chunk], return_exceptions=True)
 
@@ -358,6 +579,48 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                     )
 
                 await s_db.commit()
+
+            if open_ports:
+                from app.orchestration.cve_pipeline import (
+                    trigger_host_nmap_vuln_pipeline,
+                    trigger_immediate_cve_pipeline,
+                )
+
+                async def validate_service(port_number: int) -> None:
+                    async with service_validation_sem:
+                        await trigger_immediate_cve_pipeline(
+                            ctx, asset_id, probe_target, resolved_ip, port_number
+                        )
+
+                async def validate_services() -> None:
+                    await asyncio.gather(
+                        *(validate_service(p) for p in sorted(set(open_ports))),
+                        return_exceptions=True,
+                    )
+
+                async def probe_http_services() -> None:
+                    non_std_ports = [p for p in open_ports if p not in (80, 443)]
+                    if not non_std_ports:
+                        return
+                    await ctx.emit(
+                        "scan.port",
+                        f"Starting HTTP probing on {len(non_std_ports)} non-standard port(s) for technology and redirect detection...",
+                        host=target_host,
+                    )
+                    async with AsyncSessionLocal() as s_db2:
+                        for p in non_std_ports:
+                            try:
+                                await _probe_http_on_port(ctx, s_db2, asset_id, target_host, p)
+                            except Exception as probe_err:
+                                logger.debug("HTTP probe error on %s:%d: %s", target_host, p, probe_err)
+                        await s_db2.commit()
+
+                await asyncio.gather(
+                    trigger_host_nmap_vuln_pipeline(ctx, asset_id, probe_target, open_ports),
+                    validate_services(),
+                    probe_http_services(),
+                    return_exceptions=True,
+                )
 
     tasks = [_scan_single_asset(a.id, a.hostname, a.fqdn, a.ip) for a in assets]
     await asyncio.gather(*tasks, return_exceptions=True)

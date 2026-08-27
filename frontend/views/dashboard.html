@@ -59,6 +59,17 @@
           </select>
         </div>
 
+        <div class="input-group-option">
+          <label for="profileSelect">Scan Profile</label>
+          <select id="profileSelect" class="custom-select">
+            <option value="quick">⚡ Quick — pemetaan prioritas tinggi</option>
+            <option value="balanced" selected>⚖️ Balanced — aman, adaptif, dan lengkap</option>
+            <option value="deep">🔬 Deep — validasi terkontrol</option>
+            <option value="adversary_simulation">🛡️ Adversary Simulation — perlu otorisasi</option>
+          </select>
+          <input id="authorizationReferenceInput" type="text" placeholder="Referensi otorisasi (wajib untuk adversary simulation)" autocomplete="off" />
+        </div>
+
         <div class="input-group-option engine-status-group">
           <label>AI & Security Engine</label>
           <div class="engine-status-pill">

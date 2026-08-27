@@ -57,6 +57,7 @@ class ScanManager:
             AssessmentProfile.PENTEST,
             AssessmentProfile.ADVERSARY_SIMULATION,
             "quick",
+            "balanced",
             "standard",
             "deep",
             "deep_bug_hunt",
@@ -88,13 +89,19 @@ class ScanManager:
             if prof in (AssessmentProfile.ADVERSARY_SIMULATION, "adversary_simulation", "full", "aggressive", "max"):
                 val_level = ValidationLevel.L4_HIGH_RISK
             elif prof in (AssessmentProfile.PENTEST, AssessmentProfile.DEEP_BUG_HUNT, "deep", "deep_bug_hunt", "pentest"):
-                val_level = ValidationLevel.L4_HIGH_RISK  # Full aggressive capabilities without restriction
+                val_level = ValidationLevel.L3_CONTROLLED
             elif prof in ("passive", "osint"):
                 val_level = ValidationLevel.L1_PASSIVE
             elif prof == "observe":
                 val_level = ValidationLevel.L0_OBSERVE
             else:
                 val_level = ValidationLevel.L2_SAFE_ACTIVE
+
+        if val_level == ValidationLevel.L4_HIGH_RISK:
+            if prof not in (AssessmentProfile.ADVERSARY_SIMULATION, "adversary_simulation", "full", "aggressive", "max"):
+                raise ValueError("L4_HIGH_RISK is only available through the adversary_simulation profile.")
+            if not authorization_reference or len(authorization_reference.strip()) < 6:
+                raise ValueError("L4_HIGH_RISK requires an explicit written authorization reference.")
 
         is_aggressive = val_level in (ValidationLevel.L3_CONTROLLED, ValidationLevel.L4_HIGH_RISK)
 
@@ -113,6 +120,10 @@ class ScanManager:
             "max_urls": settings.max_urls_per_scan,
             "max_runtime_seconds": settings.max_runtime_minutes * 60,
             "validation_level": val_level,
+            "authorization_reference": authorization_reference,
+            "authorized_high_risk": val_level == ValidationLevel.L4_HIGH_RISK,
+            "performance_mode": settings.performance_mode,
+            "strict_scope": True,
         }
 
         scan_id = f"scan_{int(time.time())}_{uuid.uuid4().hex[:6]}_{host.replace('.', '_')}"
@@ -164,16 +175,53 @@ class ScanManager:
         ev.set()
         self._pause_events[scan_id] = ev
         self._stop_flags[scan_id] = False
-        task = asyncio.create_task(self._pipeline(scan_id, root_domain, profile, options))
+        task = asyncio.create_task(
+            self._run_with_timeout(scan_id, root_domain, profile, options)
+        )
         self._running[scan_id] = task
 
-    async def resume_pending_scans(self) -> None:
+        def _cleanup(done_task: asyncio.Task) -> None:
+            self._running.pop(scan_id, None)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("Scan pipeline task ended with error for %s: %s", scan_id, exc)
+
+        task.add_done_callback(_cleanup)
+
+    async def _run_with_timeout(
+        self,
+        scan_id: str,
+        root_domain: str,
+        profile: str,
+        options: Dict[str, Any],
+    ) -> None:
+        timeout_seconds = max(30.0, float(options.get("max_runtime_seconds") or settings.max_runtime_minutes * 60))
+        try:
+            await asyncio.wait_for(
+                self._pipeline(scan_id, root_domain, profile, options),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Scan %s exceeded its hard runtime limit of %.0f seconds.", scan_id, timeout_seconds)
+            await self._finish_status(scan_id, "timeout")
+            await event_bus.publish(result_service.make_event(
+                scan_id,
+                "scan.timeout",
+                f"Scan stopped after reaching the {timeout_seconds:.0f}s runtime budget.",
+                severity="error",
+            ))
+
+    async def resume_pending_scans(self, max_scans: Optional[int] = None) -> None:
         """Startup handler to rehydrate and resume running/queued scans."""
         async with async_session_scope() as db:
-            pending_scans = (await db.execute(
-                select(Scan).where(Scan.status.in_(["running", "queued"]))
-            )).scalars().all()
-            
+            stmt = select(Scan).where(Scan.status.in_(["running", "queued"])).order_by(Scan.created_at.desc())
+            if max_scans is not None:
+                stmt = stmt.limit(max(0, int(max_scans)))
+            pending_scans = (await db.execute(stmt)).scalars().all()
+
             for scan in pending_scans:
                 logger.info("Resuming pending/interrupted scan %s for %s", scan.id, scan.root_domain)
                 self._run(scan.id, scan.root_domain, scan.profile, scan.options)
@@ -225,14 +273,27 @@ class ScanManager:
         include_subdomains = options.get("include_subdomains", True)
 
         if not include_subdomains:
-            scope = ScopeEngine(target_host, allowed_hosts=[target_host], recursive=False)
+            scope = ScopeEngine(
+                target_host,
+                allowed_hosts=[target_host],
+                recursive=False,
+                allow_private_networks=settings.allow_private_networks,
+            )
         else:
-            scope = ScopeEngine(root_domain, recursive=True)
+            scope = ScopeEngine(
+                root_domain,
+                recursive=True,
+                allow_private_networks=settings.allow_private_networks,
+            )
 
         limiter = RateLimiter(settings.rate_limit_rps)
         ctx = ScanContext(scan_id, scope, profile, options, limiter)
 
         start_time = time.time()
+        phase_failures: list[dict[str, str]] = []
+        session_ctx: Optional[SessionContext] = None
+        val_stop_event: Optional[asyncio.Event] = None
+        val_worker_task: Optional[asyncio.Task] = None
         try:
             # Rehydrate from checkpoint if present
             async with async_session_scope() as db:
@@ -297,6 +358,7 @@ class ScanManager:
                         await subdomain.run(ctx, db, root_domain)
                 except Exception as phase_err:
                     logger.warning("Discovery phase warning on %s: %s", scan_id, phase_err)
+                    phase_failures.append({"phase": "discovery", "error": str(phase_err)[:300]})
 
             try:
                 security_engine.complete_discovery(scan_id)
@@ -319,6 +381,7 @@ class ScanManager:
                         await dns.run(ctx, db, root_domain)
                 except Exception as phase_err:
                     logger.warning("DNS phase warning on %s: %s", scan_id, phase_err)
+                    phase_failures.append({"phase": "dns", "error": str(phase_err)[:300]})
 
             # ---- Phase C (parallel): Port scan || HTTP probe + cert + tech ----
             await ctx.emit(
@@ -337,6 +400,7 @@ class ScanManager:
                             await port.run(ctx, db, root_domain)
                     except Exception as phase_err:
                         logger.warning("Port scan phase warning on %s: %s", scan_id, phase_err)
+                        phase_failures.append({"phase": "network", "error": str(phase_err)[:300]})
 
             async def run_http():
                 if not kill_switch_manager.is_stopped(scan_id, "web"):
@@ -346,6 +410,7 @@ class ScanManager:
                             await http.run(ctx, db, root_domain)
                     except Exception as phase_err:
                         logger.warning("HTTP probe phase warning on %s: %s", scan_id, phase_err)
+                        phase_failures.append({"phase": "http", "error": str(phase_err)[:300]})
 
             await asyncio.gather(run_port(), run_http())
 
@@ -373,7 +438,6 @@ class ScanManager:
 
             try:
                 from app.intelligence.llm_client import llm_client
-                from app.models.models import Asset, Port, URL, Technology
 
                 security_engine.start_testing(scan_id)
                 app_model = security_engine.get_app_model(scan_id)
@@ -527,6 +591,7 @@ class ScanManager:
                                     )
                 except Exception as phase_err:
                     logger.warning("Web discovery phase warning on %s: %s", scan_id, phase_err)
+                    phase_failures.append({"phase": "web_discovery", "error": str(phase_err)[:300]})
 
             # ---- Phase E: Security intelligence & deep validation ----
             if options.get("security_checks", True) and profile != "passive" and not kill_switch_manager.is_stopped(scan_id, "validation"):
@@ -544,6 +609,7 @@ class ScanManager:
                         await security.run(ctx, db, root_domain)
                 except Exception as phase_err:
                     logger.warning("Security validation phase warning on %s: %s", scan_id, phase_err)
+                    phase_failures.append({"phase": "validation", "error": str(phase_err)[:300]})
 
             # Drain and stop continuous validation worker
             val_stop_event.set()
@@ -574,6 +640,7 @@ class ScanManager:
                         await screenshot.run(ctx, db, root_domain)
                 except Exception as phase_err:
                     logger.warning("Screenshot phase warning on %s: %s", scan_id, phase_err)
+                    phase_failures.append({"phase": "evidence", "error": str(phase_err)[:300]})
 
             try:
                 security_engine.start_reporting(scan_id)
@@ -582,15 +649,25 @@ class ScanManager:
                 logger.debug("SecurityEngine complete_scan: %s", se_err)
 
             # ---- Complete Scan & Update Summary ----
+            completion_status = "degraded" if phase_failures else "completed"
             await ctx.emit(
                 "pipeline.stage",
-                f"🎉 Pentest completed for {root_domain}. Security report compiled.",
+                (
+                    f"Assessment completed for {root_domain}. Security report compiled."
+                    if not phase_failures
+                    else f"Assessment finished in DEGRADED state for {root_domain}; {len(phase_failures)} phase(s) were incomplete."
+                ),
                 stage="REPORT",
                 tool="dossier_builder",
                 progress=100,
-                severity="info",
+                severity="warn" if phase_failures else "info",
             )
-            await self._complete(scan_id, root_domain)
+            await self._complete(
+                scan_id,
+                root_domain,
+                status=completion_status,
+                coverage_failures=phase_failures,
+            )
         except asyncio.CancelledError:
             if not self._stop_flags.get(scan_id):
                 raise
@@ -604,10 +681,25 @@ class ScanManager:
                 scan_id, "scan.stopped", "Scan stopped by operator", severity="warn"))
         except Exception as exc:
             logger.exception("pipeline failed for %s", scan_id)
-            await self._finish_status(scan_id, "partial_failure")
+            await self._finish_status(scan_id, "failed")
             await event_bus.publish(result_service.make_event(
                 scan_id, "scan.failed", f"Scan error: {exc}", severity="error"))
         finally:
+            if val_stop_event is not None:
+                val_stop_event.set()
+            if val_worker_task is not None and not val_worker_task.done():
+                val_worker_task.cancel()
+                try:
+                    await val_worker_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as worker_err:
+                    logger.debug("Validation worker cleanup error for %s: %s", scan_id, worker_err)
+            if session_ctx is not None:
+                try:
+                    await session_ctx.close()
+                except Exception as session_err:
+                    logger.debug("Session cleanup error for %s: %s", scan_id, session_err)
             self._running.pop(scan_id, None)
             self._pause_events.pop(scan_id, None)
             self._stop_flags.pop(scan_id, None)
@@ -670,7 +762,14 @@ class ScanManager:
                 scan.completed_at = datetime.now(timezone.utc)
                 await db.commit()
 
-    async def _complete(self, scan_id: str, root_domain: str) -> None:
+    async def _complete(
+        self,
+        scan_id: str,
+        root_domain: str,
+        *,
+        status: str = "completed",
+        coverage_failures: Optional[list[dict[str, str]]] = None,
+    ) -> None:
         async with async_session_scope() as db:
             scan = await db.get(Scan, scan_id)
             if not scan:
@@ -685,7 +784,7 @@ class ScanManager:
             findings = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == scan_id))).scalar() or 0
             screenshots_count = (await db.execute(select(func.count()).select_from(Screenshot).where(Screenshot.scan_id == scan_id))).scalar() or 0
 
-            scan.status = "completed"
+            scan.status = status
             scan.completed_at = datetime.now(timezone.utc)
             scan.progress = {
                 "assets": assets,
@@ -696,6 +795,8 @@ class ScanManager:
                 "certificates": certs,
                 "findings": findings,
                 "screenshots": screenshots_count,
+                "coverage_complete": not coverage_failures,
+                "coverage_failures": coverage_failures or [],
             }
 
             # Update Domain entity overview (§36)
@@ -711,10 +812,13 @@ class ScanManager:
 
             await db.commit()
 
+        event_type = "scan.completed" if status == "completed" else "scan.degraded"
         await event_bus.publish(result_service.make_event(
-            scan_id, "scan.completed", f"Scan completed for {root_domain}",
+            scan_id, event_type, f"Scan {status} for {root_domain}",
             assets=assets, urls=urls, ports=ports, parameters=params, technologies=techs,
-            certificates=certs, findings=findings, severity="success"))
+            certificates=certs, findings=findings,
+            coverage_failures=coverage_failures or [],
+            severity="success" if status == "completed" else "warn"))
 
     async def _run_continuous_validation_worker(
         self,

@@ -82,8 +82,6 @@ class Base(DeclarativeBase):
 
 async def init_db() -> None:
     from app.models import models  # noqa: F401 ensure models registered
-    from app.models.models import User
-    from app.core.auth import hash_password
     import asyncio as _asyncio
 
     # Retry logic for Docker environments where PostgreSQL DNS may not be immediately available
@@ -285,41 +283,46 @@ async def init_db() -> None:
             except Exception:
                 pass
 
-    # Seed strictly only requested initial accounts (Admin: s4lm4n, User: mances)
-    async with AsyncSessionLocal() as db:
-        from sqlalchemy import select, delete
+    # Optional one-time bootstrap. Existing accounts are never deleted, reset, or modified.
+    if settings.seed_default_users:
+        from sqlalchemy import select
+        from app.core.auth import hash_password
+        from app.models.models import User
 
-        # Clean up any non-default accounts if present
-        await db.execute(delete(User).where(User.username.in_(["admin", "hunter"])))
-
-        # 1. Admin: s4lm4n / S4lm4n.Must4p4
-        salman = (await db.execute(select(User).where(User.username == "s4lm4n"))).scalar_one_or_none()
-        if not salman:
-            db.add(User(
-                username="s4lm4n",
-                email="salman@hunter.local",
-                hashed_password=hash_password("S4lm4n.Must4p4"),
-                role="admin",
-                is_active=True,
-            ))
-        else:
-            salman.hashed_password = hash_password("S4lm4n.Must4p4")
-            salman.role = "admin"
-            salman.is_active = True
-
-        # 2. Testing User: mances / tOOr12345*
-        mances = (await db.execute(select(User).where(User.username == "mances"))).scalar_one_or_none()
-        if not mances:
-            db.add(User(
-                username="mances",
-                email="mances@hunter.local",
-                hashed_password=hash_password("tOOr12345*"),
-                role="user",
-                is_active=True,
-            ))
-        else:
-            mances.hashed_password = hash_password("tOOr12345*")
-            mances.role = "user"
-            mances.is_active = True
-
-        await db.commit()
+        bootstrap_accounts = [
+            (
+                settings.bootstrap_admin_username,
+                settings.bootstrap_admin_email,
+                settings.bootstrap_admin_password,
+                "admin",
+            ),
+            (
+                settings.bootstrap_user_username,
+                settings.bootstrap_user_email,
+                settings.bootstrap_user_password,
+                "user",
+            ),
+        ]
+        async with AsyncSessionLocal() as db:
+            created = 0
+            for username, email, password, role in bootstrap_accounts:
+                username = (username or "").strip().lower()
+                email = (email or "").strip().lower()
+                if not username or not email or len(password or "") < 12:
+                    continue
+                existing = (await db.execute(
+                    select(User).where((User.username == username) | (User.email == email))
+                )).scalar_one_or_none()
+                if existing:
+                    logger.info("Bootstrap account %s already exists; preserving it unchanged.", username)
+                    continue
+                db.add(User(
+                    username=username,
+                    email=email,
+                    hashed_password=hash_password(password),
+                    role=role,
+                    is_active=True,
+                ))
+                created += 1
+            await db.commit()
+            logger.info("Created %d explicitly configured bootstrap account(s).", created)

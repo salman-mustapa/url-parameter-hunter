@@ -14,14 +14,11 @@ import asyncio
 import hashlib
 import logging
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
-
-from app.validation.result import NormalizedValidationResult
 
 logger = logging.getLogger("validation.brute_force")
 
@@ -124,6 +121,35 @@ class ControlledBruteForceValidator:
         r"login\s+failed",
     ]
 
+    @staticmethod
+    def _origin_port(parsed) -> int:
+        if parsed.port:
+            return parsed.port
+        return 443 if parsed.scheme == "https" else 80
+
+    @classmethod
+    def _same_origin(cls, left: str, right: str) -> bool:
+        left_parsed = urlparse(left)
+        right_parsed = urlparse(right)
+        return (
+            left_parsed.scheme == right_parsed.scheme
+            and (left_parsed.hostname or "").lower() == (right_parsed.hostname or "").lower()
+            and cls._origin_port(left_parsed) == cls._origin_port(right_parsed)
+        )
+
+    @staticmethod
+    def _redacted_password(password: str) -> str:
+        return "[empty]" if password == "" else "[REDACTED]"
+
+    @staticmethod
+    def _password_hash(password: str) -> str:
+        return hashlib.sha256(password.encode()).hexdigest()[:16] + "..."
+
+    @staticmethod
+    def _looks_like_auth_path(value: str) -> bool:
+        lowered = value.lower()
+        return any(part in lowered for part in ("login", "signin", "auth", "session"))
+
     async def _detect_form_fields(self, client: httpx.AsyncClient, url: str) -> Optional[Tuple[str, str, str, Dict[str, str], str, int]]:
         """Detect login form action URL, username field, password field, hidden tokens, final page URL, and GET length."""
         try:
@@ -155,6 +181,9 @@ class ControlledBruteForceValidator:
             action_match = re.search(r'<form[^>]+action=["\']([^"\']*)["\']', html, re.IGNORECASE)
             action = action_match.group(1) if action_match else final_url
             action_url = urljoin(final_url, action)
+            if not self._same_origin(final_url, action_url):
+                logger.debug("Skipping cross-origin login action on %s -> %s", final_url, action_url)
+                return None
 
             # Extract CSRF or hidden fields
             hidden_fields: Dict[str, str] = {}
@@ -171,6 +200,10 @@ class ControlledBruteForceValidator:
         url: str,
         discovered_credentials: Optional[List[Tuple[str, str]]] = None,
         discovered_usernames: Optional[List[str]] = None,
+        *,
+        credential_candidates: Optional[List[Tuple[str, str]]] = None,
+        max_attempts: int = 15,
+        delay_seconds: float = 0.5,
     ) -> List[BruteForceCandidate]:
         """Perform controlled, rate-limited credential audit and brute-force protection analysis.
 
@@ -181,7 +214,7 @@ class ControlledBruteForceValidator:
         """
         candidates: List[BruteForceCandidate] = []
 
-        async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=False) as client:
             form_info = await self._detect_form_fields(client, url)
             if not form_info:
                 return candidates
@@ -199,7 +232,7 @@ class ControlledBruteForceValidator:
                 return candidates
 
             # If baseline POST fails with 404/405/500/redirect loop, do NOT test further
-            if baseline_resp.status_code not in (200, 302, 401):
+            if baseline_resp.status_code not in (200, 301, 302, 303, 307, 308, 401, 403):
                 logger.debug("Action URL %s returned status %d on POST (not active login handler)", action_url, baseline_resp.status_code)
                 return candidates
 
@@ -208,7 +241,11 @@ class ControlledBruteForceValidator:
             # the endpoint is merely serving the static homepage without processing authentication.
             baseline_text = baseline_resp.text
             has_login_failure_feedback = any(re.search(pat, baseline_text, re.IGNORECASE) for pat in self.LOGIN_FAILURE_SIGNATURES)
-            is_identical_to_get = abs(len(baseline_text) - get_len) < 30 and not has_login_failure_feedback
+            is_identical_to_get = (
+                baseline_resp.status_code == 200
+                and abs(len(baseline_text) - get_len) < 30
+                and not has_login_failure_feedback
+            )
 
             if is_identical_to_get:
                 logger.debug("Action URL %s returned unmodified static view on POST; not an active login handler", action_url)
@@ -224,7 +261,7 @@ class ControlledBruteForceValidator:
             successful_failure_responses = 0
 
             # Build credential list: defaults + discovered + username spray
-            all_credentials = list(self.TEST_CREDENTIALS)
+            all_credentials = list(credential_candidates or self.TEST_CREDENTIALS)
 
             # Add discovered credentials from artifacts (SQL dumps, .env files)
             if discovered_credentials:
@@ -243,12 +280,11 @@ class ControlledBruteForceValidator:
                             all_credentials.append(pair)
                 logger.info("Added %d username-spray pairs for testing on %s", len(discovered_usernames) * 5, final_url)
 
-            # Cap total attempts at 60 to prevent abuse
-            max_attempts = min(len(all_credentials), 60)
+            max_attempts = min(len(all_credentials), max(1, min(int(max_attempts or 1), 15)))
+            safe_delay = max(0.5, min(float(delay_seconds or 0.5), 5.0))
             for username, password in all_credentials[:max_attempts]:
                 attempts_made += 1
-                # Enforce safe delay (approx 2 requests/sec)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(safe_delay)
 
                 post_data = {**hidden_fields, user_field: username, pass_field: password}
                 try:
@@ -267,9 +303,15 @@ class ControlledBruteForceValidator:
 
                 # 2. Check for Successful Authentication
                 is_success = False
-                if resp.status_code in (200, 302):
-                    # If redirected away from login or landed on dashboard
-                    if resp.url != action_url and not any(p in str(resp.url).lower() for p in ["login", "signin", "auth"]):
+                if resp.status_code in (200, 301, 302, 303, 307, 308):
+                    location = resp.headers.get("location", "")
+                    redirect_url = urljoin(action_url, location) if location else ""
+                    redirected_to_app = (
+                        bool(redirect_url)
+                        and self._same_origin(final_url, redirect_url)
+                        and not self._looks_like_auth_path(redirect_url)
+                    )
+                    if redirected_to_app:
                         is_success = True
                     elif any(re.search(pat, body_text, re.IGNORECASE) for pat in self.LOGIN_SUCCESS_SIGNATURES):
                         if not any(re.search(fail, body_text, re.IGNORECASE) for fail in self.LOGIN_FAILURE_SIGNATURES):
@@ -287,7 +329,7 @@ class ControlledBruteForceValidator:
             # Finding A: Default Credentials Accepted (CRITICAL)
             if valid_credential_found:
                 u, p = valid_credential_found
-                curl_cmd = f"curl -sk -X POST '{action_url}' -d '{user_field}={u}&{pass_field}={p}'"
+                curl_cmd = f"curl -sk -X POST '{action_url}' -d '{user_field}={u}&{pass_field}=[REDACTED]'"
                 candidates.append(BruteForceCandidate(
                     url=final_url,
                     username_tested=u,
@@ -299,7 +341,7 @@ class ControlledBruteForceValidator:
                     severity="CRITICAL",
                     reproduction_steps=[
                         f"Navigate to login portal: {final_url}",
-                        f"Submit credentials: Username='{u}', Password='{p}'",
+                        f"Submit the internally verified credential for username '{u}' (password redacted; hash prefix recorded in evidence).",
                         "Observe successful authentication and redirection to authorized interface.",
                     ],
                     poc_curl=curl_cmd,
@@ -307,7 +349,8 @@ class ControlledBruteForceValidator:
                         "action_url": action_url,
                         "login_url": final_url,
                         "username": u,
-                        "password_sha256": hashlib.sha256(p.encode()).hexdigest()[:16] + "...",
+                        "password_sha256": self._password_hash(p),
+                        "password_value": self._redacted_password(p),
                         "attempts_count": attempts_made,
                     },
                     impact_matrix={
@@ -321,7 +364,11 @@ class ControlledBruteForceValidator:
                 ))
 
             # Finding B: Missing Lockout & Rate-Limiting Policy (MEDIUM) - ONLY if authentic login processing was verified!
-            elif not lockout_encountered and attempts_made >= len(self.TEST_CREDENTIALS) and successful_failure_responses >= 5:
+            elif (
+                not lockout_encountered
+                and attempts_made >= min(5, max_attempts)
+                and successful_failure_responses >= min(5, attempts_made)
+            ):
                 curl_cmd = f"curl -sk -X POST '{action_url}' -d '{user_field}=admin&{pass_field}=test'"
                 candidates.append(BruteForceCandidate(
                     url=final_url,
@@ -354,6 +401,133 @@ class ControlledBruteForceValidator:
                 ))
 
         return candidates
+
+    async def validate_phpmyadmin(
+        self,
+        url: str,
+        *,
+        max_attempts: int = 5,
+        delay_seconds: float = 0.5,
+    ) -> List[BruteForceCandidate]:
+        """Specific default credentials audit for phpMyAdmin portals."""
+        candidates: List[BruteForceCandidate] = []
+
+        creds = [
+            ("root", ""),
+            ("root", "root"),
+            ("root", "mysql"),
+            ("admin", "admin"),
+            ("root", "password"),
+        ]
+
+        async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=False) as client:
+            try:
+                resp = await client.get(url, headers=_HEADERS)
+                if resp.status_code != 200:
+                    return candidates
+
+                body = resp.text
+                final_url = str(resp.url)
+
+                if not any(k in body.lower() for k in ["pma_username", "pma_password", "welcome to phpmyadmin", "phpmyadmin"]):
+                    return candidates
+
+                token_match = re.search(r'name=["\']token["\']\s+value=["\']([^"\']+)["\']', body, re.IGNORECASE)
+                token = token_match.group(1) if token_match else ""
+
+                hidden_fields = {}
+                if token:
+                    hidden_fields["token"] = token
+
+                action_match = re.search(r'<form[^>]+action=["\']([^"\']*)["\']', body, re.IGNORECASE)
+                action = action_match.group(1) if action_match else "index.php"
+                action_url = urljoin(final_url, action)
+
+                allowed_attempts = min(len(creds), max(1, min(int(max_attempts or 1), 5)))
+                safe_delay = max(0.5, min(float(delay_seconds or 0.5), 5.0))
+                for username, password in creds[:allowed_attempts]:
+                    await asyncio.sleep(safe_delay)
+                    post_data = {
+                        **hidden_fields,
+                        "pma_username": username,
+                        "pma_password": password,
+                        "server": "1",
+                    }
+
+                    try:
+                        post_resp = await client.post(action_url, data=post_data, headers=_HEADERS)
+                        post_body = post_resp.text
+
+                        is_success = False
+                        if post_resp.status_code in (200, 302):
+                            if "logout" in post_body.lower() or "server_sql.php" in post_body.lower() or "db_structure.php" in post_body.lower():
+                                is_success = True
+                            location = post_resp.headers.get("location", "")
+                            redirect_url = urljoin(action_url, location) if location else ""
+                            if (
+                                redirect_url
+                                and self._same_origin(final_url, redirect_url)
+                                and ("index.php" in redirect_url or "server" in redirect_url or "token" in redirect_url)
+                            ):
+                                is_success = True
+
+                        if is_success:
+                            curl_cmd = f"curl -sk -X POST '{action_url}' -d 'pma_username={username}&pma_password=[REDACTED]&server=1'"
+                            candidates.append(BruteForceCandidate(
+                                url=final_url,
+                                username_tested=username,
+                                technique="phpmyadmin_default_credentials",
+                                confidence="CONFIRMED",
+                                evidence_level="E3",
+                                finding_type="default_credentials",
+                                title=f"phpMyAdmin Default Credentials Discovered ({username})",
+                                severity="CRITICAL",
+                                reproduction_steps=[
+                                    f"1. Navigate to phpMyAdmin login portal: {final_url}",
+                                    f"2. Submit the internally verified credential for username {username}; password is redacted in reports.",
+                                    f"3. Verify successful authentication redirects to phpMyAdmin dashboard.",
+                                    f"4. PoC Command:\n```bash\n{curl_cmd}\n```"
+                                ],
+                                poc_curl=curl_cmd,
+                                evidence={
+                                    "username": username,
+                                    "password_sha256": self._password_hash(password),
+                                    "password_value": self._redacted_password(password),
+                                    "port_tech": "phpMyAdmin",
+                                    "endpoint": final_url,
+                                    "technique": "phpmyadmin_default_credentials",
+                                    "status_code": post_resp.status_code,
+                                    "indicator": "Redirected to dashboard or logout option rendered"
+                                },
+                                impact_matrix={"confidentiality": "CRITICAL", "integrity": "CRITICAL", "availability": "HIGH"},
+                                remediation="Change default MySQL/phpMyAdmin passwords immediately. Restrict phpMyAdmin access to authorized network segments."
+                            ))
+                            break
+                    except Exception as post_err:
+                        logger.debug("phpMyAdmin post error on %s: %s", action_url, post_err)
+
+            except Exception as get_err:
+                logger.debug("phpMyAdmin get error on %s: %s", url, get_err)
+
+        return candidates
+
+    async def validate_generic_http_login(
+        self,
+        url: str,
+        discovered_credentials: Optional[List[Tuple[str, str]]] = None,
+        discovered_usernames: Optional[List[str]] = None,
+        *,
+        max_attempts: int = 15,
+        delay_seconds: float = 0.5,
+    ) -> List[BruteForceCandidate]:
+        """Alias wrapper to validate general HTTP form logins using ControlledBruteForceValidator."""
+        return await self.validate_login_portal(
+            url,
+            discovered_credentials,
+            discovered_usernames,
+            max_attempts=max_attempts,
+            delay_seconds=delay_seconds,
+        )
 
 
 # Module-level singleton

@@ -14,6 +14,14 @@ class ReportEngine:
     Produces audit-grade, sanitized security assessment reports in Markdown, HTML, JSON, and ready-to-use PDF.
     """
 
+    @staticmethod
+    def _format_report_time(value: Any, fallback: str) -> str:
+        if not value:
+            return fallback
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
+
     @classmethod
     def generate_markdown(
         cls,
@@ -97,6 +105,9 @@ class ReportEngine:
                 tech_details = f.get("technical_details") or "Observed behavioral deviation or signature pattern match."
                 evidence_info = f.get("evidence")
 
+                found_at = cls._format_report_time(f.get("first_seen"), date_str)
+                confirmed_at = cls._format_report_time(f.get("last_seen"), found_at)
+
                 lines.extend([
                     f"### {code}: [{sev}] {f.get('title')}{cwe}{cvss}",
                     f"",
@@ -104,6 +115,7 @@ class ReportEngine:
                     f"- **Confidence:** `{f.get('confidence', 'CONFIRMED')}`",
                     f"- **Asset Location:** `{f.get('asset_hostname') or target}`",
                     f"- **Endpoint / Parameter:** `{loc}`",
+                    f"- **Discovery Timeline:** Found: `{found_at}` | Confirmed: `{confirmed_at}`",
                     f"",
                     f"#### 1. Summary",
                     f"{f.get('executive_explanation') or f.get('summary') or f.get('description', 'Demonstrated security boundary violation.')}",
@@ -126,26 +138,26 @@ class ReportEngine:
                         f"",
                     ])
 
-                # Reproduction Steps (§21)
+                # Reproduction Steps & PoC Command (§21)
+                lines.extend([
+                    f"#### 5. Reproduction Steps & PoC Command",
+                ])
                 repro_steps = f.get("reproduction_steps")
                 if repro_steps and isinstance(repro_steps, list):
-                    lines.extend([
-                        f"#### 5. Reproduction Steps",
-                    ])
                     for step_idx, step in enumerate(repro_steps, 1):
                         lines.append(f"- **Step {step_idx}:** {step}")
                     lines.append("")
-                else:
-                    lines.extend([
-                        f"#### 5. Proof of Concept (PoC Reproduction)",
-                        f"```bash",
-                        f"{poc}",
-                        f"```",
-                        f"",
-                    ])
+
+                lines.extend([
+                    f"**Proof of Concept Command:**",
+                    f"```bash",
+                    f"{poc}",
+                    f"```",
+                    f"",
+                ])
 
                 if evidence_info and isinstance(evidence_info, dict):
-                    ev_str = json.dumps(evidence_info, indent=2) if evidence_info else ""
+                    ev_str = json.dumps(evidence_info, indent=2, default=str) if evidence_info else ""
                     if ev_str and ev_str != "{}":
                         lines.extend([
                             f"**Captured Evidence Artifact:**  ",
@@ -359,11 +371,23 @@ class ReportEngine:
                                 lines.append(f"| `{info.get('file', key)}` | {info.get('size', '?')} bytes |")
                             lines.append("")
 
-                # Remediation (§21)
+                # Remediation (§21) & References
+                cwe_id = f.get('cwe_id')
+                cve_id = f.get('cve_id')
+                ref_links = []
+                if cwe_id:
+                    digits = "".join(filter(str.isdigit, cwe_id))
+                    if digits:
+                        ref_links.append(f"[Mitre CWE-{digits}](https://cwe.mitre.org/data/definitions/{digits}.html)")
+                if cve_id:
+                    ref_links.append(f"[NVD {cve_id}](https://nvd.nist.gov/vuln/detail/{cve_id})")
+                ref_str = ", ".join(ref_links) if ref_links else "No external references mapped."
+
                 lines.extend([
                     f"#### 6. Remediation & Engineering Fixes",
                     f"{f.get('remediation', 'Apply latest vendor patches and follow secure configuration baselines.')}",
                     f"",
+                    f"- **References:** {ref_str}",
                     f"- **Retest Status:** `{f.get('retest_status', 'PENDING')}`",
                     f"",
                     f"---",
@@ -511,7 +535,7 @@ class ReportEngine:
                     evidence_block = f"""
                     <div class="finding-section">
                         <strong>Sanitized Evidence:</strong>
-                        <pre class="evidence-box"><code>{html.escape(json.dumps(f.get("evidence"), indent=2))}</code></pre>
+                        <pre class="evidence-box"><code>{html.escape(json.dumps(f.get("evidence"), indent=2, default=str))}</code></pre>
                     </div>
                     """
 
@@ -1328,4 +1352,3 @@ Application rejects or safely handles the request without executing unexpected i
 ## Remediation
 {finding.get('remediation') or 'Sanitize input parameters and enforce strict validation.'}
 """
-

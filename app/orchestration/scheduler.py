@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
+from app.core.config import settings
+
 logger = logging.getLogger("orchestration.scheduler")
 
 
@@ -43,7 +45,9 @@ class ResourceAwareScheduler:
 
     def __init__(self, max_concurrency: int = 15) -> None:
         self.max_concurrency = max_concurrency
-        self._queue: asyncio.PriorityQueue[ScheduledTask] = asyncio.PriorityQueue()
+        self._queue: asyncio.PriorityQueue[ScheduledTask] = asyncio.PriorityQueue(
+            maxsize=max(10, settings.scheduler_queue_max_size)
+        )
         self._active_tasks: Dict[str, ScheduledTask] = {}
         self._active_browser_sessions = 0
         self._max_browser_sessions = int(os.getenv("MAX_BROWSER_SESSIONS", "4"))
@@ -55,7 +59,7 @@ class ResourceAwareScheduler:
         target: str,
         priority: int = 2,
         payload: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> bool:
         """Enqueues a task according to its priority tier P0-P4."""
         clamped_prio = min(4, max(0, priority))
         task = ScheduledTask(
@@ -65,8 +69,18 @@ class ResourceAwareScheduler:
             target=target,
             payload=payload or {},
         )
-        self._queue.put_nowait(task)
+        try:
+            self._queue.put_nowait(task)
+        except asyncio.QueueFull:
+            logger.warning(
+                "Scheduler queue saturated (%d); rejected task %s [%s].",
+                self._queue.qsize(),
+                task_id,
+                module_name,
+            )
+            return False
         logger.info("Enqueued task %s [%s on %s] with Priority P%d (Queue size: %d)", task_id, module_name, target, clamped_prio, self._queue.qsize())
+        return True
 
     def get_system_telemetry(self) -> Dict[str, Any]:
         """Returns current resource utilization and queue metrics."""
@@ -89,7 +103,7 @@ class ResourceAwareScheduler:
 
     def reset(self) -> None:
         """Clears queue and active tasks for clean state between scan sessions / test cases."""
-        self._queue = asyncio.PriorityQueue()
+        self._queue = asyncio.PriorityQueue(maxsize=max(10, settings.scheduler_queue_max_size))
         self._active_tasks.clear()
         self._active_browser_sessions = 0
 

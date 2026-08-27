@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+venv/
 storage/
 logs/
 data/
@@ -11,5 +12,4 @@ data/
 .pytest_cache/
 scratch/
 prmpt
-pyproject.toml
-tests/
+implementation_plan.md

@@ -597,6 +597,14 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
     host = asset.hostname
     if not host or not ctx.scope.host_allowed(host):
         return
+    if asset.ip and not ctx.scope.ip_allowed(asset.ip):
+        await ctx.emit(
+            "scope.ip_blocked",
+            f"Web discovery blocked for non-authorized resolved address on {host}.",
+            host=host,
+            severity="warn",
+        )
+        return
 
     # 1. Detect Soft-404 / Custom 404 Baseline
     soft_404_baseline = await soft_404_detector.get_baseline(host)

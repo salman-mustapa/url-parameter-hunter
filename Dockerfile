@@ -81,7 +81,7 @@ EXPOSE 9001
 
 # Health check
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:9001/api/health || exit 1
+    CMD curl -f http://localhost:9001/health || exit 1
 
 # Default Launch Command
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9001"]

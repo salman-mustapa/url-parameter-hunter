@@ -538,6 +538,17 @@
                 </select>
               </div>
 
+              <div class="input-group-option">
+                <label for="profileSelect">Scan Profile</label>
+                <select id="profileSelect" class="custom-select">
+                  <option value="quick">⚡ Quick — pemetaan prioritas tinggi</option>
+                  <option value="balanced" selected>⚖️ Balanced — aman, adaptif, dan lengkap</option>
+                  <option value="deep">🔬 Deep — validasi terkontrol</option>
+                  <option value="adversary_simulation">🛡️ Adversary Simulation — perlu otorisasi</option>
+                </select>
+                <input id="authorizationReferenceInput" type="text" placeholder="Referensi otorisasi (wajib untuk adversary simulation)" autocomplete="off" />
+              </div>
+
               <div class="input-group-option engine-status-group">
                 <label>AI & Security Engine</label>
                 <div class="engine-status-pill">
@@ -2725,22 +2736,22 @@
   <script src="vendor/jstree/jstree.min.js"></script>
 
   <!-- Modular Frontend Architecture -->
-  <script src="js/state.js?v=9.3.0"></script>
-  <script src="js/auth.js?v=9.3.0"></script>
-  <script src="js/navigation.js?v=9.3.1"></script>
-  <script src="js/stream.js?v=9.3.0"></script>
-  <script src="js/scan.js?v=9.3.0"></script>
-  <script src="js/tree.js?v=9.3.0"></script>
-  <script src="js/findings.js?v=9.3.0"></script>
-  <script src="js/modals.js?v=9.3.0"></script>
-  <script src="js/artifacts.js?v=9.3.0"></script>
-  <script src="js/history.js?v=9.3.0"></script>
-  <script src="js/reports.js?v=9.3.0"></script>
-  <script src="js/admin.js?v=9.3.1"></script>
-  <script src="js/search.js?v=9.3.0"></script>
-  <script src="js/mitre.js?v=9.3.0"></script>
-  <script src="js/v4_engine_ui.js?v=9.3.0"></script>
-  <script src="js/app.js?v=9.3.1"></script>
+  <script src="js/state.js?v=9.4.0"></script>
+  <script src="js/auth.js?v=9.4.0"></script>
+  <script src="js/navigation.js?v=9.4.0"></script>
+  <script src="js/stream.js?v=9.4.0"></script>
+  <script src="js/scan.js?v=9.4.0"></script>
+  <script src="js/tree.js?v=9.4.0"></script>
+  <script src="js/findings.js?v=9.4.0"></script>
+  <script src="js/modals.js?v=9.4.0"></script>
+  <script src="js/artifacts.js?v=9.4.0"></script>
+  <script src="js/history.js?v=9.4.0"></script>
+  <script src="js/reports.js?v=9.4.0"></script>
+  <script src="js/admin.js?v=9.4.0"></script>
+  <script src="js/search.js?v=9.4.0"></script>
+  <script src="js/mitre.js?v=9.4.0"></script>
+  <script src="js/v4_engine_ui.js?v=9.4.0"></script>
+  <script src="js/app.js?v=9.4.0"></script>
 </body>
 
 </html>

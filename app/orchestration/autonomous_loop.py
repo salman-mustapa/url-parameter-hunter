@@ -65,6 +65,13 @@ class AutonomousBugHunterLoop:
 
         logger.info("AutonomousLoop: Reacting to technology '%s' on %s", tech_name, target_url)
 
+        self._enqueue_action(
+            action_type="TEST_CVE",
+            target=target_url,
+            priority=2,
+            context={"scan_id": scan_id, "technology": tech_name},
+        )
+
         # Dynamic Action Selection based on technology
         if "wordpress" in tech_name:
             self._enqueue_action(

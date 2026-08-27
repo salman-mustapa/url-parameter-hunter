@@ -16,6 +16,14 @@ services:
       - SECURITY_MODE=CONTROLLED
       - MAX_CONCURRENT_HOSTS=12
       - MAX_CRAWL_DEPTH=3
+      - MAX_HTTP_CONNECTIONS=${MAX_HTTP_CONNECTIONS:-64}
+      - MAX_HTTP_KEEPALIVE_CONNECTIONS=${MAX_HTTP_KEEPALIVE_CONNECTIONS:-16}
+      - MAX_CONCURRENT_PORT_PROBES=${MAX_CONCURRENT_PORT_PROBES:-32}
+      - MAX_CONCURRENT_SERVICE_VALIDATIONS=${MAX_CONCURRENT_SERVICE_VALIDATIONS:-2}
+      - CREDENTIAL_AUDIT_ENABLED=${CREDENTIAL_AUDIT_ENABLED:-true}
+      - NMAP_VULN_ENABLED=${NMAP_VULN_ENABLED:-true}
+      - AUTO_RESUME_SCANS_ON_STARTUP=${AUTO_RESUME_SCANS_ON_STARTUP:-false}
+      - MAX_AUTO_RESUME_SCANS=${MAX_AUTO_RESUME_SCANS:-2}
       # Optional Free Cloud AI API Keys (Zero Local GPU/Disk Required):
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -50,7 +58,7 @@ services:
           cpus: '0.25'
           memory: 128M
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9001/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9001/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

@@ -18,11 +18,24 @@ DEFAULT_SQLITE_URL = f"sqlite+aiosqlite:///{STORAGE_DIR / 'bughunter.db'}"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", str(BASE_DIR / ".env")), extra="ignore")
+    app_env: str = os.getenv("APP_ENV", "development")
     database_url: str = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    jwt_secret: str = os.getenv("JWT_SECRET", "")
+    cookie_secure: bool = os.getenv("COOKIE_SECURE", "false").lower() in ("true", "1", "yes")
+    seed_default_users: bool = os.getenv("SEED_DEFAULT_USERS", "false").lower() in ("true", "1", "yes")
+    bootstrap_admin_username: str = os.getenv("BOOTSTRAP_ADMIN_USERNAME", "")
+    bootstrap_admin_email: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "")
+    bootstrap_admin_password: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+    bootstrap_user_username: str = os.getenv("BOOTSTRAP_USER_USERNAME", "")
+    bootstrap_user_email: str = os.getenv("BOOTSTRAP_USER_EMAIL", "")
+    bootstrap_user_password: str = os.getenv("BOOTSTRAP_USER_PASSWORD", "")
     proxy_pool: str = os.getenv("PROXY_POOL", "")
     oob_callback_host: str = os.getenv("OOB_CALLBACK_HOST", "localhost:9001")
     cors_origins: str = "*"
+    performance_mode: str = os.getenv("PERFORMANCE_MODE", "balanced")
+    low_resource_mode: bool = os.getenv("LOW_RESOURCE_MODE", "false").lower() in ("true", "1", "yes")
+    allow_private_networks: bool = os.getenv("ALLOW_PRIVATE_NETWORKS", "false").lower() in ("true", "1", "yes")
     rate_limit_rps: int = 15
     max_concurrent_hosts: int = 12
     max_assets_per_scan: int = 2500
@@ -35,6 +48,28 @@ class Settings(BaseSettings):
     max_web_hosts: int = 25
     max_http_hosts: int = 30
     http_timeout_seconds: float = 8.0
+    max_http_connections: int = 64
+    max_http_keepalive_connections: int = 16
+    max_concurrent_port_probes: int = 32
+    max_concurrent_service_validations: int = 2
+    max_subprocesses: int = 4
+    subprocess_max_output_bytes: int = 4 * 1024 * 1024
+    scheduler_queue_max_size: int = 1000
+    result_event_queue_size: int = 2000
+    nonstandard_http_probe_max_bytes: int = 262144
+    nonstandard_http_probe_max_redirects: int = 3
+    credential_audit_enabled: bool = True
+    credential_audit_max_attempts: int = 10
+    credential_audit_delay_seconds: float = 0.75
+    nmap_vuln_enabled: bool = True
+    nmap_vuln_timeout_seconds: float = 120.0
+    nmap_vuln_max_ports: int = 12
+    nmap_vuln_script_timeout_seconds: int = 30
+    sse_replay_limit: int = 500
+    sse_client_queue_size: int = 256
+    sse_keepalive_seconds: float = 10.0
+    auto_resume_scans_on_startup: bool = False
+    max_auto_resume_scans: int = 2
     wordlist_path: str = str(BASE_DIR / "wordlists" / "subdomains.txt")
     # AI / LLM Orchestration Configuration
     llm_enabled: bool = os.getenv("LLM_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -54,6 +89,25 @@ class Settings(BaseSettings):
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
 
     app_version: str = "2.0.0"
+
+    def model_post_init(self, __context) -> None:
+        """Apply hard upper bounds for explicitly constrained deployments."""
+        mode = (self.performance_mode or "balanced").strip().lower()
+        if self.low_resource_mode or mode == "low":
+            self.performance_mode = "low"
+            self.max_concurrent_hosts = min(self.max_concurrent_hosts, 3)
+            self.max_port_hosts = min(self.max_port_hosts, 4)
+            self.max_web_hosts = min(self.max_web_hosts, 4)
+            self.max_http_hosts = min(self.max_http_hosts, 5)
+            self.max_http_connections = min(self.max_http_connections, 16)
+            self.max_http_keepalive_connections = min(self.max_http_keepalive_connections, 4)
+            self.max_concurrent_port_probes = min(self.max_concurrent_port_probes, 8)
+            self.max_concurrent_service_validations = min(self.max_concurrent_service_validations, 1)
+            self.max_subprocesses = min(self.max_subprocesses, 1)
+            self.db_pool_size = min(self.db_pool_size, 4)
+            self.db_max_overflow = min(self.db_max_overflow, 2)
+            self.sse_client_queue_size = min(self.sse_client_queue_size, 128)
+            self.result_event_queue_size = min(self.result_event_queue_size, 1000)
 
 
 settings = Settings()

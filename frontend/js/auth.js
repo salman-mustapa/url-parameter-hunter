@@ -506,7 +506,7 @@ function setupAuthModal() {
       const device_fingerprint = getDeviceFingerprint();
 
       try {
-        const res = await fetch(`${API_BASE}/auth/login`, {
+        const res = await fetchWithTimeout(`${API_BASE}/auth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Device-Fingerprint": device_fingerprint },
           body: JSON.stringify({ username, password, device_fingerprint }),
@@ -550,7 +550,7 @@ function setupAuthModal() {
       const device_fingerprint = getDeviceFingerprint();
 
       try {
-        const res = await fetch(`${API_BASE}/auth/register`, {
+        const res = await fetchWithTimeout(`${API_BASE}/auth/register`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Device-Fingerprint": device_fingerprint },
           body: JSON.stringify({ username, email, password, device_fingerprint }),

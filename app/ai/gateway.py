@@ -395,7 +395,7 @@ class AiGateway:
     def get_config(self) -> Dict[str, Any]:
         cfg = dict(self._runtime_config)
         # Mask key for privacy
-        key = cfg.get("api_key", "")
+        key = cfg.pop("api_key", "")
         if key:
             cfg["api_key_masked"] = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "***"
         else:
@@ -497,5 +497,4 @@ ai_gateway = AiGateway()
 DisabledAIProvider = ZeroResourceHeuristicProvider
 LocalLLMProvider = ZeroResourceHeuristicProvider
 RemoteLLMProvider = GroqProvider
-
 
