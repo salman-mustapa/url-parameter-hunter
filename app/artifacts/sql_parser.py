@@ -226,12 +226,24 @@ class SqlDumpParser:
                     col_name = col_names[idx] if idx < len(col_names) else f"col_{idx}"
                     row_dict[col_name] = val
 
-                # Associate username in same row if available
+                # Associate username in same row if available (exact match priority)
                 row_user = None
+                # Pass 1: Exact column name match (highest confidence)
+                exact_user_cols = ("username", "user_name", "login", "email", "nama", "name", "user")
                 for c_k, c_v in row_dict.items():
-                    if c_v and any(u_key in c_k.lower() for u_key in ("username", "user", "login", "nim", "email")):
-                        row_user = str(c_v)
-                        break
+                    if c_v and isinstance(c_v, str) and c_k.lower() in exact_user_cols:
+                        # Skip pure numeric values (likely IDs, not usernames)
+                        if not c_v.strip().isdigit():
+                            row_user = c_v.strip()
+                            break
+                # Pass 2: Partial column name match (fallback)
+                if not row_user:
+                    partial_user_cols = ("username", "login", "email", "nim")
+                    for c_k, c_v in row_dict.items():
+                        if c_v and isinstance(c_v, str) and any(p == c_k.lower() or (p in c_k.lower() and c_k.lower() != f"id_{p}") for p in partial_user_cols):
+                            if not c_v.strip().isdigit():
+                                row_user = c_v.strip()
+                                break
 
                 for col_name, val in row_dict.items():
                     if val is not None and isinstance(val, str):

@@ -502,6 +502,41 @@ class ArtifactEngine:
                 except Exception:
                     content_bytes = None
 
+            # Intelligent file discovery: if content is truncated or empty, search for
+            # the largest version of this filename on disk (different hash prefix)
+            fn_base = (art.filename or "").strip()
+            fn_lower = fn_base.lower()
+            is_sql = fn_lower.endswith(".sql") or "sql" in (art.file_type or "")
+            min_size = 5000 if is_sql else 500  # SQL dumps should be > 5KB
+            if fn_base and (not content_bytes or len(content_bytes) < min_size):
+                search_dirs = [str(dirs["files"]), str(dirs["quarantine"])] if "quarantine" in dirs else [str(dirs["files"])]
+                # Also search default storage dirs
+                from app.core.config import ARTIFACTS_DIR, QUARANTINE_DIR
+                search_dirs.extend([str(ARTIFACTS_DIR), str(QUARANTINE_DIR)])
+                search_dirs = list(set(d for d in search_dirs if os.path.isdir(d)))
+                
+                best_content = content_bytes
+                best_size = len(content_bytes) if content_bytes else 0
+                for sdir in search_dirs:
+                    try:
+                        for fname in os.listdir(sdir):
+                            if fname.lower().endswith(fn_lower) or fn_lower in fname.lower():
+                                fpath = os.path.join(sdir, fname)
+                                fsize = os.path.getsize(fpath)
+                                if fsize > best_size:
+                                    try:
+                                        with open(fpath, "rb") as f:
+                                            candidate = f.read()
+                                        best_content = candidate
+                                        best_size = fsize
+                                        art.storage_path = fpath
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                if best_content and best_size > (len(content_bytes) if content_bytes else 0):
+                    content_bytes = best_content
+
             # Check if linked finding or matching finding has evidence content
             if not content_bytes:
                 for f in findings:
@@ -537,7 +572,17 @@ class ArtifactEngine:
                             break
 
             # If we obtained content_bytes, update the artifact
-            if content_bytes and (art.size_bytes == 0 or not art.preview_data or art.category in ("generic", "", None)):
+            prev = art.preview_data if isinstance(art.preview_data, dict) else {}
+            should_reprocess = (
+                art.size_bytes == 0
+                or not art.preview_data
+                or art.category in ("generic", "", None)
+                or len(content_bytes) > (art.size_bytes or 0) * 2  # file on disk is significantly larger
+                or not prev.get("raw_sample")  # missing raw_sample
+                or (is_sql and not prev.get("tables"))  # SQL but no tables extracted
+                or (prev.get("extracted_hashes") and not any(h.get("plaintext") is not None for h in prev.get("extracted_hashes", [])))  # un-enriched hashes
+            )
+            if content_bytes and should_reprocess:
                 art.size_bytes = len(content_bytes)
                 content_text = content_bytes.decode("utf-8", errors="ignore")
                 classification, category, tags = classifier.classify(art.filename, content_text, art.file_type)
