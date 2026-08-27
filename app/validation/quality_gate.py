@@ -170,11 +170,29 @@ class ProofQualityGate:
         # 12. Remediation Technically Correct
         checklist.append("✓ [12/13] Remediation guidance technically sound and contextual")
 
-        # 13. No Fabricated Evidence (PoC Wire Verification & Cryptographic Provenance)
-        if poc_valid:
-            checklist.append("✓ [13/13] PoC wire consistency & real response evidence verified (no fabrication)")
+        # 13. Vulnerability Contract & Semantic Verification Check (V10 Evidence-Driven Rule)
+        from app.validation.contracts.registry import contract_registry
+        contract = contract_registry.get(result.vulnerability_type)
+        if contract:
+            # Check mandatory evidence level for injection/DoS
+            if result.vulnerability_type.lower() in ("slowloris", "slowloris_dos"):
+                resp_meta = result.response_metadata or {}
+                if not resp_meta.get("starvation") and result.evidence_level != "E3":
+                    failures.append("✗ [13/14] Slowloris contract violation: Connection starvation and resource exhaustion not demonstrated (HTTP 200 or latency alone is inconclusive)")
+                else:
+                    checklist.append("✓ [13/14] Slowloris contract verified: Incomplete connection holding and starvation evidenced")
+            elif contract.requires_baseline and result.evidence_level == "E0" and not result.observations:
+                failures.append(f"✗ [13/14] Contract violation for {contract.name}: Mandatory differential evidence is missing")
+            else:
+                checklist.append(f"✓ [13/14] Vulnerability contract satisfied for {contract.name}")
         else:
-            failures.append("✗ [13/13] PoC validation failed (synthetic or fabricated payload)")
+            checklist.append("✓ [13/14] Vulnerability contract checked (generic)")
+
+        # 14. No Fabricated Evidence (PoC Wire Verification & Cryptographic Provenance)
+        if poc_valid:
+            checklist.append("✓ [14/14] PoC wire consistency & real response evidence verified (no fabrication)")
+        else:
+            failures.append("✗ [14/14] PoC validation failed (synthetic or fabricated payload)")
 
         all_passed = len(failures) == 0
 
