@@ -36,17 +36,43 @@
     </div>
 
     <!-- Workspace Sub-Navigation Tabs (§11) -->
-    <div class="workspace-nav-tabs">
-      <button class="ws-tab-btn active" data-ws-tab="overview">📊 Overview</button>
-      <button class="ws-tab-btn" data-ws-tab="assets">🌐 Assets Explorer (<span id="wsTabCountAssets">0</span>)</button>
-      <button class="ws-tab-btn" data-ws-tab="services">📡 Services & Ports (<span id="wsTabCountServices">0</span>)</button>
-      <button class="ws-tab-btn" data-ws-tab="endpoints">🔗 Endpoints (<span id="wsTabCountEndpoints">0</span>)</button>
-      <button class="ws-tab-btn" data-ws-tab="findings">🔒 Findings (<span id="wsTabCountFindings" class="text-danger font-bold">0</span>)</button>
-      <button class="ws-tab-btn" data-ws-tab="chains">⛓️ Attack Chains</button>
-      <button class="ws-tab-btn" data-ws-tab="evidence">📎 Evidence & Proofs</button>
-      <button class="ws-tab-btn" data-ws-tab="artifacts">📁 Files & Extracted Data (<span id="wsTabCountArtifacts">0</span>)</button>
-      <button class="ws-tab-btn" data-ws-tab="timeline">⏱️ Timeline</button>
-      <button class="ws-tab-btn" data-ws-tab="exports">📦 Async Exports</button>
+    <div class="workspace-nav-wrapper">
+      <div class="ws-mobile-nav-selector">
+        <label for="wsMobileNavSelect" class="text-xs font-bold text-muted">📑 Menu Navigasi Laporan:</label>
+        <select id="wsMobileNavSelect" class="custom-select ws-mobile-select" aria-label="Pilih Tab Laporan">
+          <optgroup label="📊 Ringkasan & Telemetri">
+            <option value="overview" selected>📊 Ringkasan Eksekutif (Overview)</option>
+            <option value="timeline">⏱️ Log Telemetri & Audit Stream</option>
+            <option value="exports">📦 Unduh Laporan (Async Exports)</option>
+          </optgroup>
+          <optgroup label="🌐 Permukaan Serangan (Attack Surface)">
+            <option value="assets">🌐 Subdomain & Aset Terpapar</option>
+            <option value="services">📡 Layanan & Port Terbuka</option>
+            <option value="endpoints">🔗 URL & Endpoints Terpetakan</option>
+          </optgroup>
+          <optgroup label="🛡️ Kerentanan & Bukti (Findings & Proofs)">
+            <option value="findings">🔒 Temuan Keamanan Terkonfirmasi</option>
+            <option value="chains">⛓️ Rantai Eksploitasi (Attack Chains)</option>
+            <option value="evidence">📎 Bukti & Payload (Evidence)</option>
+          </optgroup>
+          <optgroup label="📁 Dokumen & Data Intelijen">
+            <option value="artifacts">📁 File & Database Terekstrak</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <div class="workspace-nav-tabs">
+        <button class="ws-tab-btn active" data-ws-tab="overview">📊 Overview</button>
+        <button class="ws-tab-btn" data-ws-tab="assets">🌐 Assets (<span id="wsTabCountAssets">0</span>)</button>
+        <button class="ws-tab-btn" data-ws-tab="services">📡 Services & Ports (<span id="wsTabCountServices">0</span>)</button>
+        <button class="ws-tab-btn" data-ws-tab="endpoints">🔗 Endpoints (<span id="wsTabCountEndpoints">0</span>)</button>
+        <button class="ws-tab-btn" data-ws-tab="findings">🔒 Findings (<span id="wsTabCountFindings" class="text-danger font-bold">0</span>)</button>
+        <button class="ws-tab-btn" data-ws-tab="chains">⛓️ Chains</button>
+        <button class="ws-tab-btn" data-ws-tab="evidence">📎 Evidence</button>
+        <button class="ws-tab-btn" data-ws-tab="artifacts">📁 Files & Data (<span id="wsTabCountArtifacts">0</span>)</button>
+        <button class="ws-tab-btn" data-ws-tab="timeline">⏱️ Timeline</button>
+        <button class="ws-tab-btn" data-ws-tab="exports">📦 Exports</button>
+      </div>
     </div>
 
     <!-- TAB 1: OVERVIEW PANEL (§12) -->

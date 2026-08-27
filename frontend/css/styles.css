@@ -8478,3 +8478,266 @@ html, body {
   font-family: var(--font-mono);
   padding: 3px 8px !important;
 }
+
+/* ==========================================================================
+   Investigation Workspace Tables & Overflow Safety
+   ========================================================================== */
+.table-responsive-box {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  border: 1.5px solid var(--border);
+  background: #FFFFFF;
+  box-sizing: border-box;
+}
+
+.ws-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.ws-table thead {
+  background: #F1F5F9;
+  border-bottom: 2px solid var(--border);
+}
+
+.ws-table th {
+  padding: 10px 14px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.ws-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #E2E8F0;
+  vertical-align: middle;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.ws-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.ws-table tbody tr:hover td {
+  background: #F8FAFC;
+}
+
+.ws-table td code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: #F1F5F9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #CBD5E1;
+  word-break: break-all;
+}
+
+.text-break {
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* ==========================================================================
+   Investigation Workspace Findings Cards & Interactive PoC Tabs
+   ========================================================================== */
+.ws-finding-card {
+  background: #FFFFFF;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 18px;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  word-wrap: break-word;
+  margin-bottom: 16px;
+  box-shadow: 2px 2px 0 var(--shadow);
+}
+
+.border-sev-critical {
+  border-left: 6px solid #EF4444 !important;
+}
+
+.border-sev-high {
+  border-left: 6px solid #F97316 !important;
+}
+
+.border-sev-medium {
+  border-left: 6px solid #F59E0B !important;
+}
+
+.border-sev-low {
+  border-left: 6px solid #3B82F6 !important;
+}
+
+.border-sev-info {
+  border-left: 6px solid #64748B !important;
+}
+
+.ws-finding-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 2px 0 0 0;
+  word-break: break-word;
+}
+
+.ws-finding-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  word-break: break-all;
+}
+
+.ws-finding-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  margin: 8px 0;
+  word-break: break-word;
+}
+
+.ws-repro-steps-box {
+  background: #F8FAFC;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 10px;
+}
+
+.ws-repro-list {
+  padding-left: 20px;
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.ws-poc-container {
+  border: 1.5px solid #334155;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0B0F19;
+  margin-top: 12px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.ws-poc-tab-nav {
+  display: flex;
+  background: #1E293B;
+  border-bottom: 1px solid #334155;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  align-items: center;
+}
+
+.ws-poc-tab-btn {
+  background: transparent;
+  color: #94A3B8;
+  border: none;
+  padding: 8px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  border-right: 1px solid #334155;
+}
+
+.ws-poc-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #F8FAFC;
+}
+
+.ws-poc-tab-btn.active {
+  background: #0B0F19;
+  color: #38BDF8;
+  border-bottom: 2px solid #38BDF8;
+}
+
+.ws-poc-tab-content-wrap {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.ws-poc-code-pane {
+  padding: 14px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #E2E8F0;
+  line-height: 1.45;
+  background: #0B0F19;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  box-sizing: border-box;
+}
+
+.ws-behavior-box {
+  background: #F8FAFC;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.behavior-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.behavior-row:last-child {
+  margin-bottom: 0;
+}
+
+.behavior-tag {
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.tag-expected {
+  color: #059669;
+}
+
+.tag-actual {
+  color: #DC2626;
+}
+
+.behavior-text {
+  color: var(--text);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.ws-remediation-box {
+  background: #F0FDF4;
+  border: 1.5px solid #86EFAC;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 10px;
+  color: #166534;
+  font-size: 13px;
+  word-break: break-word;
+}
