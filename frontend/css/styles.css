@@ -287,8 +287,23 @@ html, body {
 }
 
 @media (max-width: 480px) {
+  .topbar-container {
+    padding: 0 8px;
+    gap: 8px;
+  }
+  .brand {
+    gap: 6px;
+  }
+  .brand-name {
+    font-size: 15px;
+  }
+  .user-avatar-pill {
+    padding: 3px 6px;
+    font-size: 11px;
+    gap: 4px;
+  }
   .user-name-text {
-    max-width: 60px;
+    max-width: 65px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -297,6 +312,10 @@ html, body {
   }
   .brand-badge {
     display: none !important;
+  }
+  #openToolsCatalogBtn {
+    padding: 3px 6px !important;
+    font-size: 10.5px !important;
   }
 }
 
@@ -3946,13 +3965,42 @@ html, body {
   background: #FFFFFF;
   margin-top: 4px;
   width: auto;
+  max-width: 100%;
   flex-wrap: nowrap;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 @media (min-width: 960px) {
   .session-actions-toolbar {
     margin-top: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .session-actions-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    max-width: 100%;
+    margin-top: 8px;
+    border: 2px solid var(--border) !important;
+    border-radius: 8px;
+  }
+
+  .session-actions-toolbar .btn {
+    flex: 1 1 45%;
+    min-width: 0;
+    height: 32px !important;
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+    border-right: 1.5px solid var(--border) !important;
+    border-bottom: 1.5px solid var(--border) !important;
+  }
+
+  .session-actions-toolbar .btn:last-child {
+    border-right: none !important;
+    flex: 0 0 38px;
   }
 }
 
@@ -7117,24 +7165,33 @@ html, body {
 
 /* Workspace Tab Navigation */
 .workspace-nav-tabs {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 14px 0;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 8px;
+  padding: 10px 4px 14px 4px;
   border-bottom: 2px solid var(--border, #0F172A);
   margin-bottom: 20px;
 }
 
+.workspace-nav-tabs::-webkit-scrollbar {
+  display: none;
+}
+
 .ws-tab-btn {
+  flex-shrink: 0 !important;
   background: #F8FAFC;
   border: 1.5px solid var(--border, #0F172A);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px 14px;
   font-size: 12px;
   font-weight: 800;
   color: var(--text-muted, #64748B);
   cursor: pointer;
-  white-space: nowrap;
+  white-space: nowrap !important;
   transition: all 0.15s ease;
   box-shadow: 1.5px 1.5px 0 var(--shadow, #0F172A);
 }
@@ -8033,20 +8090,27 @@ html, body {
     padding: 12px;
   }
 
+  .workspace-identity {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
   .workspace-title-row {
     flex-wrap: wrap;
     gap: 6px;
   }
 
   .workspace-title-row h2 {
-    font-size: 18px;
+    font-size: 17px;
     width: 100%;
     word-break: break-all;
   }
 
   .workspace-meta-row {
-    flex-direction: column;
-    gap: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
     font-size: 11px;
   }
 
@@ -8063,19 +8127,26 @@ html, body {
 
   /* Navigation Tabs (Smooth finger scroll) */
   .workspace-nav-tabs {
-    gap: 4px;
-    padding: 6px 0 10px 0;
-    overflow-x: auto;
-    flex-wrap: nowrap;
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+    padding: 6px 0 10px 0;
+  }
+
+  .workspace-nav-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .ws-tab-btn {
     padding: 8px 12px;
     font-size: 12px;
-    white-space: nowrap;
-    flex-shrink: 0;
-    min-height: 40px;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    min-height: 38px;
   }
 
   /* Overview Counters */

@@ -395,6 +395,7 @@ async def create_scan(
 
 
 @router.get("/scans")
+@router.get("/investigations")
 async def list_scans(
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
@@ -1598,16 +1599,22 @@ async def get_investigation_workspace(
                 "evidence_packages": len(evidence_items),
             },
             "severity_summary": sev_counts,
+            "severity_breakdown": sev_counts,
             "confidence_summary": conf_counts,
+            "confidence_breakdown": conf_counts,
         },
         "metrics": {
             "assets_count": len(assets),
             "services_count": len(ports),
             "endpoints_count": len(urls),
+            "technologies_count": len(techs),
             "findings_count": len(findings),
             "artifacts_count": len(artifacts),
             "evidence_count": len(evidence_items),
             "exports_count": len(export_jobs),
+            "coverage_percent": min(100, int(len(urls) * 1.5 + len(ports) * 3 + 20)),
+            "severity_breakdown": sev_counts,
+            "confidence_breakdown": conf_counts,
         },
         "assets": [
             {

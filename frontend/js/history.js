@@ -408,12 +408,7 @@ function renderFilteredHistory() {
         e.stopPropagation();
         state.activeScanId = sid;
         state.activeTarget = dom;
-        switchViewTab("reports");
-        if (typeof loadReportHubData === "function") {
-          const sel = el("reportScanSelect");
-          if (sel) sel.value = sid;
-          loadReportHubData(sid);
-        }
+        switchViewTab("reports", { scan_id: sid });
       });
 
       row.querySelector(".btn-quick-diff")?.addEventListener("click", async (e) => {

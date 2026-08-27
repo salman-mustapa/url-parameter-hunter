@@ -13,8 +13,27 @@ async function initReportHub(preferredScanId = null) {
   if (!selectEl) return;
 
   try {
-    const res = await authFetch(`${API_BASE}/investigations`);
-    const scans = await res.json();
+    let scans = null;
+    try {
+      const res = await authFetch(`${API_BASE}/investigations`);
+      if (res.ok) {
+        scans = await res.json();
+      }
+    } catch (e) {
+      console.warn("Failed /investigations, falling back to /scans:", e);
+    }
+
+    if (!scans || !Array.isArray(scans) || !scans.length) {
+      try {
+        const res2 = await authFetch(`${API_BASE}/scans`);
+        if (res2.ok) {
+          const raw = await res2.json();
+          scans = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.scans) ? raw.scans : []);
+        }
+      } catch (e2) {
+        console.warn("Failed fallback /scans:", e2);
+      }
+    }
 
     selectEl.innerHTML = "";
     if (!scans || !scans.length) {
@@ -26,8 +45,10 @@ async function initReportHub(preferredScanId = null) {
     scans.forEach((s) => {
       const opt = document.createElement("option");
       opt.value = s.id;
+      const targetDomain = s.root_domain || s.target_host || s.target_url || s.target || "Target";
       const dateStr = s.created_at ? new Date(s.created_at).toLocaleDateString("id-ID") : "";
-      opt.textContent = `${s.root_domain} — #${s.id.slice(0, 16)} (${s.status.toUpperCase()}) [${dateStr}]`;
+      const statusStr = (s.status || "COMPLETED").toUpperCase();
+      opt.textContent = `${targetDomain} — #${s.id.slice(0, 16)} (${statusStr}) [${dateStr}]`;
       selectEl.appendChild(opt);
     });
 
@@ -39,9 +60,11 @@ async function initReportHub(preferredScanId = null) {
 
     selectEl.value = targetScan;
     currentWorkspaceScanId = targetScan;
+    state.activeScanId = targetScan;
     await loadWorkspaceData(currentWorkspaceScanId);
   } catch (err) {
     console.error("Failed to load investigations for Workspace:", err);
+    renderWorkspaceEmpty();
   }
 }
 
@@ -61,8 +84,16 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
     updateBreadcrumbUI("reports", { scan_id: scanId });
   }
 
+  // Visual feedback while loading
+  if (el("wsExecSummaryText")) {
+    el("wsExecSummaryText").innerHTML = `<em>🔄 Memuat telemetri investigasi #${scanId.slice(0, 16)}...</em>`;
+  }
+
   try {
-    const res = await authFetch(`${API_BASE}/investigations/${encodeURIComponent(scanId)}/workspace`);
+    let res = await authFetch(`${API_BASE}/investigations/${encodeURIComponent(scanId)}/workspace`);
+    if (!res.ok) {
+      res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/workspace`);
+    }
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: Failed to fetch workspace data`);
     }
@@ -72,6 +103,9 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
   } catch (err) {
     console.error("Failed to fetch investigation workspace data:", err);
     showToast("Gagal memuat Investigation Workspace: " + err.message, "danger");
+    if (el("wsExecSummaryText")) {
+      el("wsExecSummaryText").textContent = "Gagal memuat data investigasi. Silakan periksa koneksi atau pilih scan lain.";
+    }
   }
 }
 
@@ -86,25 +120,46 @@ function renderWorkspaceEmpty() {
   if (el("wsCoverage")) el("wsCoverage").textContent = "0%";
   if (el("wsStartTime")) el("wsStartTime").textContent = "-";
   if (el("wsExecSummaryText")) el("wsExecSummaryText").textContent = "Pilih atau mulai investigasi untuk membuka Investigation Workspace.";
+  
+  if (el("wsStatAssets")) el("wsStatAssets").textContent = "0";
+  if (el("wsStatServices")) el("wsStatServices").textContent = "0";
+  if (el("wsStatEndpoints")) el("wsStatEndpoints").textContent = "0";
+  if (el("wsStatTechs")) el("wsStatTechs").textContent = "0";
+  if (el("wsStatFindings")) el("wsStatFindings").textContent = "0";
+  if (el("wsStatArtifacts")) el("wsStatArtifacts").textContent = "0";
+
+  if (el("wsSevCrit")) el("wsSevCrit").textContent = "0";
+  if (el("wsSevHigh")) el("wsSevHigh").textContent = "0";
+  if (el("wsSevMed")) el("wsSevMed").textContent = "0";
+  if (el("wsSevLow")) el("wsSevLow").textContent = "0";
+  if (el("wsSevInfo")) el("wsSevInfo").textContent = "0";
+
+  if (el("wsConfConfirmed")) el("wsConfConfirmed").textContent = "0";
+  if (el("wsConfLikely")) el("wsConfLikely").textContent = "0";
+  if (el("wsConfPotential")) el("wsConfPotential").textContent = "0";
+  if (el("wsConfInconclusive")) el("wsConfInconclusive").textContent = "0";
 }
 
 function renderWorkspace(ws) {
   const scan = ws.overview || {};
   const metrics = ws.metrics || {};
-  const exactTarget = scan.target_url || scan.target_host || scan.root_domain || "Target";
+  const exactTarget = scan.target_url || scan.target_host || scan.root_domain || scan.target || "Target";
   const status = (scan.status || "COMPLETED").toUpperCase();
 
   // 1. Header Information
   if (el("wsTargetName")) el("wsTargetName").textContent = `Target: ${exactTarget}`;
-  if (el("wsInvestigationId")) el("wsInvestigationId").textContent = `ID: #${scan.id}`;
+  if (el("wsInvestigationId")) el("wsInvestigationId").textContent = `ID: #${scan.id || scan.investigation_id || '-'}`;
   if (el("wsStatusBadge")) {
     el("wsStatusBadge").textContent = status;
     el("wsStatusBadge").className = `status-badge status-${status.toLowerCase()}`;
   }
-  if (el("wsDuration")) el("wsDuration").textContent = scan.duration || "00m 00s";
-  if (el("wsCoverage")) el("wsCoverage").textContent = `${metrics.coverage_percent || 100}%`;
+  const durSec = scan.duration_seconds || 0;
+  const durStr = scan.duration || (durSec > 0 ? `${Math.floor(durSec / 60)}m ${durSec % 60}s` : "00m 00s");
+  if (el("wsDuration")) el("wsDuration").textContent = durStr;
+  if (el("wsCoverage")) el("wsCoverage").textContent = `${scan.coverage_percentage || metrics.coverage_percent || 100}%`;
   if (el("wsStartTime")) {
-    el("wsStartTime").textContent = scan.created_at ? new Date(scan.created_at).toLocaleString("id-ID") : "-";
+    const sTime = scan.started_at || scan.created_at;
+    el("wsStartTime").textContent = sTime ? new Date(sTime).toLocaleString("id-ID") : "-";
   }
 
   // Update tab counts badges
@@ -131,39 +186,50 @@ function renderWorkspace(ws) {
 
 function renderWorkspaceOverview(ws) {
   const m = ws.metrics || {};
-  const sev = m.severity_breakdown || {};
-  const conf = m.confidence_breakdown || {};
+  const o = ws.overview || {};
+  const sev = m.severity_breakdown || o.severity_breakdown || o.severity_summary || {};
+  const conf = m.confidence_breakdown || o.confidence_breakdown || o.confidence_summary || {};
 
-  if (el("wsStatAssets")) el("wsStatAssets").textContent = m.assets_count || 0;
-  if (el("wsStatServices")) el("wsStatServices").textContent = m.services_count || 0;
-  if (el("wsStatEndpoints")) el("wsStatEndpoints").textContent = m.endpoints_count || 0;
-  if (el("wsStatTechs")) el("wsStatTechs").textContent = m.technologies_count || 0;
-  if (el("wsStatFindings")) el("wsStatFindings").textContent = m.findings_count || 0;
-  if (el("wsStatArtifacts")) el("wsStatArtifacts").textContent = m.artifacts_count || 0;
+  const assetsCount = m.assets_count ?? (ws.assets || []).length ?? 0;
+  const servicesCount = m.services_count ?? (ws.services || []).length ?? 0;
+  const endpointsCount = m.endpoints_count ?? (ws.endpoints || []).length ?? 0;
+  const techsCount = m.technologies_count ?? o.counters?.technologies ?? (ws.technologies || []).length ?? 0;
+  const findingsCount = m.findings_count ?? (ws.findings || []).length ?? 0;
+  const artifactsCount = m.artifacts_count ?? (ws.artifacts || []).length ?? 0;
 
-  // Severities
-  if (el("wsSevCrit")) el("wsSevCrit").textContent = sev.CRITICAL || 0;
-  if (el("wsSevHigh")) el("wsSevHigh").textContent = sev.HIGH || 0;
-  if (el("wsSevMed")) el("wsSevMed").textContent = sev.MEDIUM || 0;
-  if (el("wsSevLow")) el("wsSevLow").textContent = sev.LOW || 0;
-  if (el("wsSevInfo")) el("wsSevInfo").textContent = sev.INFO || 0;
+  if (el("wsStatAssets")) el("wsStatAssets").textContent = assetsCount;
+  if (el("wsStatServices")) el("wsStatServices").textContent = servicesCount;
+  if (el("wsStatEndpoints")) el("wsStatEndpoints").textContent = endpointsCount;
+  if (el("wsStatTechs")) el("wsStatTechs").textContent = techsCount;
+  if (el("wsStatFindings")) el("wsStatFindings").textContent = findingsCount;
+  if (el("wsStatArtifacts")) el("wsStatArtifacts").textContent = artifactsCount;
 
-  // Confidences
-  if (el("wsConfConfirmed")) el("wsConfConfirmed").textContent = conf.CONFIRMED || 0;
-  if (el("wsConfLikely")) el("wsConfLikely").textContent = conf.LIKELY || 0;
-  if (el("wsConfPotential")) el("wsConfPotential").textContent = conf.POTENTIAL || 0;
-  if (el("wsConfInconclusive")) el("wsConfInconclusive").textContent = conf.INCONCLUSIVE || 0;
+  // Severities (handle case-insensitively)
+  const crit = sev.critical ?? sev.CRITICAL ?? 0;
+  const high = sev.high ?? sev.HIGH ?? 0;
+  const med = sev.medium ?? sev.MEDIUM ?? 0;
+  const low = sev.low ?? sev.LOW ?? 0;
+  const info = sev.info ?? sev.INFO ?? 0;
+
+  if (el("wsSevCrit")) el("wsSevCrit").textContent = crit;
+  if (el("wsSevHigh")) el("wsSevHigh").textContent = high;
+  if (el("wsSevMed")) el("wsSevMed").textContent = med;
+  if (el("wsSevLow")) el("wsSevLow").textContent = low;
+  if (el("wsSevInfo")) el("wsSevInfo").textContent = info;
+
+  // Confidences (handle case-insensitively)
+  if (el("wsConfConfirmed")) el("wsConfConfirmed").textContent = conf.confirmed ?? conf.CONFIRMED ?? 0;
+  if (el("wsConfLikely")) el("wsConfLikely").textContent = conf.likely ?? conf.LIKELY ?? 0;
+  if (el("wsConfPotential")) el("wsConfPotential").textContent = conf.potential ?? conf.POTENTIAL ?? 0;
+  if (el("wsConfInconclusive")) el("wsConfInconclusive").textContent = conf.inconclusive ?? conf.INCONCLUSIVE ?? 0;
 
   // Executive text
-  const target = ws.overview?.root_domain || "Target";
-  const findingsCount = (ws.findings || []).length;
-  const critCount = sev.CRITICAL || 0;
-  const highCount = sev.HIGH || 0;
+  const target = o.target || o.root_domain || o.target_url || "Target";
 
   if (el("wsExecSummaryText")) {
     el("wsExecSummaryText").textContent = findingsCount
-      ? `Investigasi Autonomous Adversary Engine pada ${target} mengidentifikasi ${findingsCount} temuan keamanan (${critCount} Critical, ${highCount} High) melintasi ${m.assets_count || 1} asset subdomain dan ${m.services_count || 0} port layanan. Seluruh bukti PoC telah divalidasi secara kriptografis melalui Quality Gate.`
-      : `Investigasi komprehensif pada ${target} selesai tanpa temuan kerentanan berisiko tinggi. Attack surface terpetakan secara lengkap (${m.assets_count || 1} asset, ${m.services_count || 0} port/service).`;
+      ? `Investigasi Autonomous Adversary Engine pada ${target} mengidentifikasi ${findingsCount} temuan keamanan (${crit} Critical, ${high} High) melintasi ${assetsCount || 1} asset subdomain dan ${servicesCount} port layanan. Seluruh bukti PoC telah divalidasi secara kriptografis melalui Quality Gate.`
+      : `Investigasi komprehensif pada ${target} selesai tanpa temuan kerentanan berisiko tinggi. Attack surface terpetakan secara lengkap (${assetsCount || 1} asset, ${servicesCount} port/service).`;
   }
 }
 
@@ -699,7 +765,11 @@ function setupReportHubEvents() {
   const selectEl = el("reportScanSelect");
   if (selectEl) {
     selectEl.addEventListener("change", (e) => {
-      loadWorkspaceData(e.target.value);
+      const newScanId = e.target.value;
+      if (newScanId) {
+        state.activeScanId = newScanId;
+        loadWorkspaceData(newScanId, true);
+      }
     });
   }
 

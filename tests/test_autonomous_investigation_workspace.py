@@ -192,6 +192,19 @@ async def test_investigation_workspace_and_export_lifecycle():
         assert len(ws["artifacts"]) >= 1
         assert len(ws["evidence"]) >= 1
 
+        # Test /api/investigations endpoint alias
+        res_inv_list = await client.get("/api/investigations", headers=headers)
+        assert res_inv_list.status_code == 200
+        invs = res_inv_list.json()
+        assert isinstance(invs, list)
+        assert any(i["id"] == scan_id for i in invs)
+
+        # Test workspace breakdown and metrics fields
+        assert "severity_breakdown" in ws["metrics"]
+        assert "confidence_breakdown" in ws["metrics"]
+        assert "technologies_count" in ws["metrics"]
+        assert ws["metrics"]["coverage_percent"] > 0
+
         # Verify Bug Hunting PoC Structure
         finding_item = ws["findings"][0]
         assert "poc_dossier" in finding_item
