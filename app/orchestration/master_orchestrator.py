@@ -23,6 +23,7 @@ from app.ai.investigation_memory import FactPrecedence, investigation_memory_man
 from app.ai.provider_router import ModelCategory, ai_provider_router
 from app.core.events import event_bus
 from app.core.scope import Scope
+from app.discovery.authenticated_crawler import authenticated_crawler
 from app.orchestration.adaptive_orchestrator import (
     OrchestratorTask,
     TaskState,
@@ -31,6 +32,7 @@ from app.orchestration.adaptive_orchestrator import (
 from app.orchestration.attack_opportunity import AttackOpportunity, opportunity_bus
 from app.orchestration.attack_path_engine import attack_path_engine
 from app.orchestration.correlation_engine import correlation_engine
+from app.orchestration.data_action_correlator import data_action_correlator
 from app.orchestration.opportunity_engine import Opportunity, opportunity_engine
 from app.orchestration.risk_scoring import risk_scoring_engine
 from app.orchestration.team_manager import TeamName, team_manager
@@ -101,6 +103,52 @@ class MasterOrchestrator:
         opportunities = opportunity_engine.evaluate_event(event_type, event_data)
         created_tasks: List[OrchestratorTask] = []
 
+        # 4a. Autonomous Data-to-Action Correlation for Artifact Intelligence
+        if any(kw in event_type.lower() for kw in ("artifact", "sqldump", "database", "dataextracted")):
+            tables = event_data.get("tables") or event_data.get("schema_data", {}).get("tables") or []
+            forms = event_data.get("forms") or []
+            if not forms and target:
+                forms = [{"action": target, "method": "POST", "fields": [{"name": "username"}, {"name": "password"}]}]
+            if tables:
+                hypotheses = data_action_correlator.correlate_artifact_data_to_forms(
+                    forms=forms,
+                    tables=tables,
+                    target_url=target,
+                )
+                for hypo in hypotheses:
+                    hypo_opp = hypo.to_attack_opportunity(priority=98)
+                    await opportunity_bus.publish(hypo_opp)
+                    logger.info("MasterOrchestrator: Published correlated Auth Opportunity from artifact: %s", hypo.endpoint)
+
+        # 4b. Autonomous Chaining on Authentication Success (Delta Surface & Upload Discovery)
+        if "authenticationsucceeded" in event_type.lower() or "sessioncreated" in event_type.lower():
+            if target:
+                from app.core.session_context import SessionContext
+                crawl_session = SessionContext(base_url=target)
+                if event_data.get("cookies"):
+                    from app.core.session_context import SessionIdentity
+                    crawl_session.register_identity(
+                        SessionIdentity(
+                            id="auth_crawler",
+                            name="Crawler Auth Session",
+                            role=event_data.get("role", "user"),
+                            cookies=event_data.get("cookies", {}),
+                        )
+                    )
+                    crawl_session.switch_identity("auth_crawler")
+                
+                # Launch authenticated crawl
+                auth_endpoints = await authenticated_crawler.crawl_authenticated_surface(
+                    session=crawl_session,
+                    base_url=target,
+                    max_depth=2,
+                    max_pages=20,
+                )
+                second_stage_opps = authenticated_crawler.generate_second_stage_opportunities(auth_endpoints)
+                for s_opp in second_stage_opps:
+                    await opportunity_bus.publish(s_opp)
+                    logger.info("MasterOrchestrator: Published second-stage %s opportunity on %s", s_opp.attack_type, s_opp.endpoint)
+
         # Convert and publish to OpportunityBus for specialist attack execution
         for opp in opportunities:
             opp_attack_type = opp.opportunity_type.value.replace("_candidate", "")
@@ -123,7 +171,7 @@ class MasterOrchestrator:
             await opportunity_bus.publish(bus_opp)
 
         # Optional Attack Path Reasoning
-        if target and ("auth" in event_type or "sqli" in event_type or "endpoint" in event_type):
+        if target and ("auth" in event_type or "sqli" in event_type or "endpoint" in event_type or "upload" in event_type):
             attack_path_engine.analyze_attack_paths(target, [event_data])
 
         for opp in opportunities:

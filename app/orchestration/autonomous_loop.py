@@ -46,6 +46,9 @@ class AutonomousBugHunterLoop:
         event_bus.subscribe("TechnologyIdentified", self._on_technology_identified)
         event_bus.subscribe("EndpointDiscovered", self._on_endpoint_discovered)
         event_bus.subscribe("ArtifactDiscovered", self._on_artifact_discovered)
+        event_bus.subscribe("ArtifactIntelligenceReady", self._on_artifact_intelligence_ready)
+        event_bus.subscribe("AuthenticationSucceeded", self._on_authentication_succeeded)
+        event_bus.subscribe("UploadFormDiscovered", self._on_upload_form_discovered)
         event_bus.subscribe("PortDiscovered", self._on_port_discovered)
         event_bus.subscribe("CandidateCreated", self._on_candidate_created)
 
@@ -152,6 +155,55 @@ class AutonomousBugHunterLoop:
             target=artifact_url,
             priority=1,
             context={"scan_id": scan_id, "artifact_url": artifact_url}
+        )
+
+    async def _on_artifact_intelligence_ready(self, event_data: Dict[str, Any]) -> None:
+        """Trigger: Structured artifact data ready -> Plan data-to-input correlation & auth testing."""
+        scan_id = event_data.get("scan_id")
+        tables = event_data.get("tables") or event_data.get("schema_data", {}).get("tables") or []
+        target = event_data.get("target") or event_data.get("url") or ""
+
+        logger.info("AutonomousLoop: Artifact intelligence ready with %d tables for %s", len(tables), target)
+        self._enqueue_action(
+            action_type="CORRELATE_DATA_ACTIONS",
+            target=target,
+            priority=1,
+            context={"scan_id": scan_id, "tables": tables, "target": target}
+        )
+
+    async def _on_authentication_succeeded(self, event_data: Dict[str, Any]) -> None:
+        """Trigger: Valid credentials/session acquired -> Launch differential authenticated crawl."""
+        target_url = event_data.get("target_url") or event_data.get("endpoint") or ""
+        scan_id = event_data.get("scan_id")
+
+        logger.info("AutonomousLoop: Authentication succeeded on %s -> Triggering authenticated surface discovery", target_url)
+        self._enqueue_action(
+            action_type="CRAWL_AUTHENTICATED_SURFACE",
+            target=target_url,
+            priority=1,
+            context={
+                "scan_id": scan_id,
+                "target_url": target_url,
+                "cookies": event_data.get("cookies", {}),
+                "role": event_data.get("role", "user"),
+            }
+        )
+
+    async def _on_upload_form_discovered(self, event_data: Dict[str, Any]) -> None:
+        """Trigger: Authenticated file upload form discovered -> Queue file upload security testing."""
+        upload_url = event_data.get("upload_url") or event_data.get("url") or ""
+        scan_id = event_data.get("scan_id")
+
+        logger.info("AutonomousLoop: File upload form discovered at %s -> Queueing upload security validation", upload_url)
+        self._enqueue_action(
+            action_type="TEST_FILE_UPLOAD",
+            target=upload_url,
+            priority=1,
+            context={
+                "scan_id": scan_id,
+                "upload_url": upload_url,
+                "form_details": event_data.get("form_details", {}),
+            }
         )
 
     async def _on_port_discovered(self, event_data: Dict[str, Any]) -> None:

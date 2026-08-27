@@ -92,6 +92,31 @@ class SessionIdentity:
                 hdrs["X-CSRF-Token"] = primary_token
         return hdrs
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "role": self.role,
+            "headers": dict(self.headers),
+            "cookies": dict(self.cookies),
+            "csrf_tokens": dict(self.csrf_tokens),
+            "auth_token": self.auth_token,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> SessionIdentity:
+        return cls(
+            id=data.get("id", "default"),
+            name=data.get("name", "Default"),
+            role=data.get("role", "user"),
+            headers=dict(data.get("headers", {})),
+            cookies=dict(data.get("cookies", {})),
+            csrf_tokens=dict(data.get("csrf_tokens", {})),
+            auth_token=data.get("auth_token"),
+            metadata=dict(data.get("metadata", {})),
+        )
+
 
 @dataclass
 class SessionResponse:
@@ -185,6 +210,40 @@ class SessionContext:
 
     def get_identity(self, identity_id: str) -> Optional[SessionIdentity]:
         return self.identities.get(identity_id)
+
+    def has_authenticated_session(self) -> bool:
+        """Returns True if any non-default identity with cookies or auth tokens is registered."""
+        for ident_id, ident in self.identities.items():
+            if ident_id != "default" and (ident.cookies or ident.auth_token or ident.role in ("admin", "user")):
+                return True
+        return False
+
+    def get_authenticated_identities(self) -> List[SessionIdentity]:
+        """Returns all authenticated session identities."""
+        return [
+            ident for ident_id, ident in self.identities.items()
+            if ident_id != "default" and (ident.cookies or ident.auth_token or ident.role in ("admin", "user"))
+        ]
+
+    def export_state(self) -> Dict[str, Any]:
+        """Serializes session context state for checkpointing and DB persistence."""
+        return {
+            "base_url": self.base_url,
+            "active_identity_id": self.active_identity_id,
+            "identities": {k: v.to_dict() for k, v in self.identities.items()},
+        }
+
+    def import_state(self, state_dict: Dict[str, Any]) -> None:
+        """Restores session context state from serialized dictionary."""
+        if not state_dict:
+            return
+        if "base_url" in state_dict:
+            self.base_url = state_dict["base_url"]
+        if "identities" in state_dict:
+            for k, v in state_dict["identities"].items():
+                self.identities[k] = SessionIdentity.from_dict(v)
+        if "active_identity_id" in state_dict:
+            self.active_identity_id = state_dict["active_identity_id"]
 
     async def _get_client(self, identity_id: str, proxy: Optional[str] = None) -> httpx.AsyncClient:
         key = (identity_id, proxy)

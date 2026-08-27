@@ -16,6 +16,7 @@ from app.attacks.service import ServiceAttackModule
 from app.attacks.sqli import SQLiAttackModule
 from app.attacks.ssrf import SSRFAttackModule
 from app.attacks.traversal import TraversalAttackModule
+from app.attacks.upload import UploadAttackModule
 from app.attacks.xss import XSSAttackModule
 
 _REGISTRY: Dict[str, BaseAttackModule] = {
@@ -28,6 +29,7 @@ _REGISTRY: Dict[str, BaseAttackModule] = {
     "rce": RCEAttackModule(),
     "service": ServiceAttackModule(),
     "artifact": ArtifactAttackModule(),
+    "upload": UploadAttackModule(),
 }
 
 
@@ -59,6 +61,7 @@ __all__ = [
     "RCEAttackModule",
     "ServiceAttackModule",
     "ArtifactAttackModule",
+    "UploadAttackModule",
     "get_attack_module",
     "get_all_attack_modules",
     "register_attack_module",

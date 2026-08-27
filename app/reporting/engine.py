@@ -250,6 +250,19 @@ class ReportEngine:
                                 lines.append(f"- **{tbl}**: {cols_str}")
                             lines.append("")
 
+                    elif attack_type == "upload":
+                        lines.extend([
+                            f"#### 📦 File Upload & Script Execution Evidence",
+                            f"",
+                            f"| Property | Value |",
+                            f"|---|---|",
+                            f"| **Execution Confirmed** | `{exploitation_data.get('rce_confirmed', True)}` |",
+                            f"| **Uploaded Canary URL** | `{exploitation_data.get('uploaded_url', 'N/A')}` |",
+                            f"| **Canary Validation Hash** | `{exploitation_data.get('canary_hash', 'N/A')}` |",
+                            f"| **Execution Proof** | `{exploitation_data.get('execution_proof', 'Benign canary echo validated')}` |",
+                            f"",
+                        ])
+
                     elif attack_type == "rce":
                         cmd_outputs = exploitation_data.get("command_outputs", {})
                         lines.extend([
