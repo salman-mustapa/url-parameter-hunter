@@ -502,42 +502,7 @@ class ArtifactEngine:
                 except Exception:
                     content_bytes = None
 
-            # Intelligent file discovery: if content is truncated or empty, search for
-            # the largest version of this filename on disk (different hash prefix)
-            fn_base = (art.filename or "").strip()
-            fn_lower = fn_base.lower()
-            is_sql = fn_lower.endswith(".sql") or "sql" in (art.file_type or "")
-            min_size = 5000 if is_sql else 500  # SQL dumps should be > 5KB
-            if fn_base and (not content_bytes or len(content_bytes) < min_size):
-                search_dirs = [str(dirs["files"]), str(dirs["quarantine"])] if "quarantine" in dirs else [str(dirs["files"])]
-                # Also search default storage dirs
-                from app.core.config import ARTIFACTS_DIR, QUARANTINE_DIR
-                search_dirs.extend([str(ARTIFACTS_DIR), str(QUARANTINE_DIR)])
-                search_dirs = list(set(d for d in search_dirs if os.path.isdir(d)))
-                
-                best_content = content_bytes
-                best_size = len(content_bytes) if content_bytes else 0
-                for sdir in search_dirs:
-                    try:
-                        for fname in os.listdir(sdir):
-                            if fname.lower().endswith(fn_lower) or fn_lower in fname.lower():
-                                fpath = os.path.join(sdir, fname)
-                                fsize = os.path.getsize(fpath)
-                                if fsize > best_size:
-                                    try:
-                                        with open(fpath, "rb") as f:
-                                            candidate = f.read()
-                                        best_content = candidate
-                                        best_size = fsize
-                                        art.storage_path = fpath
-                                    except Exception:
-                                        pass
-                    except Exception:
-                        pass
-                if best_content and best_size > (len(content_bytes) if content_bytes else 0):
-                    content_bytes = best_content
-
-            # Check if linked finding or matching finding has evidence content
+            # 1. Check if linked finding or matching finding has evidence content
             if not content_bytes:
                 for f in findings:
                     fn_low = (art.filename or "").lower()
@@ -570,6 +535,40 @@ class ArtifactEngine:
                         if cand:
                             content_bytes = cand.encode("utf-8", errors="ignore") if isinstance(cand, str) else cand
                             break
+
+            # 2. Intelligent file discovery fallback: if content is truncated or empty, search for
+            # the largest version of this filename on disk (different hash prefix)
+            fn_base = (art.filename or "").strip()
+            fn_lower = fn_base.lower()
+            is_sql = fn_lower.endswith(".sql") or "sql" in (art.file_type or "")
+            min_size = 5000 if is_sql else 500  # SQL dumps should be > 5KB
+            if fn_base and (not content_bytes or len(content_bytes) < min_size):
+                search_dirs = [str(dirs["files"]), str(dirs["quarantine"])] if "quarantine" in dirs else [str(dirs["files"])]
+                from app.core.config import ARTIFACTS_DIR, QUARANTINE_DIR
+                search_dirs.extend([str(ARTIFACTS_DIR), str(QUARANTINE_DIR)])
+                search_dirs = list(set(d for d in search_dirs if os.path.isdir(d)))
+                
+                best_content = content_bytes
+                best_size = len(content_bytes) if content_bytes else 0
+                for sdir in search_dirs:
+                    try:
+                        for fname in os.listdir(sdir):
+                            if fname.lower().endswith(fn_lower) or fn_lower in fname.lower():
+                                fpath = os.path.join(sdir, fname)
+                                fsize = os.path.getsize(fpath)
+                                if fsize > best_size:
+                                    try:
+                                        with open(fpath, "rb") as f:
+                                            candidate = f.read()
+                                        best_content = candidate
+                                        best_size = fsize
+                                        art.storage_path = fpath
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                if best_content and best_size > (len(content_bytes) if content_bytes else 0):
+                    content_bytes = best_content
 
             # If we obtained content_bytes, update the artifact
             prev = art.preview_data if isinstance(art.preview_data, dict) else {}

@@ -894,13 +894,14 @@ function renderSingleArtTable(table) {
     cols = Object.keys(rows[0]);
   }
   const tName = table.name || table.table_name || "Tabel";
+  const displayRows = rows.slice(0, 50);
 
   return `
     <div class="mb-2 flex-between align-center flex-wrap gap-2">
       <span class="text-xs text-muted">
         Tabel: <strong class="text-primary font-mono">${esc(tName)}</strong> |
         Kolom: <strong>${cols.length}</strong> |
-        Sampel Baris: <strong>${rows.length}</strong>
+        Sampel Baris: <strong>${rows.length}</strong> ${rows.length > 50 ? `<small class="text-info">(menampilkan 50)</small>` : ''}
       </span>
       ${table.primary_key ? `<span class="pill pill-neutral text-xs font-mono">🔑 PK: ${esc(table.primary_key)}</span>` : ''}
     </div>
@@ -910,7 +911,7 @@ function renderSingleArtTable(table) {
           <tr>${cols.length ? cols.map(c => `<th>${esc(c)}</th>`).join("") : '<th>Kolom</th>'}</tr>
         </thead>
         <tbody>
-          ${rows.length ? rows.map(r => `
+          ${displayRows.length ? displayRows.map(r => `
             <tr>
               ${cols.map((c, i) => {
                 const val = (r && typeof r === 'object' && !Array.isArray(r)) ? r[c] : (Array.isArray(r) ? r[i] : r);
