@@ -274,8 +274,8 @@ let aiChatMessages = [
 
 async function fetchAndPopulateModels(candidateConfig = null) {
   const provider = el("aiProvider") ? el("aiProvider").value : "openai_compatible";
-  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value : "";
-  const apiKey = el("aiApiKey") ? el("aiApiKey").value : "";
+  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value.trim() : "";
+  const apiKey = el("aiApiKey") ? el("aiApiKey").value.trim() : "";
   
   const payload = candidateConfig || {
     provider: provider,
@@ -289,8 +289,7 @@ async function fetchAndPopulateModels(candidateConfig = null) {
     "ag/gemini-3.7-flash-medium",
     "gemini/gemini-3.5-flash-lite",
     "fast",
-    "ag/claude-sonnet-4-6",
-    "free"
+    "ag/claude-sonnet-4-6"
   ];
 
   try {
@@ -306,13 +305,11 @@ async function fetchAndPopulateModels(candidateConfig = null) {
       if (data.models && data.models.length > 0) {
         modelsList = data.models;
       }
-    } else {
-      console.warn("API/models returned non-ok status, falling back to default models.");
     }
     
     const modelSelect = el("aiModel");
     if (modelSelect) {
-      const currentSelected = modelSelect.value;
+      const currentSelected = modelSelect.value || "developer";
       modelSelect.innerHTML = "";
       modelsList.forEach((m) => {
         const opt = document.createElement("option");
@@ -323,6 +320,8 @@ async function fetchAndPopulateModels(candidateConfig = null) {
       modelSelect.disabled = false;
       if (currentSelected && modelsList.includes(currentSelected)) {
         modelSelect.value = currentSelected;
+      } else if (modelsList.length > 0) {
+        modelSelect.value = modelsList[0];
       }
     }
   } catch (err) {
@@ -336,31 +335,39 @@ async function loadAiConfig() {
     if (!res.ok) return;
     const cfg = await res.json();
     
-    if (el("aiLlmEnabled")) el("aiLlmEnabled").value = cfg.llm_enabled ? "true" : "false";
-    if (el("aiProvider")) el("aiProvider").value = cfg.provider || "openai_compatible";
-    if (el("aiBaseUrl")) el("aiBaseUrl").value = cfg.base_url || "";
-    if (el("aiApiKey") && cfg.api_key_configured) el("aiApiKey").placeholder = "(Tersimpan di sistem server)";
+    const isEnabled = cfg.llm_enabled !== undefined ? Boolean(cfg.llm_enabled) : (cfg.enabled !== undefined ? Boolean(cfg.enabled) : true);
+    if (el("aiLlmEnabled")) el("aiLlmEnabled").value = isEnabled ? "true" : "false";
+    if (el("aiProvider") && cfg.provider) el("aiProvider").value = cfg.provider;
+    if (el("aiBaseUrl") && cfg.base_url) el("aiBaseUrl").value = cfg.base_url;
+    if (el("aiApiKey")) {
+      if (cfg.api_key_configured || cfg.api_key_masked) {
+        el("aiApiKey").placeholder = cfg.api_key_masked ? `Tersimpan (${cfg.api_key_masked})` : "(Tersimpan di sistem server)";
+      }
+    }
     
     const statusPill = el("aiConnStatus");
     if (statusPill) {
-      if (cfg.llm_enabled) {
-        statusPill.textContent = "🟡 Enabled — belum diuji";
+      if (isEnabled && (cfg.api_key_configured || cfg.is_configured)) {
+        statusPill.textContent = "🟢 Active & Configured";
+        statusPill.className = "ai-status-pill active";
+      } else if (isEnabled) {
+        statusPill.textContent = "🟡 Active — Siap Diuji";
         statusPill.className = "ai-status-pill active";
       } else {
-        statusPill.textContent = "⚪ Disabled";
+        statusPill.textContent = "⚪ Inactive (Disabled)";
         statusPill.className = "ai-status-pill inactive";
       }
     }
     
-    // Model discovery performs external I/O; run it only on explicit refresh/test.
     const modelSelect = el("aiModel");
-    if (modelSelect && cfg.model) {
-      if (![...modelSelect.options].some(o => o.value === cfg.model)) {
+    if (modelSelect) {
+      const selectedModel = cfg.model || "developer";
+      if (![...modelSelect.options].some(o => o.value === selectedModel)) {
         const option = document.createElement("option");
-        option.value = option.textContent = cfg.model;
+        option.value = option.textContent = selectedModel;
         modelSelect.appendChild(option);
       }
-      modelSelect.value = cfg.model;
+      modelSelect.value = selectedModel;
       modelSelect.disabled = false;
     }
   } catch (err) {
@@ -371,12 +378,13 @@ async function loadAiConfig() {
 async function saveAiSettings() {
   const llmEnabled = el("aiLlmEnabled") ? el("aiLlmEnabled").value === "true" : true;
   const provider = el("aiProvider") ? el("aiProvider").value : "openai_compatible";
-  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value : "";
-  const apiKey = el("aiApiKey") ? el("aiApiKey").value : "";
-  const model = el("aiModel") ? el("aiModel").value : "";
+  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value.trim() : "";
+  const apiKey = el("aiApiKey") ? el("aiApiKey").value.trim() : "";
+  const model = el("aiModel") ? el("aiModel").value.trim() : "";
 
   const payload = {
     llm_enabled: llmEnabled,
+    enabled: llmEnabled,
     provider: provider,
     base_url: baseUrl,
     api_key: apiKey,
@@ -393,7 +401,10 @@ async function saveAiSettings() {
       const errData = await res.json();
       throw new Error(errData.detail || "Failed to save AI config.");
     }
-    if (typeof showToast === "function") showToast("Konfigurasi AI berhasil disimpan.", "success");
+    if (typeof showToast === "function") showToast("Konfigurasi AI berhasil disimpan dan diaktifkan!", "success");
+    if (apiKey && el("aiApiKey")) {
+      el("aiApiKey").value = "";
+    }
     await loadAiConfig();
   } catch (err) {
     if (typeof showToast === "function") showToast("Gagal menyimpan konfigurasi: " + err.message, "danger");
@@ -402,8 +413,8 @@ async function saveAiSettings() {
 
 async function testAiConnection() {
   const provider = el("aiProvider") ? el("aiProvider").value : "openai_compatible";
-  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value : "";
-  const apiKey = el("aiApiKey") ? el("aiApiKey").value : "";
+  const baseUrl = el("aiBaseUrl") ? el("aiBaseUrl").value.trim() : "";
+  const apiKey = el("aiApiKey") ? el("aiApiKey").value.trim() : "";
 
   const payload = {
     provider: provider,
@@ -454,12 +465,15 @@ async function sendAiChatMessage() {
   aiChatMessages.push({ role: "user", content: userMsg });
   const loadingId = appendChatBubble("assistant", "⏳ Berpikir...");
 
+  const selectedModel = el("aiModel") ? el("aiModel").value : "";
+
   try {
     const res = await authFetch(`${API_BASE}/ai/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        messages: aiChatMessages.slice(-8)
+        messages: aiChatMessages.slice(-8),
+        model: selectedModel || undefined
       })
     });
 
@@ -478,7 +492,7 @@ async function sendAiChatMessage() {
     const loadingElem = el(loadingId);
     if (loadingElem) loadingElem.remove();
     
-    appendChatBubble("assistant", `⚠️ Error: ${err.message}.`);
+    appendChatBubble("assistant", `⚠️ Error: ${err.message}`);
     if (typeof showToast === "function") showToast("Gagal chat: " + err.message, "danger");
   }
 }
@@ -518,6 +532,7 @@ function setupAdminTabs() {
 
       if (viewName === "operations") loadAdminActiveScans();
       if (viewName === "health") loadAdminHealth();
+      if (viewName === "ai") loadAiConfig();
     });
   });
 
@@ -529,7 +544,6 @@ function setupAdminTabs() {
   }
 }
 
-// Wire events when script is parsed
 function initializeAiSettingsWiring() {
   setupAdminTabs();
 

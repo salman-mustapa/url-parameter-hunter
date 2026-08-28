@@ -39,56 +39,49 @@ DEFAULT_SYSTEM_PROMPT = (
 # Task-specialized multi-model cascade pools for NineRouter / OpenAI-Compatible endpoints
 NINEROUTER_COMBO_POOLS: Dict[str, List[str]] = {
     "reasoning": [
-        "gemini/gemini-3.5-flash-lite",
+        "developer",
         "ag/gemini-3.7-flash-medium",
+        "gemini/gemini-3.5-flash-lite",
         "fast",
         "ag/claude-sonnet-4-6",
-        "developer",
-        "free",
     ],
     "hypothesis": [
-        "gemini/gemini-3.5-flash-lite",
+        "developer",
         "ag/gemini-3.7-flash-medium",
+        "gemini/gemini-3.5-flash-lite",
         "fast",
         "ag/claude-sonnet-4-6",
-        "developer",
-        "free",
     ],
     "payload_synthesis": [
+        "developer",
         "gemini/gemini-3.5-flash-lite",
         "fast",
         "ag/gemini-3.7-flash-medium",
-        "developer",
-        "free",
     ],
     "code_analysis": [
         "developer",
-        "gemini/gemini-3.5-flash-lite",
         "ag/gemini-3.7-flash-medium",
+        "gemini/gemini-3.5-flash-lite",
         "ag/claude-sonnet-4-6",
-        "free",
     ],
     "evidence_critic": [
-        "gemini/gemini-3.5-flash-lite",
-        "ag/gemini-3.7-flash-medium",
-        "ag/claude-sonnet-4-6",
         "developer",
-        "free",
+        "ag/gemini-3.7-flash-medium",
+        "gemini/gemini-3.5-flash-lite",
+        "ag/claude-sonnet-4-6",
     ],
     "reporting": [
-        "gemini/gemini-3.5-flash-lite",
-        "ag/gemini-3.7-flash-medium",
-        "ag/claude-sonnet-4-6",
         "developer",
-        "free",
+        "ag/gemini-3.7-flash-medium",
+        "gemini/gemini-3.5-flash-lite",
+        "ag/claude-sonnet-4-6",
     ],
     "general": [
+        "developer",
+        "ag/gemini-3.7-flash-medium",
         "gemini/gemini-3.5-flash-lite",
         "fast",
-        "ag/gemini-3.7-flash-medium",
         "ag/claude-sonnet-4-6",
-        "developer",
-        "free",
     ],
 }
 
@@ -255,15 +248,12 @@ class LLMClient:
             # Determine cascade candidate models
             if model:
                 candidate_models = [model]
-            elif self.model in ("combo", "auto", "ninerouter_combo", "all", "dynamic", "developer"):
-                # Use specialized pool for the task with graceful fallback
-                candidate_models = NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"])
+            elif self.model and self.model not in ("combo", "auto", "ninerouter_combo", "all", "dynamic"):
+                # Use user's selected model first, then fallback to combo pool
+                pool = NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"])
+                candidate_models = [self.model] + [m for m in pool if m != self.model]
             else:
-                # If specific model is configured, try it first, then fallback to combo pool
-                candidate_models = [self.model] + [
-                    m for m in NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"])
-                    if m != self.model
-                ]
+                candidate_models = NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"])
 
             endpoint = f"{self.base_url}/chat/completions"
             if not endpoint.startswith("http"):
@@ -303,12 +293,12 @@ class LLMClient:
                     async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
                         resp = await client.post(endpoint, headers=headers, json=body)
                         if resp.status_code != 200:
-                            err_body = resp.text[:150]
+                            err_body = resp.text[:200]
                             logger.warning(
                                 "Model '%s' returned HTTP %d: %s. Cascading to next combo model...",
                                 cand_model, resp.status_code, err_body
                             )
-                            last_err = RuntimeError(f"HTTP {resp.status_code}: {err_body}")
+                            last_err = RuntimeError(f"HTTP {resp.status_code} ({cand_model}): {err_body}")
                             continue
 
                         raw_text = resp.text.strip()

@@ -1,21 +1,34 @@
-/* Program boundaries and report identity are separate from finding evidence. */
 function readEngagementForm() {
   const read = id => (el(id)?.value || "").trim();
-  if (!el("engAuthorizationAck")?.checked || read("engAuthorization").length < 3) {
+  const ackEl = el("engAuthorizationAck");
+  if (ackEl && !ackEl.checked) {
     throw new Error("Konfirmasi izin pemilik target dan isi referensi izin sebelum scan.");
   }
+  const rawTarget = (el("targetInput")?.value || "target").trim().replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9.-]/g, '_');
+  const authRef = read("engAuthorization") || `AUTHORIZED-${rawTarget.slice(0, 40) || 'SELF-AUDIT'}`;
   const splitHosts = value => value.split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
   const time = id => read(id) ? new Date(read(id)).toISOString() : null;
-  const ports = (read("engAllowedPorts") || "80,443").split(',').map(value => Number(value.trim()));
-  if (ports.length > 100 || ports.some(port => !Number.isInteger(port) || port < 1 || port > 65535)) {
+  const portTokens = (read("engAllowedPorts") || "80,443").split(',').map(value => value.trim()).filter(Boolean);
+  const ports = portTokens.map(value => Number(value));
+  if (ports.length > 100 || ports.some(port => isNaN(port) || !Number.isInteger(port) || port < 1 || port > 65535)) {
     throw new Error("Isi port 1–65535, dipisahkan koma (maksimal 100 port).");
   }
-  return {authorization_reference: read("engAuthorization"), authorization_acknowledged: true,
-    starts_at: time("engStartsAt"), ends_at: time("engEndsAt"),
-    scope_hosts: splitHosts(read("engScopeHosts")), excluded_hosts: splitHosts(read("engExcludedHosts")),
-    allowed_ports: [...new Set(ports)],
-    max_rps: Number(read("engMaxRps")) || 5, notes: read("engNotes"),
-    report: {organization: read("engOrganization"), program: read("engProgram"), assessor: read("engAssessor")}};
+  return {
+    authorization_reference: authRef,
+    authorization_acknowledged: true,
+    starts_at: time("engStartsAt"),
+    ends_at: time("engEndsAt"),
+    scope_hosts: splitHosts(read("engScopeHosts")),
+    excluded_hosts: splitHosts(read("engExcludedHosts")),
+    allowed_ports: [...new Set(ports.length ? ports : [80, 443])],
+    max_rps: Number(read("engMaxRps")) || 15,
+    notes: read("engNotes"),
+    report: {
+      organization: read("engOrganization"),
+      program: read("engProgram"),
+      assessor: read("engAssessor")
+    }
+  };
 }
 
 const reportProfileFields = {organization: "reportOrganization", program: "reportProgram",

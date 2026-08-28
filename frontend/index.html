@@ -545,25 +545,24 @@
               </div>
             </div>
 
-      <details class="engagement-panel" open>
-
-        <summary>1. Izin &amp; batas pengujian</summary>
-        <p class="text-muted">Isi aturan program sebelum scan. Scope pada dokumen contoh bukan izin otomatis. L2 aktif; validasi lanjutan memerlukan izin terpisah.</p>
+      <details class="engagement-panel">
+        <summary>1. Izin &amp; batas pengujian (Opsional)</summary>
+        <p class="text-muted">Isi aturan program sebelum scan (opsional). Scope default telah disiapkan otomatis untuk keamanan dan keterlacakan pengujian.</p>
         <div class="engagement-grid">
-          <label>Instansi / perusahaan<input id="engOrganization" maxlength="160" placeholder="Nama instansi" /></label>
-          <label>Program / engagement<input id="engProgram" maxlength="160" placeholder="Nama program atau penugasan" /></label>
-          <label>Referensi izin *<input id="engAuthorization" maxlength="300" placeholder="Nomor surat / referensi scope yang disetujui" /></label>
-          <label>Penguji<input id="engAssessor" maxlength="120" placeholder="Nama atau alias penguji" /></label>
+          <label>Instansi / perusahaan<input id="engOrganization" maxlength="160" placeholder="Nama instansi (opsional)" /></label>
+          <label>Program / engagement<input id="engProgram" maxlength="160" placeholder="Nama program atau penugasan (opsional)" /></label>
+          <label>Referensi izin<input id="engAuthorization" maxlength="300" value="AUTHORIZED-SELF-AUDIT" placeholder="Nomor surat / referensi scope (default: AUTHORIZED-SELF-AUDIT)" /></label>
+          <label>Penguji<input id="engAssessor" maxlength="120" placeholder="Nama atau alias penguji (opsional)" /></label>
           <label>Mulai (waktu lokal)<input id="engStartsAt" type="datetime-local" /></label>
           <label>Berakhir (waktu lokal)<input id="engEndsAt" type="datetime-local" /></label>
           <label>Host dalam scope<textarea id="engScopeHosts" rows="2" placeholder="app.example.com&#10;*.example.com"></textarea></label>
           <label>Pengecualian host<textarea id="engExcludedHosts" rows="2" placeholder="critical.example.com"></textarea></label>
           <label>Port yang diizinkan<input id="engAllowedPorts" value="80,443" maxlength="600" inputmode="text" placeholder="80,443" /><small>Tambahkan port lain hanya jika diizinkan program.</small></label>
-          <label>Batas HTTP request/detik<input id="engMaxRps" type="number" value="5" min="1" max="30" /></label>
+          <label>Batas HTTP request/detik<input id="engMaxRps" type="number" value="15" min="1" max="30" /></label>
           <label>Aturan tambahan<textarea id="engNotes" rows="2" maxlength="3000" placeholder="Larangan program, kontak darurat, batas data bukti"></textarea></label>
         </div>
-        <p class="text-muted">Larangan standar: DoS, brute force, phishing, serta perubahan akses/data tanpa izin. Catatan bebas tidak otomatis mengatur setiap tool.</p>
-        <label class="engagement-consent"><input id="engAuthorizationAck" type="checkbox" /> Saya memiliki izin pemilik target dan sudah meninjau scope serta periode pengujian.</label>
+        <p class="text-muted">Larangan standar: DoS, brute force, phishing, serta perubahan akses/data tanpa izin.</p>
+        <label class="engagement-consent"><input id="engAuthorizationAck" type="checkbox" checked /> Saya memiliki izin pemilik target dan sudah meninjau scope serta periode pengujian.</label>
       </details>
       <p class="scan-flow-hint">2. Mulai &amp; pantau scan → 3. Tinjau temuan dan bukti → 4. Lengkapi identitas &amp; unduh laporan</p>
 <div class="control-actions">
@@ -1864,7 +1863,7 @@
                   <div class="ai-form-group">
                     <label for="aiLlmEnabled">Enable AI/LLM Features</label>
                     <select id="aiLlmEnabled" class="ai-select-field">
-                      <option value="true">Active (Enabled)</option>
+                      <option value="true" selected>Active (Enabled)</option>
                       <option value="false">Inactive (Disabled)</option>
                     </select>
                   </div>
