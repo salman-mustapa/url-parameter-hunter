@@ -11,8 +11,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://bughunter:bughunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
-      - APP_ENV=production
-      - JWT_SECRET=${JWT_SECRET:?Set a unique JWT_SECRET of at least 32 characters}
+      - APP_ENV=${APP_ENV:-production}
+      - JWT_SECRET=${JWT_SECRET:-}
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-}

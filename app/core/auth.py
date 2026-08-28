@@ -21,13 +21,23 @@ from app.models.models import User
 logger = logging.getLogger("auth")
 
 # JWT & Cryptographic Secret
-if settings.app_env.lower() == "production" and (
-    len(settings.jwt_secret) < 32 or settings.jwt_secret == "development-only-change-me"
-):
-    raise RuntimeError("Production requires a unique JWT_SECRET of at least 32 characters.")
-SECRET_KEY = settings.jwt_secret or secrets.token_urlsafe(48)
-if not settings.jwt_secret:
-    logger.warning("JWT_SECRET is not configured; local sessions will expire on restart.")
+if settings.jwt_secret:
+    if (len(settings.jwt_secret) < 32 or settings.jwt_secret == "development-only-change-me") and settings.app_env.lower() == "production":
+        logger.warning(
+            "Configured JWT_SECRET in production is short or uses default value; "
+            "it is strongly recommended to set a high-entropy secret of at least 32 characters."
+        )
+    SECRET_KEY = settings.jwt_secret
+else:
+    SECRET_KEY = secrets.token_urlsafe(48)
+    if settings.app_env.lower() == "production":
+        logger.warning(
+            "JWT_SECRET is not configured in production environment. "
+            "An ephemeral 48-byte cryptographically secure secret has been generated for this session. "
+            "To persist login sessions across server restarts, set a unique JWT_SECRET (>= 32 chars) in .env."
+        )
+    else:
+        logger.warning("JWT_SECRET is not configured; local sessions will expire on restart.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_SECONDS = 86400 * 7  # 7 days
 
