@@ -115,13 +115,19 @@ function switchViewTab(tabName, params = {}, pushState = true) {
   }
 
   // Update Topbar and Bottom Nav Active States
-  document.querySelectorAll(".nav-link[data-tab], .bottom-nav-link[data-tab]").forEach((b) => {
+  document.querySelectorAll(".nav-link[data-tab], .bottom-nav-link[data-tab], .mobile-menu-link[data-tab]").forEach((b) => {
     if (b.dataset.tab === tabName) {
       b.classList.add("active");
+      b.setAttribute("aria-current", "page");
     } else {
       b.classList.remove("active");
+      b.removeAttribute("aria-current");
     }
   });
+  const moreActive = ["admin", "diff"].includes(tabName);
+  el("mobileMoreBtn")?.classList.toggle("active", moreActive);
+  if (moreActive) el("mobileMoreBtn")?.setAttribute("aria-current", "page");
+  else el("mobileMoreBtn")?.removeAttribute("aria-current");
 
   // Hide all tab views
   document.querySelectorAll(".tab-view").forEach((v) => v.classList.add("hidden"));
@@ -141,6 +147,7 @@ function switchViewTab(tabName, params = {}, pushState = true) {
     if (featSec) featSec.scrollIntoView({ behavior: "smooth" });
   } else if (tabName === "dashboard") {
     if (el("viewDashboard")) el("viewDashboard").classList.remove("hidden");
+    if (typeof renderStreamEvents === "function") renderStreamEvents();
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (typeof syncActiveScansBar === "function") syncActiveScansBar();
 
@@ -322,6 +329,11 @@ function setupNavigation() {
   const startTrialBtn = el("startTrialBtn");
   if (startTrialBtn) {
     startTrialBtn.addEventListener("click", () => {
+      if (!state.currentUser) {
+        openAuthModal("login");
+        showToast("Masuk untuk menjalankan scan pada target yang Anda izinkan.", "info");
+        return;
+      }
       const trialVal = (el("trialTargetInput")?.value || "").trim();
       const trialScope = el("trialScopeModeSelect")?.value || "recursive";
 

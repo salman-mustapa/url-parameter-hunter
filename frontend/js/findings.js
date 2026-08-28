@@ -3,6 +3,7 @@
  * Attack Surface & Parameter Intelligence Platform
  */
 
+let findingsRequest = null;
 async function loadFindings() {
   if (!state.activeScanId) {
     state.allFindings = [];
@@ -18,9 +19,16 @@ async function loadFindings() {
     renderFindings([]);
     return;
   }
+  const scanId = state.activeScanId;
+  if (findingsRequest?.scanId === scanId) return;
+  findingsRequest?.controller.abort();
+  const request = {scanId, controller: new AbortController()};
+  findingsRequest = request;
   try {
-    const res = await authFetch(`${API_BASE}/findings?scan_id=${encodeURIComponent(state.activeScanId)}`);
+    const res = await authFetch(`${API_BASE}/findings?scan_id=${encodeURIComponent(scanId)}`, {signal: request.controller.signal});
+    if (!res.ok) return;
     const findings = await res.json();
+    if (state.activeScanId !== scanId || request.controller.signal.aborted) return;
     state.allFindings = Array.isArray(findings) ? findings : [];
     state.counters.findings = state.allFindings.length;
 
@@ -44,7 +52,9 @@ async function loadFindings() {
     if (typeof updateCounterDisplays === "function") updateCounterDisplays();
     renderFindings();
   } catch (err) {
-    console.error("Load findings error:", err);
+    if (err.name !== "AbortError") console.error("Load findings error:", err);
+  } finally {
+    if (findingsRequest === request) findingsRequest = null;
   }
 }
 
@@ -70,8 +80,8 @@ function renderFindings(customFindings) {
 
   filtered.forEach((f) => {
     const sev = (f.severity || "INFO").toUpperCase();
-    const eLevel = f.evidence_level || (f.status === "CONFIRMED" ? "E3" : (sev === "CRITICAL" || sev === "HIGH" ? "E3" : "E2"));
-    const eScore = (f.evidence_score != null && f.evidence_score > 0) ? f.evidence_score : (sev === "CRITICAL" ? 95 : (sev === "HIGH" ? 80 : 65));
+    const eLevel = f.evidence_level || "E0";
+    const eScore = f.evidence_score ?? 0;
 
     const item = document.createElement("div");
     item.className = "finding-item-card";
@@ -93,11 +103,9 @@ function renderFindings(customFindings) {
           <span class="badge-${eLevel.toLowerCase()}" title="Tingkat Pembuktian Evidence">${esc(eLevel)}</span>
           <strong>${esc(f.title)}</strong>
         </div>
-        <select class="triage-select" data-id="${f.id}">
-          <option value="OPEN" ${f.status === "OPEN" ? "selected" : ""}>OPEN</option>
-          <option value="CONFIRMED" ${f.status === "CONFIRMED" ? "selected" : ""}>CONFIRMED</option>
-          <option value="FALSE_POSITIVE" ${f.status === "FALSE_POSITIVE" ? "selected" : ""}>FALSE POSITIVE</option>
-          <option value="FIXED" ${f.status === "FIXED" ? "selected" : ""}>FIXED</option>
+        <select class="triage-select" data-id="${esc(f.id)}" aria-label="Status temuan">
+          <option value="${esc(f.status || 'OPEN')}" selected>${esc(f.status || 'OPEN')}</option>
+          ${(f.allowed_transitions || []).map(status => `<option value="${esc(status)}">${esc(status)}</option>`).join('')}
         </select>
       </div>
 
@@ -123,13 +131,18 @@ function renderFindings(customFindings) {
 
     item.querySelector(".triage-select").addEventListener("change", async (e) => {
       const newStatus = e.target.value;
+      e.target.disabled = true;
       try {
-        await authFetch(`${API_BASE}/findings/${encodeURIComponent(f.id)}?status=${encodeURIComponent(newStatus)}`, {
-          method: "PATCH",
+        const response = await authFetch(`${API_BASE}/findings/${encodeURIComponent(f.id)}/transition?next_state=${encodeURIComponent(newStatus)}`, {
+          method: "POST",
         });
+        if (!response.ok) throw new Error(apiError(await response.json(), `HTTP ${response.status}`));
+        if (typeof workspaceCache !== "undefined") workspaceCache.delete(f.scan_id);
+        await loadFindings();
       } catch (err) {
+        e.target.value = f.status;
         if (typeof showToast === "function") showToast("Gagal update status finding: " + err.message, "danger");
-      }
+      } finally { e.target.disabled = false; }
     });
 
     const viewDetailBtn = item.querySelector(".view-detail-btn");

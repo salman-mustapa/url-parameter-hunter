@@ -61,6 +61,14 @@ async function checkAuth() {
       renderUserAuthUI();
     } else {
       state.currentUser = null;
+      state.es?.close();
+      state.es = null;
+      clearInterval(state.treePollInterval);
+      clearInterval(state.statusPollInterval);
+      stopTimer();
+      state.activeScanId = null;
+      state.events = [];
+      state.allFindings = [];
       renderUserAuthUI();
     }
   } catch (err) {
@@ -123,7 +131,6 @@ function renderUserAuthUI() {
     if (isGuestOnlyRoute) {
       if (state.currentUser.role === "admin") {
         switchViewTab("admin", {}, true);
-        if (typeof loadAdminData === "function") loadAdminData();
       } else {
         switchViewTab("dashboard", {}, true);
       }
@@ -160,10 +167,10 @@ function toggleProfileDropdown() {
   const isHidden = dd.classList.contains("hidden");
   if (isHidden) {
     dd.classList.remove("hidden");
-    if (btn) btn.classList.add("active");
+    if (btn) { btn.classList.add("active"); btn.setAttribute("aria-expanded", "true"); }
   } else {
     dd.classList.add("hidden");
-    if (btn) btn.classList.remove("active");
+    if (btn) { btn.classList.remove("active"); btn.setAttribute("aria-expanded", "false"); }
   }
 }
 
@@ -171,7 +178,7 @@ function closeProfileDropdown() {
   const dd = el("userProfileDropdown");
   const btn = el("userProfileDropdownBtn");
   if (dd) dd.classList.add("hidden");
-  if (btn) btn.classList.remove("active");
+  if (btn) { btn.classList.remove("active"); btn.setAttribute("aria-expanded", "false"); }
 }
 
 function openAccountSettingsModal(tabName = "password") {
@@ -185,7 +192,7 @@ function openAccountSettingsModal(tabName = "password") {
   // Populate API Token
   const tokenInput = el("userBearerTokenDisplay");
   if (tokenInput) {
-    const token = state.authToken || localStorage.getItem("hunter_auth_token") || "hunter_session_verified_jwt";
+    const token = state.authToken || "Masuk ulang untuk mendapatkan token API sesi ini";
     tokenInput.value = token;
   }
 }
@@ -239,8 +246,9 @@ function toggleTokenMask() {
 
 function copyApiToken() {
   const input = el("userBearerTokenDisplay");
-  if (!input || !input.value) return;
-  navigator.clipboard.writeText(input.value)
+  if (!input || !state.authToken) { showToast("Masuk ulang untuk mendapatkan token API.", "info"); return; }
+  if (!navigator.clipboard) { showToast("Penyalinan otomatis memerlukan HTTPS. Salin token secara manual.", "warning"); return; }
+  navigator.clipboard.writeText(state.authToken)
     .then(() => {
       if (typeof showToast === "function") showToast("✅ API Bearer Token berhasil disalin ke clipboard!", "success");
     })
@@ -251,12 +259,12 @@ function copyApiToken() {
 
 function toggleSSOLink(provider) {
   if (typeof showToast === "function") {
-    showToast(`🔗 Autentikasi Single Sign-On (${provider.toUpperCase()}) siap dihubungkan.`, "info");
+    showToast(`Single Sign-On ${provider.toUpperCase()} belum tersedia. Gunakan login dengan password.`, "info");
   }
 }
 
 function savePreference(key, value) {
-  localStorage.setItem(`hunter_pref_${key}`, value ? "1" : "0");
+  appStorage.setItem(`hunter_pref_${key}`, value ? "1" : "0");
   if (typeof showToast === "function") {
     showToast(`Preferensi ${key} berhasil disimpan.`, "success");
   }
@@ -322,9 +330,17 @@ function setupAuthModal() {
       try {
         await authFetch(`${API_BASE}/auth/logout`, { method: "POST" });
       } catch (_) {}
-      localStorage.removeItem("hunter_auth_token");
+      appStorage.removeItem("hunter_auth_token");
       state.authToken = null;
       state.currentUser = null;
+      state.es?.close();
+      state.es = null;
+      clearInterval(state.treePollInterval);
+      clearInterval(state.statusPollInterval);
+      stopTimer();
+      state.activeScanId = null;
+      state.events = [];
+      state.allFindings = [];
       renderUserAuthUI();
       if (typeof showToast === "function") showToast("Anda telah keluar dari akun.", "info");
     });
@@ -416,17 +432,17 @@ function setupAuthModal() {
       e.preventDefault();
       hideAccountAlert();
 
-      const old_password = (el("oldPasswordInput")?.value || "").trim();
-      const new_password = (el("newPasswordInput")?.value || "").trim();
-      const confirm_pwd = (el("confirmPasswordInput")?.value || "").trim();
+      const old_password = (el("oldPasswordInput")?.value || "");
+      const new_password = (el("newPasswordInput")?.value || "");
+      const confirm_pwd = (el("confirmPasswordInput")?.value || "");
 
       if (new_password !== confirm_pwd) {
         showAccountAlert("Konfirmasi password baru tidak cocok. Silakan periksa kembali.", false);
         return;
       }
 
-      if (new_password.length < 6) {
-        showAccountAlert("Password baru minimal 6 karakter.", false);
+      if (new_password.length < 10) {
+        showAccountAlert("Password baru minimal 10 karakter.", false);
         return;
       }
 
@@ -443,7 +459,8 @@ function setupAuthModal() {
           body: JSON.stringify({ old_password, new_password }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Gagal memperbarui password");
+        if (!res.ok) throw new Error(apiError(data, "Gagal memperbarui password"));
+        state.authToken = data.access_token || null;
 
         showAccountAlert("✅ Password berhasil diubah! Kredensial baru telah aktif.", true);
         changePwdForm.reset();
@@ -502,7 +519,7 @@ function setupAuthModal() {
       e.preventDefault();
       hideAuthAlert();
       const username = (el("loginUsername")?.value || "").trim();
-      const password = (el("loginPassword")?.value || "").trim();
+      const password = (el("loginPassword")?.value || "");
       const device_fingerprint = getDeviceFingerprint();
 
       try {
@@ -512,18 +529,17 @@ function setupAuthModal() {
           body: JSON.stringify({ username, password, device_fingerprint }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Gagal masuk");
+        if (!res.ok) throw new Error(apiError(data, "Gagal masuk"));
 
         state.authToken = data.access_token;
-        localStorage.setItem("hunter_auth_token", data.access_token);
+        appStorage.removeItem("hunter_auth_token");
         state.currentUser = data.user;
         renderUserAuthUI();
         window.closeAuthModal();
 
         if (state.currentUser.role === "admin") {
           switchViewTab("admin", {}, true);
-          if (typeof loadAdminData === "function") loadAdminData();
-        } else {
+          } else {
           switchViewTab("dashboard", {}, true);
         }
 
@@ -546,7 +562,7 @@ function setupAuthModal() {
       hideAuthAlert();
       const username = (el("regUsername")?.value || "").trim();
       const email = (el("regEmail")?.value || "").trim();
-      const password = (el("regPassword")?.value || "").trim();
+      const password = (el("regPassword")?.value || "");
       const device_fingerprint = getDeviceFingerprint();
 
       try {
@@ -556,18 +572,17 @@ function setupAuthModal() {
           body: JSON.stringify({ username, email, password, device_fingerprint }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Gagal mendaftar");
+        if (!res.ok) throw new Error(apiError(data, "Gagal mendaftar"));
 
         state.authToken = data.access_token;
-        localStorage.setItem("hunter_auth_token", data.access_token);
+        appStorage.removeItem("hunter_auth_token");
         state.currentUser = data.user;
         renderUserAuthUI();
         window.closeAuthModal();
 
         if (state.currentUser.role === "admin") {
           switchViewTab("admin", {}, true);
-          if (typeof loadAdminData === "function") loadAdminData();
-        } else {
+          } else {
           switchViewTab("dashboard", {}, true);
         }
 

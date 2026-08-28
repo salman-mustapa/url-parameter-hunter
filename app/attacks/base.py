@@ -66,6 +66,7 @@ class ValidationResult:
     message: str = ""
     cwe_id: str = "CWE-200"
     severity: str = "INFO"  # CRITICAL, HIGH, MEDIUM, LOW, INFO
+    validated_result: Any = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -137,6 +138,34 @@ class RiskScore:
 
 class BaseAttackModule(abc.ABC):
     """Abstract base class for all specialist attack techniques."""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "validate" not in cls.__dict__:
+            return
+
+        async def validate_collected(self, opportunity, session):
+            from app.validation.engine import EvidenceValidationEngine, ValidationPlan
+            from app.validation.safety.executor import AuthorizedExecutor
+            from app.validation.validators import get_validator
+            aliases = {"auth": "auth_bypass", "traversal": "path_traversal", "upload": "file_upload"}
+            family = aliases.get(self.attack_type, self.attack_type)
+            plan = opportunity.metadata.get("validation_plan")
+            executor = getattr(session, "executor", None)
+            validator = get_validator(family)
+            if (not isinstance(plan, ValidationPlan) or not isinstance(executor, AuthorizedExecutor)
+                    or not validator or get_validator(plan.test) is not validator
+                    or plan.endpoint != opportunity.endpoint):
+                return ValidationResult(False, 0, "P0", self.attack_type, opportunity.endpoint,
+                    message="Active validation requires an explicit registered evidence plan and bounded lab executor")
+            result = await EvidenceValidationEngine().execute(plan, executor)
+            return ValidationResult(result.status == "CONFIRMED", result.evidence_score / 100,
+                "P3" if result.status == "CONFIRMED" else "P2" if result.status == "VALIDATED" else "P0",
+                self.attack_type, plan.endpoint, parameter=plan.parameter,
+                evidence={"structured_validation": result.to_dict()}, message=result.actual_result,
+                cwe_id=result.cwe_id or self.cwe_id, severity=result.severity, validated_result=result)
+
+        cls.validate = validate_collected
 
     def __init__(self, attack_type: str, cwe_id: str = "CWE-200", default_severity: str = "MEDIUM") -> None:
         self.attack_type = attack_type

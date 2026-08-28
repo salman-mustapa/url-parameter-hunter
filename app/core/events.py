@@ -42,13 +42,16 @@ class EventBus:
         """Connect to Redis for Pub/Sub. Falls back to in-memory on failure."""
         try:
             import redis.asyncio as aioredis
-            self._redis = aioredis.from_url(redis_url, decode_responses=True)
+            self._redis = aioredis.from_url(redis_url, decode_responses=True,
+                                           socket_connect_timeout=1, socket_timeout=2)
             await self._redis.ping()
-            logger.info("EventBus connected to Redis at %s", redis_url)
+            logger.info("EventBus connected to Redis")
             # Start subscriber listener
             self._pubsub_task = asyncio.create_task(self._redis_listener())
         except Exception:
             logger.warning("Redis unavailable — EventBus using in-memory fallback")
+            if self._redis:
+                await self._redis.aclose()
             self._redis = None
 
     async def _redis_listener(self) -> None:

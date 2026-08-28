@@ -38,7 +38,7 @@
         <div class="input-with-icon">
           <span class="input-icon">🌐</span>
           <input id="trialTargetInput" type="text"
-            placeholder="Masukkan target (contoh: example.com atau google.com)" autocomplete="off" />
+            placeholder="Masukkan target (contoh: app.example.invalid; gunakan target yang berizin)" autocomplete="off" />
         </div>
       </div>
 
@@ -54,7 +54,7 @@
         <label>AI & Security Engine</label>
         <div class="engine-status-pill">
           <span class="live-dot pulse"></span>
-          <span>Full Power (10+ Tools & AI)</span>
+          <span>Recon Aktif • Level L2</span>
         </div>
       </div>
     </div>
@@ -64,17 +64,17 @@
         <span class="btn-icon">🚀</span> MULAI SCAN SEKARANG
       </button>
       <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
-        <span class="btn-icon">🔑</span> Masuk untuk Scan Tanpa Batas
+        <span class="btn-icon">🔑</span> Masuk untuk Mengatur Scan
       </button>
     </div>
 
     <!-- Quick Suggestion Chips -->
     <div class="quick-samples-row">
-      <span class="quick-sample-label">Contoh Target Cepat:</span>
-      <button type="button" class="sample-chip" data-sample="example.com">⚡ example.com</button>
-      <button type="button" class="sample-chip" data-sample="google.com">🌐 google.com</button>
-      <button type="button" class="sample-chip" data-sample="facebook.com">👥 facebook.com</button>
-      <button type="button" class="sample-chip" data-sample="tesla.com">🎯 tesla.com</button>
+      <span class="quick-sample-label">Contoh format (bukan izin pengujian):</span>
+      <button type="button" class="sample-chip" data-sample="example.invalid">⚡ example.invalid</button>
+      <button type="button" class="sample-chip" data-sample="app.example.invalid">🌐 app.example.invalid</button>
+      <button type="button" class="sample-chip" data-sample="api.example.invalid">👥 api.example.invalid</button>
+      <button type="button" class="sample-chip" data-sample="test.example.invalid">🎯 test.example.invalid</button>
     </div>
   </div>
 
@@ -83,8 +83,8 @@
     <div class="trust-signal-item">
       <span class="trust-icon">🛡️</span>
       <div>
-        <strong>100% Non-Destructive</strong>
-        <p>Pemindaian aman berbasis inspeksi pasif & standard probing.</p>
+        <strong>Scope & Izin Eksplisit</strong>
+        <p>Jalankan pemeriksaan hanya pada target dengan izin pemilik sistem.</p>
       </div>
     </div>
     <div class="trust-signal-item">
@@ -104,8 +104,8 @@
     <div class="trust-signal-item">
       <span class="trust-icon">🔒</span>
       <div>
-        <strong>Zero-Lost Scan Attribution</strong>
-        <p>Hasil scan trial otomatis diklaim ke akun Anda saat mendaftar.</p>
+        <strong>Akses Hasil Terproteksi</strong>
+        <p>Login diperlukan; hasil scan hanya tersedia bagi pemilik dan administrator.</p>
       </div>
     </div>
   </div>
@@ -219,10 +219,10 @@
       <div class="card sketch-card feature-card">
         <div class="feature-icon">🔒</div>
         <h3>Anti-Abuse & RBAC Privacy</h3>
-        <p>Sistem uji coba cerdas dengan proteksi sidik jari perangkat, isolasi riwayat pemindaian antar pengguna, dan audit pengawasan admin.</p>
+        <p>Autentikasi, pemeriksaan kepemilikan scan, pembatasan percobaan login, dan pengawasan administrator.</p>
         <div class="feature-mini-preview mini-tags-wrap">
-          <span class="mini-chip-auth">🔒 Device Protected</span>
-          <span class="mini-chip-auth">👤 Auto Scan Claim</span>
+          <span class="mini-chip-auth">🔒 Login Diperlukan</span>
+          <span class="mini-chip-auth">👤 Isolasi Data</span>
         </div>
       </div>
     </div>
@@ -243,8 +243,7 @@
           <span class="faq-toggle-icon">➕</span>
         </div>
         <div class="faq-answer">
-          <p>Ya, 100% aman dan non-destruktif. Hunter Aja hanya melakukan inspeksi pasif OSINT, resolusi DNS
-            aktif, probing port ringan, dan web crawling standar tanpa mengirimkan payload eksploitasi berbahaya.</p>
+          <p>Scan aktif tetap memiliki risiko. Gunakan hanya pada target yang Anda miliki atau memiliki izin tertulis. Mode standar membatasi pemeriksaan aktif; validasi berisiko tinggi memerlukan admin dan referensi otorisasi.</p>
         </div>
       </div>
 
@@ -254,9 +253,7 @@
           <span class="faq-toggle-icon">➕</span>
         </div>
         <div class="faq-answer">
-          <p>Setiap perangkat fisik yang belum memiliki akun dapat mencoba pemindaian reconnaissance langsung
-            secara instan. Sidik jari perangkat akan mencatat sesi uji coba tersebut, dan saat Anda mendaftar akun
-            baru, seluruh hasil temuan scan tersebut otomatis diklaim ke akun Anda.</p>
+          <p>Masuk atau buat akun sebelum memulai scan. Hasil disimpan pada akun pemilik scan dan tidak diklaim berdasarkan sidik jari perangkat.</p>
         </div>
       </div>
 
@@ -278,7 +275,7 @@
   <div class="card sketch-card cta-banner-card">
     <div class="cta-content">
       <h2>Siap Memburu Attack Surface Hari Ini?</h2>
-      <p>Daftar sekarang secara gratis untuk mendapatkan akses pemindaian penuh, riwayat tersimpan, dan diff analyzer tanpa batas.</p>
+      <p>Daftar sekarang secara gratis untuk mendapatkan akses scan terotorisasi, riwayat tersimpan, dan perbandingan hasil sesuai batas sistem.</p>
       <div class="cta-actions">
         <button id="ctaRegisterBtn" class="btn btn-primary btn-lg">✨ Buat Akun Gratis Sekarang</button>
         <button id="ctaLoginBtn" class="btn btn-secondary btn-lg">🔑 Masuk ke Dashboard</button>

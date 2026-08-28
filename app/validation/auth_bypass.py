@@ -15,6 +15,8 @@ Strict Rules Enforced:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import hashlib
 import logging
 import re
@@ -118,7 +120,7 @@ class AuthBypassValidator:
     ) -> Optional[AuthBypassCandidate]:
         """Tests whether an administrative dashboard is reachable without credentials."""
         try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False, verify=False) as client:
+            async with ValidationHTTPClient(timeout=8.0, follow_redirects=False, verify=False) as client:
                 resp = await client.get(url, headers=headers)
 
                 # HTTP 401 or 403 -> Authentication is properly enforced
@@ -204,7 +206,7 @@ class AuthBypassValidator:
         from the login page HTML instead of hardcoding 'username'/'password'.
         """
         try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False, verify=False) as client:
+            async with ValidationHTTPClient(timeout=8.0, follow_redirects=False, verify=False) as client:
                 # Step 1: Precheck — verify if target has a login form
                 get_resp = await client.get(login_url, headers=headers)
                 if get_resp.status_code in (401, 403, 404, 500, 502, 503, 504):

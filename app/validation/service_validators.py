@@ -12,6 +12,8 @@ Each validator supports:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import unsupported_socket_probe
+
 import re
 import socket
 import asyncio
@@ -232,7 +234,7 @@ class SMTPServiceValidator(BaseServiceValidator):
         # Connect and check for open relay (basic HELLO check)
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=5.0
+                unsupported_socket_probe(host, port), timeout=5.0
             )
             banner = await asyncio.wait_for(reader.read(1024), timeout=3.0)
             writer.write(b"EHLO pentest.local\r\n")
@@ -580,7 +582,7 @@ class LDAPServiceValidator(BaseServiceValidator):
         # Connect and check anonymous bind
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=5.0
+                unsupported_socket_probe(host, port), timeout=5.0
             )
             # Send simple bind request
             # LDAP simple bind request packet bytes
@@ -627,7 +629,7 @@ class SMBServiceValidator(BaseServiceValidator):
         # Null session check
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=5.0
+                unsupported_socket_probe(host, port), timeout=5.0
             )
             # Send basic SMB negotiate protocol request
             negotiate_req = b"\x00\x00\x00\x85\xff\x53\x4d\x42\x72\x00\x00\x00\x00\x18\x53\xc8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xfe\x00\x00\x00\x00\x00\x62\x00\x02\x50\x43\x20\x4e\x45\x54\x57\x4f\x52\x4b\x20\x50\x52\x4f\x47\x52\x41\x4d\x20\x31\x2e\x30\x00\x02\x4c\x41\x4e\x4d\x41\x4e\x31\x2e\x30\x00\x02\x57\x69\x6e\x64\x6f\x77\x73\x20\x66\x6f\x72\x20\x57\x6f\x72\x6b\x67\x72\x6f\x75\x70\x73\x20\x33\x2e\x31\x61\x00\x02\x4c\x4d\x31\x2e\x32\x58\x30\x30\x32\x00\x02\x4c\x41\x4e\x4d\x41\x4e\x32\x2e\x31\x00\x02\x4e\x54\x20\x4e\x54\x20\x4c\x4d\x20\x30\x2e\x31\x32\x00"

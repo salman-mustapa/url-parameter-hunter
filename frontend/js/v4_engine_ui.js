@@ -476,7 +476,7 @@ function renderToolRegistryModal(tools, byCategory) {
       <div class="v4-tool-cats-bar">
         <button class="filter-pill active" onclick="filterToolRegistryCategory('ALL')">Semua (${tools.length})</button>
         ${categories.map(c => `
-          <button class="filter-pill" onclick="filterToolRegistryCategory('${esc(c)}')">${esc(c)} (${byCategory[c]})</button>
+          <button class="filter-pill" onclick="filterToolRegistryCategory(${jsArg(c)})">${esc(c)} (${byCategory[c]})</button>
         `).join("")}
       </div>
 

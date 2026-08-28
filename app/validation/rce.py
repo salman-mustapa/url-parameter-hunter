@@ -1,3 +1,4 @@
+from app.validation.safety.legacy import ValidationHTTPClient
 """RCE (Remote Code Execution) Validation Engine — Deep Exploitation Evidence.
 
 Uses controlled canary actions + deep system info extraction after confirmation.
@@ -171,7 +172,7 @@ class RCEValidator:
             query_params = parse_qs(parsed.query, keep_blank_values=True)
             flat_params = {k: v[0] if isinstance(v, list) and v else "" for k, v in query_params.items()}
 
-            async with httpx.AsyncClient(
+            async with ValidationHTTPClient(
                 timeout=self.timeout, follow_redirects=True, verify=False
             ) as client:
                 if location == "query":

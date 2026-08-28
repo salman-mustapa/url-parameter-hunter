@@ -16,6 +16,7 @@ async function refreshAssetTree() {
     const res = await authFetch(`${API_BASE}/assets/tree?scan_id=${encodeURIComponent(currentScanId)}`);
     if (!res.ok || state.activeScanId !== currentScanId) return;
     const data = await res.json();
+    if (state.activeScanId !== currentScanId) return;
     const searchVal = el("treeSearchInput")?.value || "";
     const dataHash = JSON.stringify(data) + "_" + (state.currentTreeSevFilter || "ALL") + "_" + searchVal;
     if (dataHash === lastRenderedTreeHash && state.assetsTreeData) {
@@ -330,7 +331,7 @@ function renderDrawerAssetData(a) {
       urlsBox.innerHTML = a.urls.slice(0, 30).map(u => `
         <div class="url-item mono">
           <span class="badge status-${u.status_code || 200}">${u.status_code || 200}</span>
-          <a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
+          <a href="${esc(safeLink(u.url))}" target="_blank" rel="noopener">${esc(u.url)}</a>
         </div>
       `).join('');
     }

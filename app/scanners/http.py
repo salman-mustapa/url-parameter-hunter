@@ -201,6 +201,9 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
     for scheme, port_num in candidate_endpoints:
         port_suffix = f":{port_num}" if port_num not in (80, 443) else ""
         url = f"{scheme}://{host}{port_suffix}/"
+        if not ctx.scope.url_allowed(url):
+            continue
+        await ctx.rate_limiter.wait()
         t0 = time.time()
         resp = await fetch_http(url, timeout=settings.http_timeout_seconds)
         latency_ms = int((time.time() - t0) * 1000)

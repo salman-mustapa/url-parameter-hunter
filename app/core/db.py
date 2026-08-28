@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
@@ -26,7 +26,16 @@ else:
         "pool_timeout": settings.db_pool_timeout,
     }
 
-engine = create_async_engine(settings.database_url, **engine_kwargs)
+engine = create_async_engine(settings.database_url, hide_parameters=True, **engine_kwargs)
+
+
+if is_sqlite:
+    @event.listens_for(engine.sync_engine, "connect")
+    def configure_sqlite(connection, _record):
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -41,30 +50,18 @@ async def async_session_scope():
         try:
             await session.rollback()
         except Exception:
-            pass
+            logger.exception("Database rollback failed")
         raise
     finally:
         try:
             await session.close()
         except Exception:
-            pass
+            logger.exception("Database session close failed")
 
 
 async def get_db():
-    session = AsyncSessionLocal()
-    try:
+    async with async_session_scope() as session:
         yield session
-    except Exception:
-        try:
-            await session.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        try:
-            await session.close()
-        except Exception:
-            pass
 
 
 async def ping() -> bool:
@@ -114,8 +111,8 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        # Dynamic & Explicit Schema Synchronization for all models (V8 §48, V13 Multi-Tenant)
-        # Guarantees zero missing columns across SQLite and PostgreSQL
+        # Reviewed additive upgrades for legacy installations. Unknown schema gaps
+        # fail startup; migration failures must never be mistaken for success.
         explicit_columns = [
             # users
             ("users", "tenant_id", "VARCHAR", "VARCHAR REFERENCES tenants(id) ON DELETE SET NULL"),
@@ -243,18 +240,35 @@ async def init_db() -> None:
         ]
 
 
-        if is_sqlite:
-            for table_name, col_name, sqlite_type, _ in explicit_columns:
-                try:
-                    await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {sqlite_type}"))
-                except Exception:
-                    pass
-        else:
-            for table_name, col_name, _, pg_type in explicit_columns:
-                try:
-                    await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {pg_type}"))
-                except Exception:
-                    pass
+        existing_columns = await conn.run_sync(lambda sync: {
+            table: {column["name"] for column in inspect(sync).get_columns(table)}
+            for table in Base.metadata.tables
+        })
+        for table_name, col_name, sqlite_type, pg_type in explicit_columns:
+            if col_name in existing_columns[table_name]:
+                continue
+            column_type = sqlite_type if is_sqlite else pg_type
+            # SQLite cannot add a non-constant timestamp default to populated tables.
+            timestamp_backfill = is_sqlite and "DEFAULT CURRENT_TIMESTAMP" in column_type
+            if timestamp_backfill:
+                column_type = column_type.replace(" DEFAULT CURRENT_TIMESTAMP", "")
+            await conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {column_type}'))
+            if timestamp_backfill:
+                await conn.execute(text(f'UPDATE "{table_name}" SET "{col_name}" = CURRENT_TIMESTAMP WHERE "{col_name}" IS NULL'))
+            existing_columns[table_name].add(col_name)
+            logger.info("Migrated column %s.%s", table_name, col_name)
+
+        missing = [f"{name}.{column.name}" for name, table in Base.metadata.tables.items()
+                   for column in table.columns if column.name not in existing_columns[name]]
+        if missing:
+            raise RuntimeError("Unsupported legacy schema; explicit migration required: " + ", ".join(missing))
+
+        # create_all does not add missing indexes to existing tables.
+        await conn.run_sync(lambda sync: [index.create(sync, checkfirst=True)
+                                         for table in Base.metadata.tables.values()
+                                         for index in table.indexes])
+
+        if not is_sqlite:
 
             # Indexes for PostgreSQL
             indexes = [
@@ -267,14 +281,10 @@ async def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS ix_evidence_sha256 ON evidence(sha256_hash)",
             ]
             for idx_sql in indexes:
-                try:
-                    await conn.execute(text(idx_sql))
-                except Exception:
-                    pass
+                await conn.execute(text(idx_sql))
 
             # Schema migration: findings.confidence was originally FLOAT, now is VARCHAR
-            try:
-                await conn.execute(text("""
+            await conn.execute(text("""
                     DO $$
                     BEGIN
                         IF EXISTS (
@@ -284,12 +294,13 @@ async def init_db() -> None:
                               AND data_type = 'double precision'
                         ) THEN
                             ALTER TABLE findings ALTER COLUMN confidence TYPE character varying USING confidence::text;
-                            UPDATE findings SET confidence = 'CONFIRMED' WHERE confidence IS NULL OR confidence ~ '^[0-9]';
+                            UPDATE findings SET confidence = 'OBSERVED' WHERE confidence IS NULL OR confidence ~ '^[0-9]';
                         END IF;
                     END $$;
                 """))
-            except Exception:
-                pass
+
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"))
+        await conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('20260828_01') ON CONFLICT (version) DO NOTHING"))
 
     # Optional one-time bootstrap. Existing accounts are never deleted, reset, or modified.
     if settings.seed_default_users:

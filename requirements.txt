@@ -14,4 +14,8 @@ jinja2
 redis
 psutil
 reportlab
+openpyxl>=3.1.5
 Pillow
+beautifulsoup4
+aiofiles
+python-dotenv

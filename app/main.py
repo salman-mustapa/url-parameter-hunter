@@ -12,9 +12,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.router import router
 from app.core.config import settings
-from app.core.db import AsyncSessionLocal, init_db, ping
+from app.core.db import engine, init_db, ping
 from app.core.events import event_bus
 from app.core.logging import setup_logging
+from app.core.http_security import HTTPSecurityMiddleware
 from app.services.results import result_service
 
 setup_logging()
@@ -50,9 +51,14 @@ async def lifespan(app: FastAPI):
         logger.info("Auto-resume pending scans disabled; startup stays idle until a scan is requested.")
 
     logger.info("Bug Hunter v%s started. DB ready.", settings.app_version)
-    yield
-    await event_bus.close()
-    await result_service.close()
+    try:
+        yield
+    finally:
+        from app.services.scan_manager import scan_manager
+        await scan_manager.close()
+        await result_service.close()
+        await event_bus.close()
+        await engine.dispose()
 
 
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -68,13 +74,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
-    allow_credentials=True,
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()],
+    allow_credentials="*" not in settings.cors_origins.split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(router)
+app.add_middleware(HTTPSecurityMiddleware)
 
 
 @app.get("/health")
@@ -84,7 +91,8 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    return {"ready": await ping()}
+    healthy = await ping()
+    return JSONResponse({"ready": healthy}, status_code=200 if healthy else 503)
 
 
 @app.get("/docs", include_in_schema=False)
@@ -136,7 +144,9 @@ if frontend_path.exists():
     async def serve_frontend(request: Request, full_path: str):
         if full_path in ("docs", "redoc", "openapi.json") or full_path.startswith("api/"):
             return JSONResponse(status_code=404, content={"detail": "Not Found"})
-        path = frontend_path / full_path
+        path = (frontend_path / full_path).resolve()
+        if not path.is_relative_to(frontend_path.resolve()):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         if full_path and path.exists() and path.is_file():
             return FileResponse(path)
         return FileResponse(frontend_path / "index.html")

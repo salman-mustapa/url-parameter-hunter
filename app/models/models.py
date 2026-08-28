@@ -512,7 +512,7 @@ class Finding(Base):
     finding_type: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     severity: Mapped[str] = mapped_column(String, index=True, nullable=False, default="INFO")  # CRITICAL, HIGH, MEDIUM, LOW, INFO
-    confidence: Mapped[str] = mapped_column(String, nullable=False, default="CONFIRMED")  # OBSERVED, SUSPECTED, VALIDATED, CONFIRMED
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="OBSERVED")  # OBSERVED, SUSPECTED, VALIDATED, CONFIRMED
     evidence_level: Mapped[str] = mapped_column(String, index=True, nullable=False, default="E0")  # E0, E1, E2, E3, E4 (V8 §26)
     evidence_score: Mapped[int] = mapped_column(Integer, nullable=False, default=10)  # 0-100 (V8 §27)
     exploitability_state: Mapped[str] = mapped_column(String, index=True, nullable=False, default="CANDIDATE")  # NOT_MATCHED, CANDIDATE, APPLICABLE, VALIDATION_PENDING, VALIDATED, CONFIRMED, NOT_EXPLOITABLE, PATCHED, INCONCLUSIVE (V8 §21)
@@ -1067,4 +1067,3 @@ __all__ = [
     "CleanupTask", "LabEnvironment", "LabTarget", "EvidenceScore", "EvidenceRequirement",
     "Campaign", "Artifact", "Identity", "TestPlan", "PreconditionCheck", "ExportJob",
 ]
-

@@ -134,7 +134,7 @@
       </button>
       <button id="btnDownloadBugBountyReport" class="btn btn-secondary btn-sm"
         title="Unduh Laporan Format HackerOne/Bugcrowd">
-        🎯 Bug Bounty (.md)
+        🎯 Temuan & Bukti (.md)
       </button>
       <button id="btnDownloadCveReport" class="btn btn-secondary btn-sm"
         title="Unduh Laporan Riset Kerentanan Baru">
@@ -276,7 +276,8 @@
       <div id="retestStatusText">Hasil Retest Terkini: Menunggu eksekusi.</div>
     </div>
     <div class="finding-actions-row">
-      <button id="findingTransitionBtn" class="btn btn-primary btn-sm">Ubah Status Lifecycle</button>
+      <select id="findingLifecycleSelect" aria-label="Status lifecycle berikutnya"></select>
+              <button id="findingTransitionBtn" class="btn btn-primary btn-sm">Ubah Status Lifecycle</button>
     </div>
     <div id="findingTimeline" class="finding-timeline"></div>
   </div>

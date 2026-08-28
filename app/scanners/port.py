@@ -406,6 +406,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         ports_to_scan = sorted(COMMON_PORTS.keys())
         timeout = min(settings.port_timeout_seconds, 0.8)
 
+    ports_to_scan = [port for port in ports_to_scan if ctx.scope.port_allowed(port)]
     # Reorder: priority web ports first for quick results
     priority_set = set(PRIORITY_WEB_PORTS)
     priority_ports = [p for p in ports_to_scan if p in priority_set]
@@ -593,6 +594,8 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         )
 
                 async def validate_services() -> None:
+                    if not ctx.options.get("service_validation", False):
+                        return
                     await asyncio.gather(
                         *(validate_service(p) for p in sorted(set(open_ports))),
                         return_exceptions=True,

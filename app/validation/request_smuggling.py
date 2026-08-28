@@ -13,6 +13,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -66,7 +68,7 @@ class RequestSmugglingValidator(BaseDeepValidator):
         # In a CL.TE scenario where frontend uses CL (4) and backend uses TE, backend waits for next chunk causing timeout
         cl_te_body = "1\r\nZ\r\nQ\r\n\r\n"
 
-        async with httpx.AsyncClient(verify=False, timeout=6.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=6.0, follow_redirects=False) as client:
             try:
                 import time
                 start_t = time.time()

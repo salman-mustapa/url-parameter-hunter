@@ -32,6 +32,11 @@ class LabEnvironmentFixture:
 
 
 class LabEnvironmentManager:
+    def synthetic_runtime(self):
+        """Own a real disposable loopback fixture and its cleanup lifecycle."""
+        from app.lab.runtime import local_lab
+        return local_lab()
+
     """Manages disposable lab fixtures for safe adversary emulation (V8 §45)."""
 
     def __init__(self) -> None:

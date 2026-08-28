@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-STORAGE_DIR = BASE_DIR / "storage"
+STORAGE_DIR = Path(os.environ.get("STORAGE_DIR", str(BASE_DIR / "storage"))).resolve()
 SCREENSHOTS_DIR = STORAGE_DIR / "screenshots"
 EVIDENCE_DIR = STORAGE_DIR / "evidence"
 REPORTS_DIR = STORAGE_DIR / "reports"
@@ -32,12 +32,16 @@ class Settings(BaseSettings):
     bootstrap_user_password: str = os.getenv("BOOTSTRAP_USER_PASSWORD", "")
     proxy_pool: str = os.getenv("PROXY_POOL", "")
     oob_callback_host: str = os.getenv("OOB_CALLBACK_HOST", "localhost:9001")
-    cors_origins: str = "*"
+    cors_origins: str = ""
     performance_mode: str = os.getenv("PERFORMANCE_MODE", "balanced")
     low_resource_mode: bool = os.getenv("LOW_RESOURCE_MODE", "false").lower() in ("true", "1", "yes")
     allow_private_networks: bool = os.getenv("ALLOW_PRIVATE_NETWORKS", "false").lower() in ("true", "1", "yes")
     rate_limit_rps: int = 15
     max_concurrent_hosts: int = 12
+    max_concurrent_scans: int = 2
+    max_pending_scans: int = 20
+    max_browser_captures: int = 1
+    browser_capture_enabled: bool = False
     max_assets_per_scan: int = 2500
     max_urls_per_scan: int = 20000
     max_crawl_depth: int = 3
@@ -96,6 +100,7 @@ class Settings(BaseSettings):
         if self.low_resource_mode or mode == "low":
             self.performance_mode = "low"
             self.max_concurrent_hosts = min(self.max_concurrent_hosts, 3)
+            self.max_concurrent_scans = 1
             self.max_port_hosts = min(self.max_port_hosts, 4)
             self.max_web_hosts = min(self.max_web_hosts, 4)
             self.max_http_hosts = min(self.max_http_hosts, 5)

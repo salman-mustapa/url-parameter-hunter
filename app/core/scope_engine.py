@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 
 import tldextract
 
+_extract_domain = tldextract.TLDExtract(suffix_list_urls=())
+
 
 def is_valid_hostname(host: str) -> bool:
     if not host or len(host) > 253:
@@ -25,7 +27,7 @@ def normalize_target(raw: str) -> tuple[str, str]:
     host = (parsed.hostname or value.split("/")[0]).strip(".")
     if not is_valid_hostname(host):
         raise ValueError(f"Format domain/host '{host}' tidak valid.")
-    ext = tldextract.extract(host)
+    ext = _extract_domain(host)
     if not ext.domain or not ext.suffix:
         labels = host.split(".")
         if len(labels) >= 2:
@@ -53,11 +55,15 @@ class ScopeEngine:
         recursive: bool = True,
         authorization_id: Optional[str] = None,
         allow_private_networks: bool = False,
+        scope_hosts: Optional[List[str]] = None,
+        expires_at: Optional[str] = None,
     ):
         self.root_domain = root_domain.lower().strip(".")
         self.recursive = recursive
         self.authorization_id = authorization_id
         self.allow_private_networks = bool(allow_private_networks)
+        self.scope_hosts = scope_hosts or []
+        self.expires_at = expires_at
 
         if not self.recursive and allowed_hosts:
             self.allowed_hosts: Set[str] = {h.lower().strip(".") for h in allowed_hosts}
@@ -75,8 +81,21 @@ class ScopeEngine:
             return False
         h = host.lower().strip(".")
 
+        if self.expires_at:
+            from datetime import datetime, timezone
+            if datetime.now(timezone.utc) >= datetime.fromisoformat(self.expires_at):
+                return False
+
+        def matches(pattern):
+            if pattern.startswith("*."):
+                return h.endswith("." + pattern[2:]) and h != pattern[2:]
+            return h == pattern
+
+        if self.scope_hosts and not any(matches(p) for p in self.scope_hosts):
+            return False
+
         # Check explicit exclusions first
-        if any(h == ex or h.endswith(f".{ex}") for ex in self.excluded_hosts):
+        if any(matches(ex) or (not ex.startswith("*.") and h.endswith(f".{ex}")) for ex in self.excluded_hosts):
             return False
 
         if not self.recursive:
@@ -115,10 +134,16 @@ class ScopeEngine:
         return module_name.lower() in self.allowed_modules
 
     def url_allowed(self, url: str) -> bool:
-        parsed = urlparse(url)
+        try:
+            parsed = urlparse(url)
+            port = parsed.port
+        except ValueError:
+            return False
+        if parsed.username or parsed.password:
+            return False
         if parsed.scheme and not self.protocol_allowed(parsed.scheme):
             return False
-        if parsed.port and not self.port_allowed(parsed.port):
+        if not self.port_allowed(port or (443 if parsed.scheme == "https" else 80)):
             return False
         host = parsed.hostname
         if not self.host_allowed(host):

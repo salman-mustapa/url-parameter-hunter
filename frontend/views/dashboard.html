@@ -63,14 +63,35 @@
           <label>Engine Capabilities</label>
           <div class="engine-status-pill">
             <span class="live-dot pulse"></span>
-            <span>⚡ Autonomous Engine (Full Recon, Active Proofs & Dynamic Governor)</span>
+            <span>⚡ Recon Aktif L2 • Validasi Lanjutan Memerlukan Izin</span>
           </div>
         </div>
       </div>
 
+
+      <details class="engagement-panel" open>
+        <summary>1. Izin &amp; batas pengujian</summary>
+        <p class="text-muted">Isi aturan program sebelum scan. Scope pada dokumen contoh bukan izin otomatis. L2 aktif; validasi lanjutan memerlukan izin terpisah.</p>
+        <div class="engagement-grid">
+          <label>Instansi / perusahaan<input id="engOrganization" maxlength="160" placeholder="Nama instansi" /></label>
+          <label>Program / engagement<input id="engProgram" maxlength="160" placeholder="Nama program atau penugasan" /></label>
+          <label>Referensi izin *<input id="engAuthorization" maxlength="300" placeholder="Nomor surat / referensi scope yang disetujui" /></label>
+          <label>Penguji<input id="engAssessor" maxlength="120" placeholder="Nama atau alias penguji" /></label>
+          <label>Mulai (waktu lokal)<input id="engStartsAt" type="datetime-local" /></label>
+          <label>Berakhir (waktu lokal)<input id="engEndsAt" type="datetime-local" /></label>
+          <label>Host dalam scope<textarea id="engScopeHosts" rows="2" placeholder="app.example.com&#10;*.example.com"></textarea></label>
+          <label>Pengecualian host<textarea id="engExcludedHosts" rows="2" placeholder="critical.example.com"></textarea></label>
+          <label>Port yang diizinkan<input id="engAllowedPorts" value="80,443" maxlength="600" inputmode="text" placeholder="80,443" /><small>Tambahkan port lain hanya jika diizinkan program.</small></label>
+          <label>Batas HTTP request/detik<input id="engMaxRps" type="number" value="5" min="1" max="30" /></label>
+          <label>Aturan tambahan<textarea id="engNotes" rows="2" maxlength="3000" placeholder="Larangan program, kontak darurat, batas data bukti"></textarea></label>
+        </div>
+        <p class="text-muted">Larangan standar: DoS, brute force, phishing, serta perubahan akses/data tanpa izin. Catatan bebas tidak otomatis mengatur setiap tool.</p>
+        <label class="engagement-consent"><input id="engAuthorizationAck" type="checkbox" /> Saya memiliki izin pemilik target dan sudah meninjau scope serta periode pengujian.</label>
+      </details>
+      <p class="scan-flow-hint">2. Mulai &amp; pantau scan → 3. Tinjau temuan dan bukti → 4. Lengkapi identitas &amp; unduh laporan</p>
       <div class="control-actions">
         <button id="startBtn" class="btn btn-primary btn-lg">
-          <span class="btn-icon">🚀</span> START AUTONOMOUS INVESTIGATION
+          <span class="btn-icon">🚀</span> MULAI SCAN
         </button>
 
         <button id="pauseBtn" class="btn btn-secondary btn-lg" disabled>
@@ -442,8 +463,8 @@
                 class="info-value mono">-</span></div>
             <div class="info-item"><span class="info-label">Status Penilaian</span><span id="dashReportStatus"
                 class="info-value" style="font-weight:700; color:var(--text-muted);">IDLE</span></div>
-            <div class="info-item"><span class="info-label">Skor Risiko (CVSS v4)</span><span id="dashReportRisk"
-                class="info-value mono" style="font-weight:800; color:var(--text-muted);">0.0 / 10.0</span></div>
+            <div class="info-item"><span class="info-label">CVSS temuan tertinggi</span><span id="dashReportRisk"
+                class="info-value mono" style="font-weight:800; color:var(--text-muted);">Belum tercatat</span></div>
             <div class="info-item"><span class="info-label">Kualitas Bukti</span><span id="dashReportEvidence"
                 class="info-value badge-e0">NO PROOF</span></div>
           </div>
@@ -462,7 +483,7 @@
               <button class="btn btn-ghost btn-xs" onclick="openUrlsModal()">🔗 Buka Matriks URL ↗</button>
               <button class="btn btn-ghost btn-xs" onclick="openTechsModal()">⚡ Buka Matriks Teknologi ↗</button>
             </div>
-            <span class="pill-muted" style="font-size:10px;">Safe & Non-Destructive Controlled Proof (V9.1)</span>
+            <span class="pill-muted" style="font-size:10px;">Authorized Security Testing Controlled Proof (V9.1)</span>
           </div>
         </div>
       </div>

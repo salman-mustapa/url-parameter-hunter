@@ -16,6 +16,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from app.reporting.redaction import RedactionEngine
 
 
 class EvidencePackageBuilder:
@@ -68,9 +69,7 @@ class EvidencePackageBuilder:
     ) -> Dict[str, Any]:
         """Assemble complete structured evidence package with per-artifact SHA-256 hashes."""
         now_utc = datetime.now(timezone.utc).isoformat()
-        obs_list = validation_observations or observations or [
-            {"signal": "controlled_probe_reflection", "result": "verified", "timestamp": now_utc}
-        ]
+        obs_list = validation_observations or observations or []
 
         # 1. Summary JSON
         summary_data = {
@@ -86,59 +85,33 @@ class EvidencePackageBuilder:
             "cve_id": cve_id or "N/A",
             "cvss_score": cvss_score,
             "description": description or "",
-            "impact_matrix": impact_matrix or {
-                "confidentiality": "MEDIUM" if severity in ("HIGH", "CRITICAL") else "LOW",
-                "integrity": "MEDIUM" if severity in ("HIGH", "CRITICAL") else "LOW",
-                "availability": "LOW",
-                "auth_bypass": "POSSIBLE" if "auth" in title.lower() else "NO",
-                "data_exposure": "HIGH" if "exposure" in title.lower() or "sqli" in title.lower() else "LOW",
-            },
-            "root_cause": root_cause or "Input parsing deviation or unvalidated state transition.",
+            "impact_matrix": impact_matrix or {},
+            "root_cause": root_cause or "Not established",
             "collector_version": cls.COLLECTOR_VERSION,
             "generated_at": now_utc,
         }
 
         # 2. Timeline JSON
-        timeline_data = timeline_events or [
-            {"timestamp": now_utc, "event": "DISCOVERY", "details": f"Target endpoint {endpoint_url} discovered"},
-            {"timestamp": now_utc, "event": "TRIAGE", "details": f"Candidate signal identified: {title}"},
-            {"timestamp": now_utc, "event": "VALIDATION", "details": f"Controlled non-destructive verification confirmed condition ({evidence_level})"},
-            {"timestamp": now_utc, "event": "EVIDENCE_SEAL", "details": "Evidence package cryptographically sealed"},
-        ]
+        timeline_data = timeline_events or []
 
         # 3. Request & Response Metadata
-        req_meta = request_metadata or {
-            "method": "GET",
-            "url": endpoint_url,
-            "headers": {"User-Agent": "HunterAja-Security-Assessment/5.0"},
-            "timestamp": now_utc,
-        }
-
-        resp_meta = response_metadata or {
-            "status_code": 200,
-            "headers": {"Content-Type": "application/json; charset=utf-8"},
-            "timing_ms": 124.5,
-            "timestamp": now_utc,
-        }
+        req_meta = request_metadata or {}
+        resp_meta = response_metadata or {}
 
         # 4. Validation JSON
         validation_data = {
-            "validation_status": "CONFIRMED" if evidence_level in ("E2", "E3", "E4") else "VALIDATED",
+            "validation_status": "RECORDED_OBSERVATIONS" if obs_list else "NEEDS_REVIEW",
             "evidence_level": evidence_level,
             "observations": obs_list,
-            "preconditions": preconditions or ["Target endpoint reachable via network", "Authorized assessment token"],
-            "expected_result": expected_result or "Application applies strict validation and rejects malicious payload.",
-            "actual_result": actual_result or "Application processed payload, producing verifiable security deviation.",
-            "cleanup_status": "COMPLETED",
+            "preconditions": preconditions or [],
+            "expected_result": expected_result or "Not recorded",
+            "actual_result": actual_result or "Not recorded",
+            "cleanup_status": "NOT_RECORDED",
         }
 
         # 5. Reproduction Markdown (§24)
         steps_rendered = "\n".join(
-            f"{i}. {step}" for i, step in enumerate(reproduction_steps or [
-                f"Send HTTP {req_meta.get('method', 'GET')} request to `{endpoint_url}`.",
-                "Inspect response headers and body for security deviation or reflection.",
-                "Confirm that security control boundary is bypassed without proper authorization.",
-            ], 1)
+            f"{i}. {step}" for i, step in enumerate(reproduction_steps or ["Reproduction steps not recorded; review evidence before testing."], 1)
         )
 
         reproduction_md = f"""# Reproduction Guide: {finding_code} - {title}
@@ -151,19 +124,19 @@ class EvidencePackageBuilder:
 - **Evidence Level:** `{evidence_level.upper()}`
 
 ## Preconditions
-- Authorized security testing scope confirmed.
-- Target service operational.
+- Confirm the authorized scope before any replay.
+- Target availability and required identities must be checked.
 
 ## Steps to Reproduce
 {steps_rendered}
 
 ## Expected Result
-{expected_result or "Server safely sanitizes or rejects request."}
+{expected_result or "Expected result not recorded."}
 
 ## Actual Result
-{actual_result or "Server processed payload with verifiable behavioral change."}
+{actual_result or "Actual result not recorded."}
 
-## Proof of Concept
+## Replay Template (Not Executed or Validated)
 ```bash
 curl -s -k -X {req_meta.get('method', 'GET')} '{endpoint_url}'
 ```
@@ -173,6 +146,13 @@ curl -s -k -X {req_meta.get('method', 'GET')} '{endpoint_url}'
 """
 
         # 6. Hashes JSON (§22 Evidence Integrity)
+        # Hash exactly what will be shared; filtering after hashing breaks integrity checks.
+        summary_data = RedactionEngine.redact_dict(summary_data)
+        timeline_data = RedactionEngine.redact_dict(timeline_data)
+        req_meta = RedactionEngine.redact_dict(req_meta)
+        resp_meta = RedactionEngine.redact_dict(resp_meta)
+        validation_data = RedactionEngine.redact_dict(validation_data)
+        reproduction_md = RedactionEngine.redact_text(reproduction_md)
         hashes_data = {
             "summary_sha256": cls.hash_content(summary_data),
             "timeline_sha256": cls.hash_content(timeline_data),

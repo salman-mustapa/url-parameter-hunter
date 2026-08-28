@@ -159,61 +159,29 @@ function updatePipelineHud(stage, tool, progress, desc) {
 }
 window.updatePipelineHud = updatePipelineHud;
 
+let streamRenderTimer = null;
+let latestStreamEvent = null;
 function addEventToStream(ev) {
   state.events.push(ev);
-  if (state.events.length > 500) state.events.shift();
-
-  if (el("streamCount")) el("streamCount").textContent = `${state.events.length} events`;
-
-  // Update live HUD (throttled)
-  if (ev.event_type === "pipeline.stage" || ev.event_type === "tool.active" || ev.stage || ev.tool || ev.progress) {
-    updatePipelineHud(ev.stage || ev.event_type, ev.tool, ev.progress, ev.message);
-  } else if (ev.category === "CRAWL" || ev.category === "URL") {
-    updatePipelineHud("ENUM", "katana / dirsearch", 60, "Crawling & discovering endpoints...");
-  } else if (ev.category === "FINDING" || ev.category === "EXPLOIT") {
-    updatePipelineHud("EXPLOIT", "ai_pentest_engine", 85, "Testing injection vectors & verifying findings...");
-  }
-
-  // Throttled live sync of active V4 view (State Machine / AI Hypotheses) — prevents network/DOM flooding
-  triggerV4DebouncedSync();
-
-  const container = el("eventStreamContainer");
-  if (!container) return;
-
-  const empty = container.querySelector(".event-empty-msg");
-  if (empty) empty.remove();
-
-  const cat = (ev.category || (ev.event_type ? ev.event_type.split(".")[0].toUpperCase() : "INFO")).toUpperCase();
-  const normalizedCat = cat.startsWith("PARAM") ? "PARAM" : (cat.startsWith("TECH") ? "TECH" : cat);
-
-  if (state.currentCategoryFilter !== "ALL" && !normalizedCat.includes(state.currentCategoryFilter)) {
-    return;
-  }
-
-  const item = document.createElement("div");
-  item.className = "event-item";
-  item.dataset.category = normalizedCat;
-
-  const ts = ev.created_at ? String(ev.created_at).slice(11, 19) : new Date().toLocaleTimeString();
-  const tagClass = getCategoryTagClass(normalizedCat);
-
-  item.innerHTML = `
-    <span class="event-time">[${esc(ts)}]</span>
-    <span class="event-tag ${tagClass}">${esc(normalizedCat)}</span>
-    <span class="event-msg">${esc(ev.message)}</span>
-  `;
-
-  container.appendChild(item);
-
-  // Keep DOM lean & lightning fast (max 120 elements in terminal view)
-  while (container.children.length > 120) {
-    container.removeChild(container.firstChild);
-  }
-
-  if (el("autoScrollCheck")?.checked) {
-    container.scrollTop = container.scrollHeight;
-  }
+  if (state.events.length > 500) state.events.splice(0, state.events.length - 500);
+  latestStreamEvent = ev;
+  // A burst of thousands of events produces one DOM update, not one per event.
+  if (streamRenderTimer !== null || document.hidden || el("viewDashboard")?.classList.contains("hidden")) return;
+  streamRenderTimer = setTimeout(() => {
+    streamRenderTimer = null;
+    if (document.hidden || el("viewDashboard")?.classList.contains("hidden")) return;
+    renderStreamEvents();
+    const latest = latestStreamEvent;
+    if (latest && (latest.stage || latest.tool || latest.progress != null)) {
+      updatePipelineHud(latest.stage || latest.event_type, latest.tool, latest.progress, latest.message);
+    }
+    triggerV4DebouncedSync();
+  }, 100);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !el("viewDashboard")?.classList.contains("hidden")) renderStreamEvents();
+});
 
 function filterStreamEvents(filterCat) {
   state.currentCategoryFilter = filterCat;
@@ -222,6 +190,9 @@ function filterStreamEvents(filterCat) {
 
 function clearStreamLog() {
   state.events = [];
+  clearTimeout(streamRenderTimer);
+  streamRenderTimer = null;
+  latestStreamEvent = null;
   const container = el("eventStreamContainer");
   if (container) {
     container.innerHTML = `
@@ -241,7 +212,7 @@ let isAutonomousFetching = false;
 
 async function pollAutonomousLoopTelemetry() {
   // Only poll if a scan is actively running to conserve CPU & network
-  if (state.scanStatus !== "RUNNING" || !state.activeScanId || isAutonomousFetching) return;
+  if (state.currentUser?.role !== "admin" || state.scanStatus !== "RUNNING" || !state.activeScanId || isAutonomousFetching) return;
   if (typeof document !== "undefined" && document.hidden) return;
 
   const banner = el("autonomousActionBanner");

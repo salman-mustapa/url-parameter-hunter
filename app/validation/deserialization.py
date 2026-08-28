@@ -15,6 +15,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import base64
 import logging
 import re
@@ -98,7 +100,7 @@ class DeserializationValidator(BaseDeepValidator):
             query_str = urlencode(mutated_params, doseq=True)
             test_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{query_str}"
 
-            async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+            async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
                 try:
                     resp = await client.get(test_url)
                     can_req = self.recorder.record(

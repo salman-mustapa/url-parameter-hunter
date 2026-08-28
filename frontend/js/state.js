@@ -5,10 +5,19 @@
 
 const API_BASE = "/api";
 
+// Storage may be unavailable in private or restricted browser contexts.
+const appStorage = {
+  getItem(key) { try { return localStorage.getItem(key); } catch (_) { return null; } },
+  setItem(key, value) { try { localStorage.setItem(key, value); } catch (_) {} },
+  removeItem(key) { try { localStorage.removeItem(key); } catch (_) {} },
+};
+// The HttpOnly cookie restores web sessions; do not persist bearer credentials in JS storage.
+appStorage.removeItem("hunter_auth_token");
+
 const state = {
   // Authentication & RBAC
   currentUser: null,
-  authToken: localStorage.getItem("hunter_auth_token") || null,
+  authToken: null,
   deviceFingerprint: null,
 
   // Active Scan
@@ -75,7 +84,8 @@ function esc(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function formatTime(seconds) {
@@ -100,71 +110,21 @@ function formatConfidence(conf) {
 // --------------------------------------------------------------------------
 function getDeviceFingerprint() {
   if (state.deviceFingerprint) return state.deviceFingerprint;
-
-  let fpId = localStorage.getItem("hunter_device_fp");
-  if (!fpId) {
-    const components = [];
-    // 1. Hardware & System
-    components.push(
-      screen.width || 0,
-      screen.height || 0,
-      screen.colorDepth || 24,
-      navigator.hardwareConcurrency || 4,
-      navigator.maxTouchPoints || 0,
-      navigator.platform || "",
-      navigator.language || "",
-      Intl.DateTimeFormat().resolvedOptions().timeZone || ""
-    );
-
-    // 2. Canvas 2D fingerprint
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = 240;
-      canvas.height = 60;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.textBaseline = "top";
-        ctx.font = "14px 'Arial', sans-serif";
-        ctx.textBaseline = "alphabetic";
-        ctx.fillStyle = "#f60";
-        ctx.fillRect(125, 1, 62, 20);
-        ctx.fillStyle = "#069";
-        ctx.fillText("HunterAja,🐙<canvas>", 2, 15);
-        ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
-        ctx.fillText("HunterAja,🐙<canvas>", 4, 17);
-        components.push(canvas.toDataURL());
-      }
-    } catch (_) {}
-
-    // 3. WebGL GPU renderer fingerprint
-    try {
-      const canvas = document.createElement("canvas");
-      const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-      if (gl) {
-        const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
-        if (debugInfo) {
-          components.push(gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || "");
-          components.push(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || "");
-        }
-      }
-    } catch (_) {}
-
-    // Hash to composite 32-char hex string
-    const raw = components.join("###");
-    let hash = 0;
-    for (let i = 0; i < raw.length; i++) {
-      hash = ((hash << 5) - hash) + raw.charCodeAt(i);
-      hash |= 0;
-    }
-    const randPart = Math.random().toString(36).substring(2, 10);
-    fpId = `dfp_${Math.abs(hash).toString(16)}_${randPart}`;
-    try {
-      localStorage.setItem("hunter_device_fp", fpId);
-    } catch (_) {}
+  let id = appStorage.getItem("hunter_device_fp");
+  if (!id) {
+    const randomId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+    id = `device_${randomId}`;
+    appStorage.setItem("hunter_device_fp", id);
   }
+  state.deviceFingerprint = id;
+  return id;
+}
 
-  state.deviceFingerprint = fpId;
-  return fpId;
+function apiError(data, fallback = "Request gagal") {
+  const detail = data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map(item => item.msg || fallback).join("; ");
+  return fallback;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
@@ -234,3 +194,21 @@ function showToast(message, type = "info", duration = 4000) {
 }
 
 window.showToast = showToast;
+
+function jsArg(value) { return esc(JSON.stringify(String(value ?? ""))); }
+
+async function writeClipboard(text) {
+  if (!navigator.clipboard?.writeText) throw new Error("Clipboard memerlukan HTTPS/localhost. Salin teks secara manual.");
+  await navigator.clipboard.writeText(String(text));
+}
+async function copyText(text) {
+  try { await writeClipboard(text); showToast("Teks disalin.", "success"); }
+  catch (error) { showToast(error.message || "Gagal menyalin teks.", "warning"); }
+}
+
+function safeLink(value) {
+  try {
+    const url = new URL(String(value || ""), window.location.origin);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "#";
+  } catch { return "#"; }
+}

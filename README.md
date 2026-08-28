@@ -203,7 +203,8 @@ Isi variabel konfigurasi di `.env`:
 ```ini
 APP_NAME=Hunter Aja
 APP_ENV=development
-SECRET_KEY=super_secret_jwt_key_change_in_production
+JWT_SECRET=replace_with_a_random_secret_at_least_32_characters
+COOKIE_SECURE=false
 DATABASE_URL=sqlite+aiosqlite:///./storage/hunter.db
 PORT=9001
 RATE_LIMIT_RPS=15
@@ -232,29 +233,29 @@ Akses platform di `http://localhost:9001`.
 
 ---
 
-## 🧪 7. Menjalankan Test Suite V5
-
-Hunter Aja dilengkapi dengan test suite lengkap untuk memverifikasi seluruh komponen pipeline arsitektur V7.1:
+## 🧪 7. Pengujian & status audit
 
 ```bash
-python scratch/test_v5_full_pipeline.py
+python -m pytest -q -p no:cacheprovider
+node --test tests/frontend_runtime.test.cjs
+python -m pip check
 ```
 
-Output pengujian:
-```text
-.....
-----------------------------------------------------------------------
-Ran 5 tests in 0.689s
+Tes memakai database sementara dan fixture lokal. Hasilnya bukan sertifikasi keamanan target atau bukti performa produksi.
+Lihat [audit 28 Agustus 2026](docs/PROJECT_AUDIT_2026-08-28.md) untuk perubahan, hasil verifikasi, prasyarat deployment, dan pekerjaan lanjutan.
 
-OK
-```
+Alur utama: isi target dan izin → mulai/antrekan scan → tinjau temuan dan bukti → lengkapi identitas pada Laporan → buat export baru.
+Scan aktif memerlukan `authorization_reference`. Form UI juga meminta pengakuan izin; aturan terstruktur mendukung host, pengecualian, port (default 80/443), periode, dan batas HTTP RPS.
+Metadata laporan dapat diperbarui melalui `GET/PUT /api/scans/{scan_id}/report-profile`; endpoint ini tidak mengubah scope/izin yang telah direkam.
 
-Komponen yang diuji:
-1. `test_01_sensitive_file_signature_validation`: Memastikan soft-404 HTML ditolak dan tanda tangan asli (.git, .env, .sql) lolos.
-2. `test_02_proof_quality_gate`: Evaluasi 12 kriteria checklist Proof Quality Gate.
-3. `test_03_evidence_package_builder`: Pembentukan evidence package dan integritas hash SHA-256.
-4. `test_04_evidence_score_calculation`: Kalkulasi skor bukti (0–100) berbasis level E0-E4 dan bonus pembuktian.
-5. `test_05_report_engine_generation`: Pembuatan laporan Markdown, HTML, PDF resmi, Bug Bounty, CVE research, dan Reproduction bundle.
+`MAX_CONCURRENT_SCANS=2` dan `MAX_PENDING_SCANS=20` membatasi runner API per proses. Domain yang sama diserialkan.
+Gunakan satu proses runner ini; deployment banyak worker membutuhkan koordinasi antrean dan limit terdistribusi, belum dijamin oleh semaphore lokal.
+
+Screenshot asli bersifat opsional (`BROWSER_CAPTURE_ENABLED=false` secara default). Siapkan extra `browser` dari `pyproject.toml`, Chromium Playwright, sandbox browser, dan kontrol egress sebelum mengaktifkan.
+Tidak ada gambar pengganti ketika capture gagal. Capture membatasi GET/HEAD satu host, memblokir resource eksternal/worker/socket, dan menyimpan provenance/hash.
+Logo laporan diunggah sebagai PNG/JPEG maksimal 256 KiB; URL logo tidak diambil otomatis. Branding bukan bukti kerentanan.
+
+Untuk produksi: `APP_ENV=production`, JWT acak minimal 32 karakter, HTTPS dan `COOKIE_SECURE=true`, serta kredensial database yang unik.
 
 ---
 
@@ -279,13 +280,13 @@ Komponen yang diuji:
 - `GET /api/diff?current={id}&previous={id}` — Analisis diferensial perbandingan 2 scan.
 
 ### Findings, Evidence & Reporting
-- `GET /api/findings?scan_id={id}` — Daftar temuan keamanan terverifikasi.
+- `GET /api/findings?scan_id={id}` — Daftar temuan beserta tingkat bukti dan status validasi; tidak semuanya terverifikasi.
 - `GET /api/findings/{id}/detail` — Detail temuan mendalam, Impact Matrix, dan Root Cause.
 - `GET /api/findings/{id}/evidence-package` — Unduh Evidence Package terenkapsulasi (.json).
 - `GET /api/findings/{id}/bugbounty` — Unduh laporan format Bug Bounty HackerOne (.md).
 - `GET /api/findings/{id}/cve-ready` — Unduh laporan format CVE Research Disclosure (.md).
 - `GET /api/findings/{id}/reproduction` — Unduh panduan reproduksi PoC (`reproduction.md`).
-- `POST /api/findings/{id}/retest` — Jalankan Live Retest non-destruktif ke target aktual.
+- `POST /api/findings/{id}/retest` — Retest yang memerlukan otorisasi tersimpan; timeout atau respons kosong berstatus inconclusive.
 - `GET /api/scans/{id}/report/pdf` — Unduh laporan eksekutif resmi format PDF.
 - `GET /api/scans/{id}/report/html` — Buka laporan web HTML interaktif.
 - `GET /api/scans/{id}/report/markdown` — Unduh laporan teknis format Markdown.

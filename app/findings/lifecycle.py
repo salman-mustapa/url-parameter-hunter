@@ -107,6 +107,7 @@ class FindingLifecycle:
     """Finding Lifecycle & Validation State Machine (V8 §21, V9.1 §2)."""
 
     STATES = {
+        "OPEN",
         "DISCOVERED",
         "OBSERVED",
         "CANDIDATE",
@@ -140,6 +141,7 @@ class FindingLifecycle:
     }
 
     VALID_TRANSITIONS: Dict[str, Set[str]] = {
+        "OPEN": {"TRIAGED", "FALSE_POSITIVE", "CLOSED", "ACCEPTED_RISK"},
         "DISCOVERED": {"OBSERVED", "CANDIDATE", "PRECONDITION_CHECK", "TRIAGED", "FALSE_POSITIVE", "CLOSED"},
         "OBSERVED": {"CANDIDATE", "PRECONDITION_CHECK", "FALSE_POSITIVE", "CLOSED"},
         "CANDIDATE": {

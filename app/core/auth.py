@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import secrets
 import time
 from typing import Any, Dict, Optional
@@ -20,9 +21,13 @@ from app.models.models import User
 logger = logging.getLogger("auth")
 
 # JWT & Cryptographic Secret
-SECRET_KEY = settings.jwt_secret or "development-only-change-me"
+if settings.app_env.lower() == "production" and (
+    len(settings.jwt_secret) < 32 or settings.jwt_secret == "development-only-change-me"
+):
+    raise RuntimeError("Production requires a unique JWT_SECRET of at least 32 characters.")
+SECRET_KEY = settings.jwt_secret or secrets.token_urlsafe(48)
 if not settings.jwt_secret:
-    logger.warning("JWT_SECRET is not configured; using a development-only fallback secret.")
+    logger.warning("JWT_SECRET is not configured; local sessions will expire on restart.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_SECONDS = 86400 * 7  # 7 days
 
@@ -76,13 +81,18 @@ def _b64_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data)
 
 
-def create_access_token(user_id: str, username: str, role: str, expires_in: int = JWT_EXPIRATION_SECONDS) -> str:
+def password_stamp(password_hash: str) -> str:
+    return hmac.new(SECRET_KEY.encode(), password_hash.encode(), hashlib.sha256).hexdigest()
+
+
+def create_access_token(user_id: str, username: str, role: str, expires_in: int = JWT_EXPIRATION_SECONDS, *, password_hash: str) -> str:
     """Create a signed HS256 JWT access token."""
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "sub": user_id,
         "username": username,
         "role": role,
+        "pwd": password_stamp(password_hash),
         "iat": int(time.time()),
         "exp": int(time.time()) + expires_in,
     }
@@ -100,10 +110,15 @@ def create_access_token(user_id: str, username: str, role: str, expires_in: int 
 def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     """Verify and decode HS256 JWT access token."""
     try:
+        if not isinstance(token, str) or len(token) > 8192:
+            return None
         parts = token.split(".")
         if len(parts) != 3:
             return None
         header_b64, payload_b64, sig_b64 = parts
+        header = json.loads(_b64_decode(header_b64))
+        if not isinstance(header, dict) or header.get("alg") != JWT_ALGORITHM:
+            return None
         signing_input = f"{header_b64}.{payload_b64}".encode("utf-8")
 
         expected_sig = hmac.new(SECRET_KEY.encode("utf-8"), signing_input, hashlib.sha256).digest()
@@ -115,8 +130,13 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
         payload_bytes = _b64_decode(payload_b64)
         payload = json.loads(payload_bytes.decode("utf-8"))
 
-        if payload.get("exp", 0) < time.time():
+        if not isinstance(payload, dict):
+            return None
+        expiry = payload.get("exp")
+        if not isinstance(expiry, (int, float)) or isinstance(expiry, bool) or not math.isfinite(expiry) or expiry <= time.time():
             return None  # Token expired
+        if not isinstance(payload.get("sub"), str) or not payload["sub"]:
+            return None
 
         return payload
     except Exception as e:
@@ -148,7 +168,7 @@ async def get_optional_user(
 
     user_id = payload["sub"]
     user = await db.get(User, user_id)
-    if user and user.is_active:
+    if user and user.is_active and hmac.compare_digest(str(payload.get("pwd", "")), password_stamp(user.hashed_password)):
         return user
     return None
 
@@ -203,4 +223,3 @@ async def require_admin_role(
             detail="Akses ditolak. Fitur ini hanya dapat diakses oleh Administrator.",
         )
     return user
-

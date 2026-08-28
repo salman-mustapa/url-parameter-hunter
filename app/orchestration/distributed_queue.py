@@ -52,7 +52,7 @@ class DistributedTaskQueue:
     ]
 
     def __init__(self, redis_url: Optional[str] = None) -> None:
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "")
+        self.redis_url = os.getenv("REDIS_URL", "") if redis_url is None else redis_url
         self.use_redis = bool(self.redis_url)
         self._redis_client = None
         

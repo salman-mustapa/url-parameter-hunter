@@ -1,3 +1,4 @@
+from app.validation.safety.legacy import ValidationHTTPClient
 """SQL Injection Validation Engine — Deep Exploitation Evidence Architecture.
 
 Upgraded to Full Proof-of-Exploitation:
@@ -304,7 +305,7 @@ class SQLiValidator:
     ) -> Optional[httpx.Response]:
         """Send a request with the given parameter value properly URL-encoded."""
         try:
-            async with httpx.AsyncClient(
+            async with ValidationHTTPClient(
                 timeout=timeout or self.timeout,
                 follow_redirects=True,
                 verify=False,

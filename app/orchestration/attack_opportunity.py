@@ -59,7 +59,7 @@ class AttackOpportunity:
 
     def fingerprint(self) -> str:
         """Generates deterministic fingerprint for deduplication."""
-        raw = f"{self.target}|{self.endpoint}|{self.parameter or ''}|{self.attack_type}|{self.artifact or ''}"
+        raw = f"{self.metadata.get('scan_id', '')}|{self.target}|{self.endpoint}|{self.parameter or ''}|{self.attack_type}|{self.artifact or ''}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @property
@@ -132,8 +132,11 @@ class AttackOpportunity:
 class OpportunityBus:
     """Thread-safe & asyncio-safe event-driven priority bus for attack opportunities."""
 
-    def __init__(self, max_concurrency_per_host: int = 5) -> None:
+    def __init__(self, max_concurrency_per_host: int = 5, *, use_distributed: bool = True, max_opportunities: int = 2000, scan_id: str | None = None) -> None:
         self.max_concurrency_per_host = max_concurrency_per_host
+        self.use_distributed = use_distributed
+        self.max_opportunities = max(1, max_opportunities)
+        self.scan_id = scan_id
         self._queue: asyncio.PriorityQueue[Tuple[int, float, str, AttackOpportunity]] = asyncio.PriorityQueue()
         self._seen_fingerprints: Set[str] = set()
         self._opportunities: Dict[str, AttackOpportunity] = {}
@@ -156,11 +159,15 @@ class OpportunityBus:
 
     async def publish(self, opportunity: AttackOpportunity) -> bool:
         """Publishes an opportunity to the bus. Returns True if accepted, False if duplicate."""
+        if self.scan_id:
+            if opportunity.metadata.get("scan_id") not in {None, self.scan_id}:
+                return False
+            opportunity.metadata["scan_id"] = self.scan_id
         fp = opportunity.fingerprint()
         
         # Redis distributed queue check
         from app.orchestration.distributed_queue import distributed_queue
-        if distributed_queue.use_redis:
+        if self.use_distributed and distributed_queue.use_redis:
             stream_name = f"scan.{opportunity.attack_type}"
             if stream_name not in distributed_queue.STREAM_NAMES:
                 stream_name = "scan.validation"
@@ -187,6 +194,9 @@ class OpportunityBus:
             return True
 
         async with self._lock:
+            if len(self._opportunities) >= self.max_opportunities:
+                logger.warning("Opportunity budget reached; additional candidates require a separate reviewed run")
+                return False
             if fp in self._seen_fingerprints:
                 self._stats["total_deduplicated"] += 1
                 logger.debug("Deduplicated opportunity: %s (%s)", opportunity.id, fp)
@@ -223,7 +233,7 @@ class OpportunityBus:
     async def get_next(self, timeout: Optional[float] = None) -> Optional[AttackOpportunity]:
         """Fetches the next highest priority opportunity, bounded by optional timeout."""
         from app.orchestration.distributed_queue import distributed_queue
-        if distributed_queue.use_redis:
+        if self.use_distributed and distributed_queue.use_redis:
             try:
                 # Poll streams in logical priority order
                 streams_to_check = ["scan.validation", "scan.crawler", "scan.web", "scan.discovery"]

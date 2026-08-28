@@ -772,6 +772,8 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
     discovered_js_files: Set[str] = set()
 
     async def probe_endpoint(target_url: str, depth: int = 0):
+        if not ctx.scope.url_allowed(target_url):
+            return
         async with sem:
             await ctx.rate_limiter.wait()
             resp = await fetch_http(target_url, timeout=settings.http_timeout_seconds)

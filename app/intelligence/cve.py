@@ -382,7 +382,12 @@ class CveIntelligence:
                         "cvss_score": entry["cvss_score"],
                         "description": entry["description"],
                         "remediation": entry["remediation"],
-                        "confidence": "VALIDATED" if version else "SUSPECTED",
+                        "confidence": "CANDIDATE",
+                        "match_status": "VERSION_RANGE_CANDIDATE" if version and has_version_constraint else "PRODUCT_HINT_ONLY",
+                        "requires_applicability_review": True,
+                        "source": "embedded_catalog",
+                        "source_last_verified": None,
+                        "references": [f"https://nvd.nist.gov/vuln/detail/{entry['cve_id']}"],
                     })
 
         return candidates
@@ -403,5 +408,4 @@ class CveIntelligence:
             if entry["cve_id"].upper() == cid:
                 return entry
         return None
-
 

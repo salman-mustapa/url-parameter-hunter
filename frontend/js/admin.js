@@ -3,6 +3,31 @@
  * Attack Surface & Parameter Intelligence Platform
  */
 
+async function runSyntheticLab() {
+  const button = el("runSyntheticLabBtn");
+  const status = el("syntheticLabStatus");
+  if (!state.currentUser || state.currentUser.role !== "admin" || button?.disabled) return;
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Lab berjalan: discovery, validasi, penyimpanan bukti…";
+  try {
+    const response = await authFetch(`${API_BASE}/labs/synthetic/run`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Lab gagal dijalankan");
+    if (status) {
+      status.textContent = `Lab selesai: ${result.status}. Temuan tersimpan: ${result.finding_ids.length}. `;
+      const link = document.createElement("a");
+      link.textContent = "Lihat hasil dan laporan";
+      link.href = `#/reports?scan_id=${encodeURIComponent(result.scan_id)}`;
+      status.appendChild(link);
+    }
+    await loadAdminData();
+  } catch (error) {
+    if (status) status.textContent = `Lab gagal: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function loadAdminData() {
   if (!state.currentUser || state.currentUser.role !== "admin") {
     if (typeof showToast === "function") showToast("Akses hanya untuk Administrator.", "warning");
@@ -135,16 +160,16 @@ async function loadAdminActiveScans() {
           <td><strong>🌐 ${esc(s.target_url || s.root_domain || '-')}</strong></td>
           <td class="font-mono text-xs">#${esc(s.id.slice(0, 16))}</td>
           <td><span class="pill ${stClass}">${esc(st)}</span></td>
-          <td><code>${esc(s.user_id || 'System')}</code></td>
+          <td><code>${esc(s.user || s.user_id || 'System')}</code></td>
           <td class="text-xs">${s.started_at ? new Date(s.started_at).toLocaleTimeString('id-ID') : '-'}</td>
           <td class="text-xs">Assets: <strong>${s.progress?.assets || 0}</strong> | Ports: <strong>${s.progress?.ports || 0}</strong></td>
           <td>
             <div class="flex-row-gap">
-              <button class="btn btn-primary btn-xs" onclick="inspectAdminScan('${esc(s.id)}')">🔍 Workspace</button>
-              ${isRunning ? `<button class="btn btn-warning btn-xs" onclick="adminPauseScan('${esc(s.id)}')">⏸ Pause</button>` : ''}
-              ${isPaused ? `<button class="btn btn-success btn-xs" onclick="adminResumeScan('${esc(s.id)}')">▶ Resume</button>` : ''}
-              ${(isRunning || isPaused) ? `<button class="btn btn-danger btn-xs" onclick="adminCancelScan('${esc(s.id)}')">⏹ Cancel</button>` : ''}
-              <button class="btn btn-secondary btn-xs" onclick="adminRetryScan('${esc(s.id)}')">🔄 Retry</button>
+              <button class="btn btn-primary btn-xs" onclick="inspectAdminScan(${jsArg(s.id)})">🔍 Workspace</button>
+              ${isRunning ? `<button class="btn btn-warning btn-xs" onclick="adminPauseScan(${jsArg(s.id)})">⏸ Pause</button>` : ''}
+              ${isPaused ? `<button class="btn btn-success btn-xs" onclick="adminResumeScan(${jsArg(s.id)})">▶ Resume</button>` : ''}
+              ${(isRunning || isPaused) ? `<button class="btn btn-danger btn-xs" onclick="adminCancelScan(${jsArg(s.id)})">⏹ Cancel</button>` : ''}
+              <button class="btn btn-secondary btn-xs" onclick="adminRetryScan(${jsArg(s.id)})">🔄 Retry</button>
             </div>
           </td>
         </tr>
@@ -319,7 +344,7 @@ async function loadAiConfig() {
     const statusPill = el("aiConnStatus");
     if (statusPill) {
       if (cfg.llm_enabled) {
-        statusPill.textContent = "🟢 Connected & Ready";
+        statusPill.textContent = "🟡 Enabled — belum diuji";
         statusPill.className = "ai-status-pill active";
       } else {
         statusPill.textContent = "⚪ Disabled";
@@ -327,9 +352,16 @@ async function loadAiConfig() {
       }
     }
     
-    await fetchAndPopulateModels(cfg);
-    if (cfg.model && el("aiModel")) {
-      el("aiModel").value = cfg.model;
+    // Model discovery performs external I/O; run it only on explicit refresh/test.
+    const modelSelect = el("aiModel");
+    if (modelSelect && cfg.model) {
+      if (![...modelSelect.options].some(o => o.value === cfg.model)) {
+        const option = document.createElement("option");
+        option.value = option.textContent = cfg.model;
+        modelSelect.appendChild(option);
+      }
+      modelSelect.value = cfg.model;
+      modelSelect.disabled = false;
     }
   } catch (err) {
     console.error("loadAiConfig error:", err);

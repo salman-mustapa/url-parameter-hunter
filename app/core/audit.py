@@ -75,7 +75,7 @@ class AuditTrailManager:
         try:
             db.add(entry)
             await db.commit()
-            logger.info("AUDIT LOG: [%s] %s on %s by %s (Status: %s)", action, target, actor, result_status)
+            logger.info("AUDIT LOG: %s on %s by %s (Status: %s)", action, target, actor, result_status)
         except Exception as exc:
             logger.error("Failed to commit audit entry: %s", exc)
 

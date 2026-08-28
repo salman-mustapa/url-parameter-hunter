@@ -154,7 +154,7 @@ function renderPortsMatrix() {
         <td>${esc(p.service || '-')}</td>
         <td class="banner-cell"><code>${esc(p.banner || '-')}</code></td>
         <td>
-          ${p.direct_url ? `<a href="${esc(p.direct_url)}" target="_blank" rel="noopener" class="link-btn">🌐 Buka Web</a>` : '-'}
+          ${p.direct_url ? `<a href="${esc(safeLink(p.direct_url))}" target="_blank" rel="noopener" class="link-btn">🌐 Buka Web</a>` : '-'}
         </td>
       </tr>
     `;
@@ -246,7 +246,7 @@ function renderParamsMatrix() {
         <td><strong class="param-name-pill">${esc(p.name)}</strong></td>
         <td><span class="loc-badge">${esc(p.location)}</span></td>
         <td><strong>${esc(p.host)}</strong></td>
-        <td><a href="${esc(p.url)}" target="_blank" rel="noopener" class="endpoint-link">${esc(p.url)}</a></td>
+        <td><a href="${esc(safeLink(p.url))}" target="_blank" rel="noopener" class="endpoint-link">${esc(p.url)}</a></td>
         <td>${esc(p.type || 'string')}</td>
         <td>${(Number(p.confidence || 0) * 100).toFixed(0)}%</td>
       </tr>
@@ -354,7 +354,7 @@ function renderUrlsMatrix() {
     html += `
       <tr>
         <td><span class="badge ${stClass}">${st}</span></td>
-        <td><a href="${esc(u.url)}" target="_blank" rel="noopener" class="endpoint-link mono">${esc(u.url)}</a></td>
+        <td><a href="${esc(safeLink(u.url))}" target="_blank" rel="noopener" class="endpoint-link mono">${esc(u.url)}</a></td>
         <td><strong>${esc(u.hostname)}</strong></td>
         <td><span class="badge badge-info">${u.parameters_count || 0} params</span></td>
         <td><small>${esc(u.title || '-')}</small></td>
@@ -557,7 +557,7 @@ function renderAssetsMatrix() {
         </td>
         <td><span class="text-xs text-muted">${esc(techDisplay)}</span></td>
         <td>
-          <button class="btn btn-secondary btn-xs" onclick="openAssetDetailFromModal('${esc(a.id)}')">🔍 Inspect</button>
+          <button class="btn btn-secondary btn-xs" onclick="openAssetDetailFromModal(${jsArg(a.id)})">🔍 Inspect</button>
         </td>
       </tr>
     `;
@@ -665,10 +665,10 @@ function renderFindingsModal() {
         </td>
         <td><strong>${esc(f.asset_hostname || '-')}</strong></td>
         <td><code>${esc(f.cwe_id || '-')}</code> ${f.cvss_score ? `(${f.cvss_score})` : ''}</td>
-        <td><span class="badge-e3">E3 — IMPACT PROOF</span></td>
+        <td><span class="badge-e0">${esc(f.evidence_level || "E0")}</span></td>
         <td><span class="status-badge status-${(f.status || 'open').toLowerCase()}">${esc(f.status || 'OPEN')}</span></td>
         <td>
-          <button class="btn btn-primary btn-xs" onclick="openFindingDetailFromModal('${esc(f.id)}')">🔒 Detail (V5)</button>
+          <button class="btn btn-primary btn-xs" onclick="openFindingDetailFromModal(${jsArg(f.id)})">🔒 Detail (V5)</button>
         </td>
       </tr>
     `;
@@ -709,6 +709,15 @@ function openReportModal() {
 }
 
 function setupReportModal() {
+  el("dashReportBBBtn")?.addEventListener("click", () => {
+    if (!state.activeScanId) return showToast("Pilih scan terlebih dahulu.", "warning");
+    window.open(`${API_BASE}/scans/${encodeURIComponent(state.activeScanId)}/report/markdown`, "_blank");
+  });
+  el("dashReportCVEBtn")?.addEventListener("click", () => {
+    switchViewTab("reports");
+    showToast("Pilih temuan dan buka detailnya untuk membuat draft riset CVE. CVE memerlukan pemeriksaan produk/versi dan koordinasi vendor.", "info");
+  });
+  el("dashReportJSONBtn")?.addEventListener("click", exportScanJSON);
   const modal = el("reportModal");
   if (!modal) return;
 
@@ -775,7 +784,8 @@ async function exportScanJSON() {
     return;
   }
   try {
-    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(state.activeScanId)}/export`);
+    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(state.activeScanId)}/report/json`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);

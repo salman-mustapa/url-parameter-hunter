@@ -130,15 +130,19 @@ if (typeof document !== "undefined") {
   });
 }
 
+let activeScansFetching = false;
+let lastActiveScansSync = 0;
 async function syncActiveScansBar() {
   const bar = el("activeScansBar");
   const list = el("activeScansChipsList");
-  if (!bar || !list) return;
+  if (!bar || !list || !state.currentUser || activeScansFetching || Date.now() - lastActiveScansSync < 2000) return;
 
+  activeScansFetching = true;
   try {
     const res = await authFetch(`${API_BASE}/scans?limit=25`);
     if (!res.ok) return;
     const scans = await res.json();
+    lastActiveScansSync = Date.now();
     const allScans = Array.isArray(scans) ? scans : (scans.items || []);
     const activeScans = allScans.filter(
       s => (s.status || "").toUpperCase() === "RUNNING" || (s.status || "").toUpperCase() === "PAUSED"
@@ -167,6 +171,8 @@ async function syncActiveScansBar() {
     }).join("");
   } catch (err) {
     console.debug("Sync active scans bar error:", err);
+  } finally {
+    activeScansFetching = false;
   }
 }
 
@@ -195,7 +201,10 @@ function stopTimer() {
   clearInterval(state.timerInterval);
 }
 
+let scanCreationPending = false;
 async function startScan() {
+  if (scanCreationPending) return;
+  if (!state.currentUser) { openAuthModal("login"); return; }
   const target = el("targetInput") ? el("targetInput").value.trim() : "";
   if (!target) {
     showToast("Masukkan root domain atau URL target (contoh: example.com atau https://target.com)", "warning");
@@ -206,24 +215,31 @@ async function startScan() {
   const scopeMode = el("scopeModeSelect") ? el("scopeModeSelect").value : "recursive";
   const includeSubdomains = scopeMode === "recursive";
   const device_fingerprint = getDeviceFingerprint();
+  let engagement;
+  try { engagement = readEngagementForm(); }
+  catch (error) { showToast(error.message, "warning"); return; }
 
+  scanCreationPending = true;
+  setButtonLoading(el("startBtn"), true, "Memulai...");
   try {
     const res = await authFetch(`${API_BASE}/investigations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: target,
-        profile: "autonomous",
-        validation_level: "L4_HIGH_RISK",
+        profile: "bug_hunt",
+        validation_level: "L2_SAFE_ACTIVE",
         include_subdomains: includeSubdomains,
         device_fingerprint: device_fingerprint,
+        engagement,
+        authorization_reference: engagement.authorization_reference,
       }),
     });
 
 
     if (!res.ok) {
       const err = await res.json();
-      const detail = err.detail || `HTTP ${res.status}`;
+      const detail = apiError(err, `HTTP ${res.status}`);
 
       // Check if trial limit reached
       if (res.status === 403 && (detail.includes("TRIAL_EXHAUSTED") || detail.includes("trial"))) {
@@ -263,8 +279,8 @@ async function startScan() {
     if (el("assetTreeContainer")) el("assetTreeContainer").innerHTML = `<div class="tree-empty-msg"><p>Menjalankan pipeline aktif...</p></div>`;
     if (el("findingsListContainer")) el("findingsListContainer").innerHTML = `<div class="findings-empty-msg"><p>Menganalisis temuan keamanan...</p></div>`;
 
-    updateScanStatusUI("RUNNING");
-    startTimer();
+    updateScanStatusUI((data.status || "QUEUED").toUpperCase());
+    if ((data.status || "").toUpperCase() === "RUNNING") startTimer();
     connectEventSource(data.scan_id);
 
     clearInterval(state.treePollInterval);
@@ -286,6 +302,9 @@ async function startScan() {
     syncActiveScansBar();
   } catch (err) {
     showToast(`Gagal memulai scan: ${err.message}`, "danger");
+  } finally {
+    scanCreationPending = false;
+    setButtonLoading(el("startBtn"), false);
   }
 }
 
@@ -301,6 +320,7 @@ async function syncScanStatus() {
     const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(currentScanId)}`);
     if (!res.ok || state.activeScanId !== currentScanId) return;
     const scan = await res.json();
+    if (state.activeScanId !== currentScanId) return;
     if (scan.progress) {
       if (scan.progress.assets != null && scan.progress.assets > state.counters.assets) state.counters.assets = scan.progress.assets;
       if (scan.progress.ports != null && scan.progress.ports > state.counters.ports) state.counters.ports = scan.progress.ports;
@@ -314,6 +334,7 @@ async function syncScanStatus() {
       updateCounterDisplays();
     }
     const st = (scan.status || "").toUpperCase();
+    if (["RUNNING", "QUEUED", "PAUSED"].includes(st) && st !== state.scanStatus) updateScanStatusUI(st);
     if (["COMPLETED", "STOPPED", "FAILED", "PARTIAL_FAILURE", "DEGRADED", "TIMEOUT", "CANCELLED"].includes(st)) {
       updateScanStatusUI(st);
       stopTimer();
@@ -510,6 +531,9 @@ function processEventTelemetry(ev) {
 }
 
 function updateCounterDisplays() {
+  if (state.scanStatus === "COMPLETED" && el("scanCompletedSummary")) {
+    el("scanCompletedSummary").textContent = `${state.counters.assets} aset, ${state.counters.ports} port, dan ${state.counters.findings} temuan tercatat. Tinjau bukti dan cakupan sebelum menyimpulkan hasil.`;
+  }
   if (el("counterAssets")) el("counterAssets").textContent = state.counters.assets;
   if (el("counterPorts")) el("counterPorts").textContent = state.counters.ports;
   if (el("counterUrls")) el("counterUrls").textContent = state.counters.urls;

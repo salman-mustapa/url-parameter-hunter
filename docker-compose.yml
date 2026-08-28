@@ -11,7 +11,13 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://bughunter:bughunter@postgres:5432/bughunter
       - REDIS_URL=redis://redis:6379/0
-      - CORS_ORIGINS=*
+      - APP_ENV=production
+      - JWT_SECRET=${JWT_SECRET:?Set a unique JWT_SECRET of at least 32 characters}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
       - RATE_LIMIT_RPS=15
       - SECURITY_MODE=CONTROLLED
       - MAX_CONCURRENT_HOSTS=12
@@ -73,7 +79,7 @@ services:
       - POSTGRES_PASSWORD=bughunter
       - POSTGRES_DB=bughunter
     ports:
-      - "9002:5432"
+      - "127.0.0.1:9002:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -94,7 +100,7 @@ services:
     container_name: bug-hunter-redis
     restart: unless-stopped
     ports:
-      - "9003:6379"
+      - "127.0.0.1:9003:6379"
     volumes:
       - redisdata:/data
     healthcheck:

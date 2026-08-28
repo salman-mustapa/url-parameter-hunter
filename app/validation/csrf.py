@@ -14,6 +14,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -101,7 +103,7 @@ class CsrfValidator(BaseDeepValidator):
             }
             data = ctx.get("data") or {"action": "update", "email": "attacker@evil.com"}
             
-            async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+            async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
                 try:
                     resp = await client.post(target_url, headers=headers, data=data)
                     can_req = self.recorder.record(

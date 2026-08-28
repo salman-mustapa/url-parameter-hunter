@@ -13,6 +13,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -65,7 +67,7 @@ class HostHeaderValidator(BaseDeepValidator):
             ("x_forwarded_server", {"X-Forwarded-Server": canary_host}),
         ]
 
-        async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
             for test_name, extra_headers in test_variations:
                 try:
                     resp = await client.get(target_url, headers=extra_headers)

@@ -14,6 +14,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import base64
 import json
 import logging
@@ -90,7 +92,7 @@ class JwtValidator(BaseDeepValidator):
         none_header["alg"] = "none"
         none_token = f"{_b64_url_encode(json.dumps(none_header).encode())}.{parts[1]}."
 
-        async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
             try:
                 headers = {"Authorization": f"Bearer {none_token}"}
                 resp = await client.get(target_url, headers=headers)

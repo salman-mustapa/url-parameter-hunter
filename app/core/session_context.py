@@ -9,6 +9,8 @@ Provides unified, stateful HTTP execution across the attack lifecycle:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import asyncio
 import difflib
 import logging
@@ -168,8 +170,10 @@ class SessionContext:
         default_headers: Optional[Dict[str, str]] = None,
         rate_limiter: Optional[RateLimiter] = None,
         proxies: Optional[List[str]] = None,
+        executor: Any = None,
     ) -> None:
         self.base_url = base_url
+        self.executor = executor
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.default_headers = default_headers or {
@@ -214,7 +218,7 @@ class SessionContext:
     def has_authenticated_session(self) -> bool:
         """Returns True if any non-default identity with cookies or auth tokens is registered."""
         for ident_id, ident in self.identities.items():
-            if ident_id != "default" and (ident.cookies or ident.auth_token or ident.role in ("admin", "user")):
+            if ident_id != "default" and (ident.cookies or ident.auth_token):
                 return True
         return False
 
@@ -222,7 +226,7 @@ class SessionContext:
         """Returns all authenticated session identities."""
         return [
             ident for ident_id, ident in self.identities.items()
-            if ident_id != "default" and (ident.cookies or ident.auth_token or ident.role in ("admin", "user"))
+            if ident_id != "default" and (ident.cookies or ident.auth_token)
         ]
 
     def export_state(self) -> Dict[str, Any]:
@@ -249,7 +253,7 @@ class SessionContext:
         key = (identity_id, proxy)
         if key not in self._clients:
             ident = self.identities.get(identity_id) or SessionIdentity(id=identity_id)
-            client = httpx.AsyncClient(
+            client = ValidationHTTPClient(
                 timeout=self.timeout,
                 verify=self.verify_ssl,
                 follow_redirects=True,
@@ -469,38 +473,9 @@ class SessionContext:
         boundary_violated = False
         explanation = "Access controls properly enforced."
 
-        # Analysis logic:
-        # If Identity A gets 200 (Success) and Identity B also gets 200 with identical or similar sensitive content
-        if resp_a.status_code == 200 and resp_b.status_code == 200:
-            if similarity > 0.85:
-                is_idor = True
-                boundary_violated = True
-                explanation = (
-                    f"CRITICAL: IDOR confirmed on {url}. Identity B (attacker) accessed Identity A's "
-                    f"resource with HTTP 200 and {similarity:.1%} body similarity."
-                )
-            elif resp_b.content_length > 100 and resp_b.status_code != 403:
-                is_idor = True
-                boundary_violated = True
-                explanation = (
-                    f"HIGH: IDOR/BOLA suspected on {url}. Identity B returned HTTP 200 with data "
-                    f"({resp_b.content_length} bytes)."
-                )
-
-        # Check if unauthenticated identity gets 200
-        if resp_unauth.status_code == 200 and resp_a.status_code == 200 and resp_unauth.content_length > 100:
-            if similarity > 0.75:
-                is_idor = True
-                boundary_violated = True
-                explanation += " Unauthenticated actor also obtained successful HTTP 200 access!"
-
-        # Check privilege escalation (e.g. user performing admin actions)
-        role_a = self.identities.get(identity_a, SessionIdentity(id="a")).role
-        role_b = self.identities.get(identity_b, SessionIdentity(id="b")).role
-        if role_a == "admin" and role_b != "admin" and resp_b.status_code in (200, 201, 204):
-            is_privesc = True
-            boundary_violated = True
-            explanation = f"CRITICAL: Privilege Escalation confirmed. Low-privilege role ({role_b}) successfully executed privileged action ({method} {url})."
+        # Response similarity and role labels do not establish ownership or a violated policy.
+        # Collected authorization validation now lives in AuthorizationCase + the registry.
+        explanation = "Response comparison only; verified actor/resource ownership evidence is required."
 
         return MultiIdentityAuthDiff(
             is_idor_confirmed=is_idor,

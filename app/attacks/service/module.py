@@ -11,6 +11,8 @@ Verifies unauthenticated exposures on standard and database services:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import unsupported_socket_probe
+
 import asyncio
 import logging
 from typing import Any, Dict, List, Optional
@@ -108,7 +110,7 @@ class ServiceAttackModule(BaseAttackModule):
         # 2. Raw Socket Probing for Redis / Memcached / FTP
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port_num),
+                unsupported_socket_probe(host, port_num),
                 timeout=4.0,
             )
 

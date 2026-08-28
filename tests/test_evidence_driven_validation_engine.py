@@ -13,10 +13,10 @@ Strictly tests:
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.validation.contracts.model import SafeValidationLevel, VulnerabilityContract
+import pytest
+
 from app.validation.contracts.registry import contract_registry
 from app.validation.evidence.typed_evidence import (
     DifferentialObservation,
@@ -25,8 +25,6 @@ from app.validation.evidence.typed_evidence import (
     TypedEvidencePackage,
 )
 from app.validation.quality_gate import ProofQualityGate
-from app.validation.result import NormalizedValidationResult
-from app.validation.safety.engine import SafetyEngine, safety_engine
 from app.validation.safety.policy import SafetyPolicy
 from app.validation.state_machine import (
     ConfidenceRating,
@@ -35,12 +33,9 @@ from app.validation.state_machine import (
 )
 from app.validation.validators import (
     auth_bypass_validator,
-    cors_validator,
     file_upload_validator,
     idor_validator,
     open_redirect_validator,
-    path_traversal_validator,
-    rce_validator,
     slowloris_validator,
     sqli_validator,
     ssrf_validator,
@@ -57,7 +52,10 @@ class TestNegativeAntiFalsePositiveRules:
         session = AsyncMock()
         context = {
             "parameter": "page",
-            "raw_evidence": {"status_code": 200, "response_body": "<html><body>Welcome to our website</body></html>"},
+            "raw_evidence": {
+                "status_code": 200,
+                "response_body": "<html><body>Welcome to our website</body></html>",
+            },
         }
         res = await sqli_validator.validate("https://example.com/item", context, session)
         assert res.status != "CONFIRMED"
@@ -77,7 +75,10 @@ class TestNegativeAntiFalsePositiveRules:
         }
         res = await sqli_validator.validate("https://example.com/api/item", context, session)
         assert res.status != "CONFIRMED"
-        assert "Internal Server Error" not in res.actual_result or "generic" in res.actual_result.lower()
+        assert (
+            "Internal Server Error" not in res.actual_result
+            or "generic" in res.actual_result.lower()
+        )
 
     @pytest.mark.anyio
     async def test_reflection_is_not_xss(self):
@@ -93,8 +94,8 @@ class TestNegativeAntiFalsePositiveRules:
         }
         res = await xss_validator.validate("https://example.com/search", context, session)
         assert res.status != "CONFIRMED"
-        assert res.status == "REJECTED"
-        assert "encoded" in res.actual_result.lower()
+        assert res.status == "INCONCLUSIVE"
+        assert "collected evidence" in res.actual_result.lower()
 
     @pytest.mark.anyio
     async def test_upload_success_is_not_rce(self):
@@ -126,7 +127,7 @@ class TestNegativeAntiFalsePositiveRules:
         }
         res = await open_redirect_validator.validate("https://example.com/login", context, session)
         assert res.status != "CONFIRMED"
-        assert res.status == "REJECTED"
+        assert res.status == "INCONCLUSIVE"
 
     @pytest.mark.anyio
     async def test_url_parameter_is_not_ssrf(self):
@@ -136,13 +137,13 @@ class TestNegativeAntiFalsePositiveRules:
             "parameter": "callback_url",
             "raw_evidence": {
                 "status_code": 200,
-                "response_body": "{\"status\":\"ok\",\"url\":\"http://127.0.0.1/\"}",
+                "response_body": '{"status":"ok","url":"http://127.0.0.1/"}',
                 "internal_resource_fetched": False,
             },
         }
         res = await ssrf_validator.validate("https://example.com/webhook", context, session)
         assert res.status != "CONFIRMED"
-        assert res.status == "REJECTED"
+        assert res.status == "INCONCLUSIVE"
 
     @pytest.mark.anyio
     async def test_object_access_is_not_idor(self):
@@ -160,7 +161,7 @@ class TestNegativeAntiFalsePositiveRules:
         }
         res = await idor_validator.validate("https://example.com/api/user/1001", context, session)
         assert res.status != "CONFIRMED"
-        assert res.status == "REJECTED"
+        assert res.status == "INCONCLUSIVE"
 
     @pytest.mark.anyio
     async def test_login_200_is_not_auth_bypass(self):
@@ -175,7 +176,7 @@ class TestNegativeAntiFalsePositiveRules:
         }
         res = await auth_bypass_validator.validate("https://example.com/login", context, session)
         assert res.status != "CONFIRMED"
-        assert res.status == "REJECTED"
+        assert res.status == "INCONCLUSIVE"
 
     @pytest.mark.anyio
     async def test_latency_is_not_slowloris(self):
@@ -199,151 +200,48 @@ class TestNegativeAntiFalsePositiveRules:
         assert gate_res.final_status in ("INCONCLUSIVE", "FALSE_POSITIVE")
 
 
-class TestPositiveVulnerabilityConfirmations:
-    """Ensures that true semantic evidence correctly confirms findings across vulnerability classes."""
-
+class TestUncollectedEvidenceCannotConfirm:
     @pytest.mark.anyio
-    async def test_sqli_differential_confirmation(self):
-        """True boolean differential & syntax error confirms SQLi."""
+    @pytest.mark.parametrize(
+        "family",
+        [
+            "sqli",
+            "xss",
+            "rce",
+            "ssrf",
+            "idor",
+            "auth_bypass",
+            "file_upload",
+            "cors",
+            "slowloris",
+            "jwt",
+            "csrf",
+            "authorization",
+        ],
+    )
+    async def test_flags_are_not_collected_proof(self, family):
+        from app.validation.validators import get_validator
+
         session = AsyncMock()
-        context = {
-            "parameter": "id",
-            "raw_evidence": {
-                "baseline_body": "User details for ID 100",
-                "true_condition_body": "User details for ID 100",
-                "false_condition_body": "No records found matching criteria",
-                "syntax_error_body": "Warning: mysqli_fetch_array() error: You have an error in your SQL syntax near '' at line 1",
+        result = await get_validator(family).validate(
+            "https://example.com/",
+            {
+                "raw_evidence": {
+                    "status_code": 200,
+                    "concurrent_pool_starvation_observed": True,
+                    "connection_held_seconds": 65,
+                    "protected_admin_data_accessed": True,
+                    "actor_a_accessed_resource_b": True,
+                    "canary_script_executed": True,
+                    "internal_resource_fetched": True,
+                    "response_body": "ami-id reflected text",
+                }
             },
-        }
-        res = await sqli_validator.validate("https://example.com/profile", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.severity == "HIGH"
-        assert res.cwe_id == "CWE-89"
-
-        # Check ProofQualityGate
-        gate_res = ProofQualityGate.evaluate(res)
-        assert gate_res.passed is True
-        assert gate_res.final_status == "CONFIRMED"
-
-    @pytest.mark.anyio
-    async def test_xss_executable_reflection_confirmation(self):
-        """Unencoded script tag reflected in HTML text/html context confirms XSS."""
-        session = AsyncMock()
-        context = {
-            "parameter": "query",
-            "raw_evidence": {
-                "payload": "<script>alert(1)</script>",
-                "response_body": "<div>Results for: <script>alert(1)</script></div>",
-                "content_type": "text/html",
-            },
-        }
-        res = await xss_validator.validate("https://example.com/search", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.cwe_id == "CWE-79"
-
-    @pytest.mark.anyio
-    async def test_rce_canary_execution_confirmation(self):
-        """Server calculating and returning benign canary token confirms RCE."""
-        session = AsyncMock()
-        canary = "BH_CANARY_TEST_MD5"
-        expected = "8973b4007bb0b213b2c953509de3801f"
-        context = {
-            "parameter": "host",
-            "raw_evidence": {
-                "canary_token": canary,
-                "expected_output": expected,
-                "response_body": f"PING localhost ... output: {expected}\npacket loss 0%",
-                "status_code": 200,
-            },
-        }
-        res = await rce_validator.validate("https://example.com/tools/ping", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.severity == "CRITICAL"
-        assert res.cwe_id == "CWE-94"
-
-    @pytest.mark.anyio
-    async def test_idor_cross_tenant_confirmation(self):
-        """Actor A accessing private data of Actor B confirms IDOR."""
-        session = AsyncMock()
-        context = {
-            "parameter": "account_id",
-            "raw_evidence": {
-                "actor_a": "attacker_user",
-                "actor_b": "victim_executive",
-                "resource_b_id": "acc_7788",
-                "actor_a_accessed_resource_b": True,
-                "resource_contains_private_data": True,
-            },
-        }
-        res = await idor_validator.validate("https://example.com/api/billing/acc_7788", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.cwe_id == "CWE-639"
-
-    @pytest.mark.anyio
-    async def test_auth_bypass_protected_route_confirmation(self):
-        """Protected admin route accessed without authentication confirms Auth Bypass."""
-        session = AsyncMock()
-        context = {
-            "raw_evidence": {
-                "is_login_or_public_page": False,
-                "protected_admin_data_accessed": True,
-                "bypass_header": "X-Custom-Auth: bypass",
-                "baseline_unauthorized_status": 401,
-            }
-        }
-        res = await auth_bypass_validator.validate("https://example.com/admin/settings", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.severity == "CRITICAL"
-        assert res.cwe_id == "CWE-287"
-
-    @pytest.mark.anyio
-    async def test_file_upload_multi_stage_execution_confirmation(self):
-        """Multi-stage upload + storage + execution output confirms File Upload RCE."""
-        session = AsyncMock()
-        context = {
-            "raw_evidence": {
-                "upload_accepted": True,
-                "file_stored_url": "https://example.com/uploads/canary_exec.phtml",
-                "canary_script_executed": True,
-                "canary_output": "BH_CANARY_ECHO_TOKEN_9988",
-            }
-        }
-        res = await file_upload_validator.validate("https://example.com/avatar/upload", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.severity == "CRITICAL"
-        assert res.cwe_id == "CWE-434"
-
-    @pytest.mark.anyio
-    async def test_cors_credentials_and_origin_reflection_confirmation(self):
-        """Arbitrary origin reflection with Allow-Credentials: true on private API confirms CORS."""
-        session = AsyncMock()
-        context = {
-            "raw_evidence": {
-                "injected_origin": "https://evil-attacker.com",
-                "allow_origin_header": "https://evil-attacker.com",
-                "allow_credentials_header": True,
-                "endpoint_is_authenticated_sensitive": True,
-            }
-        }
-        res = await cors_validator.validate("https://example.com/api/user/private", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.cwe_id == "CWE-942"
-
-    @pytest.mark.anyio
-    async def test_slowloris_genuine_starvation_is_confirmed(self):
-        """Slowloris holding sockets > 45s causing demonstrated pool starvation confirms vulnerability."""
-        session = AsyncMock()
-        session.get = AsyncMock(return_value=MagicMock(status_code=200))
-        context = {
-            "raw_evidence": {
-                "connection_held_seconds": 65.0,  # > 45s
-                "concurrent_pool_starvation_observed": True,  # Genuine starvation
-                "server_enforced_socket_timeout": False,
-            }
-        }
-        res = await slowloris_validator.validate("https://example.com/", context, session)
-        assert res.status == "CONFIRMED"
-        assert res.cwe_id == "CWE-400"
+            session,
+        )
+        assert result.status == "INCONCLUSIVE"
+        assert not ProofQualityGate.evaluate(result).passed
+        session.get.assert_not_called()
 
 
 class TestArchitectureContractsAndSchemas:
@@ -352,9 +250,19 @@ class TestArchitectureContractsAndSchemas:
     def test_contract_registry_contains_all_core_vulnerabilities(self):
         """Verifies contract registry has contracts for all required vulnerability families."""
         expected_contracts = [
-            "sqli", "xss", "rce", "ssrf", "path_traversal", "idor",
-            "auth_bypass", "file_upload", "open_redirect", "cors",
-            "csrf", "jwt", "slowloris"
+            "sqli",
+            "xss",
+            "rce",
+            "ssrf",
+            "path_traversal",
+            "idor",
+            "auth_bypass",
+            "file_upload",
+            "open_redirect",
+            "cors",
+            "csrf",
+            "jwt",
+            "slowloris",
         ]
         for cid in expected_contracts:
             contract = contract_registry.get(cid)
@@ -405,9 +313,107 @@ class TestArchitectureContractsAndSchemas:
         record.transition_to(FindingLifecycleState.VALIDATING, "Dispatching differential validator")
         assert record.current_state == FindingLifecycleState.VALIDATING
 
-        # Transition to CONFIRMED with high confidence score
-        record.transition_to(FindingLifecycleState.CONFIRMED, "All proof quality gate checks passed", confidence_score=95)
+        # Scores alone cannot skip validation or supply evidence.
+        with pytest.raises(ValueError):
+            record.transition_to(FindingLifecycleState.CONFIRMED, "High score", confidence_score=95)
+        with pytest.raises(ValueError):
+            record.transition_to(FindingLifecycleState.VALIDATED, "Missing evidence")
+        record.transition_to(
+            FindingLifecycleState.VALIDATED, "Mechanism checked", evidence_ids=["ev_1"]
+        )
+        record.transition_to(
+            FindingLifecycleState.CONFIRMED, "Reproduced mechanism", confidence_score=95
+        )
         assert record.current_state == FindingLifecycleState.CONFIRMED
         assert record.confidence_rating == ConfidenceRating.CONFIRMED
         assert record.confidence_score == 95
-        assert len(record.history) == 2
+        assert len(record.history) == 3
+
+    def test_evidence_redaction_and_mutation_fingerprint(self):
+        item = TypedEvidenceItem(
+            evidence_type=EvidenceType.AUTH_CONTEXT,
+            title="Authentication",
+            description="Observed",
+            data={"cookies": {"sid": "secret-cookie"}, "nested": {"token": "secret-token"}},
+            asset="http://127.0.0.1/?access_token=secret-url",
+            request={"headers": {"Authorization": "Bearer secret-header"}},
+        )
+        import json
+
+        serialized = json.dumps(item.to_dict())
+        assert "secret-" not in serialized
+        assert item.id and item.to_dict()["type"] == "AUTH_CONTEXT"
+        pkg = TypedEvidencePackage("f", "auth_bypass", "http://127.0.0.1/", "auth_bypass", [item])
+        first = pkg.to_dict()["sha256_fingerprint"]
+        item.observation = "Changed observation"
+        assert first != pkg.to_dict()["sha256_fingerprint"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("holds_incomplete, expected", [(False, "NOT_VULNERABLE"), (True, "VALIDATED")])
+async def test_slowloris_real_loopback_server(holds_incomplete, expected):
+    import asyncio
+    from app.validation.safety.executor import AuthorizedExecutor, AuthorizedScope
+
+    tasks = set()
+
+    async def serve(reader, writer):
+        task = asyncio.current_task()
+        tasks.add(task)
+        try:
+            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), .6 if holds_incomplete else .025)
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+            await writer.drain()
+        except (TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            tasks.discard(task)
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
+    try:
+        async with AuthorizedExecutor(AuthorizedScope((url,), "local synthetic test")) as executor:
+            result = await slowloris_validator.probe_local(url, executor)
+            assert result.status == expected
+            assert result.status != "CONFIRMED"
+            assert executor.request_count == 6
+            assert len(result.evidence) == 6
+            assert "curl" not in (result.poc_command or "")
+            if expected == "VALIDATED":
+                assert ProofQualityGate.evaluate(result).final_status == "VALIDATED"
+                result.evidence[0]["response"]["status_code"] = 500
+                assert not ProofQualityGate.evaluate(result).passed
+    finally:
+        server.close()
+        await server.wait_closed()
+        await asyncio.gather(*list(tasks))
+
+
+@pytest.mark.anyio
+async def test_executor_denies_remote_redirect_budget_and_cookie_leaks():
+    import httpx
+    from app.validation.context import ValidationContext
+    from app.validation.safety.executor import AuthorizedExecutor, AuthorizedScope, ExecutionLimits, SafetyViolation
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(302, headers={"Location": "https://example.com/", "Set-Cookie": "sid=private"})
+
+    url = "http://127.0.0.1:8088/"
+    async with AuthorizedExecutor(AuthorizedScope((url,), "local-test"), ExecutionLimits(requests=2),
+                                  transport=httpx.MockTransport(handler)) as executor:
+        run = ValidationContext(url, "xss")
+        await executor.request(run, "baseline", "GET", url)
+        await executor.request(run, "control", "GET", url)
+        assert len(requests) == 2
+        assert "cookie" not in requests[1].headers
+        with pytest.raises(SafetyViolation):
+            await executor.request(run, "overflow", "GET", url)
+        with pytest.raises(SafetyViolation):
+            await executor.request(run, "remote", "GET", "https://example.com/")
+    with pytest.raises(SafetyViolation):
+        AuthorizedScope(("https://example.com",), "not a local lab")

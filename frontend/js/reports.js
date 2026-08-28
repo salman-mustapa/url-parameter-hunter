@@ -69,6 +69,9 @@ async function initReportHub(preferredScanId = null) {
 }
 
 const workspaceCache = new Map();
+let workspaceRequest = 0;
+let workspaceAbort = null;
+const pendingExports = new Set();
 
 async function loadReportHubData(scanId, updateUrl = false) {
   return loadWorkspaceData(scanId, updateUrl);
@@ -79,7 +82,12 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
     renderWorkspaceEmpty();
     return;
   }
+  const requestId = ++workspaceRequest;
+  workspaceAbort?.abort();
+  workspaceAbort = new AbortController();
+  const requestSignal = workspaceAbort.signal;
   currentWorkspaceScanId = scanId;
+  if (el("reportScanSelect")) el("reportScanSelect").value = scanId;
   const isReportsViewActive = el("viewReports") && !el("viewReports").classList.contains("hidden");
   if (updateUrl || isReportsViewActive) {
     updateRouteURL("reports", { scan_id: scanId });
@@ -92,6 +100,7 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
     currentWorkspaceData = cachedWs;
     renderWorkspace(cachedWs);
   } else {
+    renderWorkspaceEmpty();
     if (el("wsExecSummaryText")) {
       el("wsExecSummaryText").innerHTML = `<em>🔄 Memuat telemetri investigasi #${scanId.slice(0, 16)}...</em>`;
     }
@@ -100,18 +109,22 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
   if (typeof showTopLoader === "function") showTopLoader();
 
   try {
-    let res = await authFetch(`${API_BASE}/investigations/${encodeURIComponent(scanId)}/workspace`);
+    let res = await authFetch(`${API_BASE}/investigations/${encodeURIComponent(scanId)}/workspace`, {signal: requestSignal});
     if (!res.ok) {
-      res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/workspace`);
+      res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/workspace`, {signal: requestSignal});
     }
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: Failed to fetch workspace data`);
     }
     const ws = await res.json();
+    if (requestId !== workspaceRequest || scanId !== currentWorkspaceScanId) return;
     currentWorkspaceData = ws;
+    workspaceCache.delete(scanId);
     workspaceCache.set(scanId, ws);
+    while (workspaceCache.size > 3) workspaceCache.delete(workspaceCache.keys().next().value);
     renderWorkspace(ws);
   } catch (err) {
+    if (err.name === "AbortError" || requestId !== workspaceRequest) return;
     console.error("Failed to fetch investigation workspace data:", err);
     if (!workspaceCache.has(scanId)) {
       showToast("Gagal memuat Investigation Workspace: " + err.message, "danger");
@@ -120,11 +133,16 @@ async function loadWorkspaceData(scanId, updateUrl = false) {
       }
     }
   } finally {
-    if (typeof hideTopLoader === "function") hideTopLoader();
+    if (requestId === workspaceRequest && typeof hideTopLoader === "function") hideTopLoader();
   }
 }
 
 function renderWorkspaceEmpty() {
+  if (typeof renderReportProfile === "function") renderReportProfile({}, null);
+  currentWorkspaceData = null;
+  [renderWorkspaceAssets, renderWorkspaceServices, renderWorkspaceEndpoints, renderWorkspaceFindings,
+    renderWorkspaceEvidence, renderWorkspaceArtifacts, renderWorkspaceTimeline, renderWorkspaceExports].forEach(render => render([]));
+  renderWorkspaceAttackChains([], {});
   if (el("wsTargetName")) el("wsTargetName").textContent = "Target: -";
   if (el("wsInvestigationId")) el("wsInvestigationId").textContent = "ID: -";
   if (el("wsStatusBadge")) {
@@ -132,7 +150,7 @@ function renderWorkspaceEmpty() {
     el("wsStatusBadge").className = "status-badge status-neutral";
   }
   if (el("wsDuration")) el("wsDuration").textContent = "00m 00s";
-  if (el("wsCoverage")) el("wsCoverage").textContent = "0%";
+  if (el("wsCoverage")) el("wsCoverage").textContent = "Belum terukur";
   if (el("wsStartTime")) el("wsStartTime").textContent = "-";
   if (el("wsExecSummaryText")) el("wsExecSummaryText").textContent = "Pilih atau mulai investigasi untuk membuka Investigation Workspace.";
   
@@ -156,25 +174,32 @@ function renderWorkspaceEmpty() {
 }
 
 function renderWorkspace(ws) {
+  if (typeof renderReportProfile === "function") renderReportProfile(ws.report_context, currentWorkspaceScanId);
   const scan = ws.overview || {};
   const metrics = ws.metrics || {};
+  if (el("dashReportRisk")) {
+    const scores = (ws.findings || []).map(f => f.cvss_score).filter(x => typeof x === "number" && Number.isFinite(x));
+    el("dashReportRisk").textContent = scores.length ? `${Math.max(...scores)} / 10 (tercatat)` : "Belum tercatat";
+  }
   const exactTarget = scan.target_url || scan.target_host || scan.root_domain || scan.target || "Target";
   const status = (scan.status || "COMPLETED").toUpperCase();
 
   // 1. Header Information
   if (el("wsTargetName")) el("wsTargetName").textContent = `Target: ${exactTarget}`;
   if (el("wsInvestigationId")) el("wsInvestigationId").textContent = `ID: #${scan.id || scan.investigation_id || '-'}`;
+  if (el("wsEngineBadge")) el("wsEngineBadge").textContent = scan.profile || "Assessment";
+  if (el("wsLevelBadge")) el("wsLevelBadge").textContent = (scan.validation_level || "Belum diketahui").replaceAll("_", " ");
   if (el("wsStatusBadge")) {
     el("wsStatusBadge").textContent = status;
     el("wsStatusBadge").className = `status-badge status-${status.toLowerCase()}`;
   }
   const durSec = scan.duration_seconds || 0;
   const durStr = scan.duration || (durSec > 0 ? `${Math.floor(durSec / 60)}m ${durSec % 60}s` : "00m 00s");
-  if (el("wsDuration")) el("wsDuration").textContent = durStr;
-  if (el("wsCoverage")) el("wsCoverage").textContent = `${scan.coverage_percentage || metrics.coverage_percent || 100}%`;
+  if (el("wsDuration")) el("wsDuration").textContent = scan.duration_seconds == null ? "Tidak tercatat" : durStr;
+  if (el("wsCoverage")) el("wsCoverage").textContent = Number.isFinite(scan.coverage_percentage ?? metrics.coverage_percent) ? `${scan.coverage_percentage ?? metrics.coverage_percent}%` : "Belum terukur";
   if (el("wsStartTime")) {
-    const sTime = scan.started_at || scan.created_at;
-    el("wsStartTime").textContent = sTime ? new Date(sTime).toLocaleString("id-ID") : "-";
+    const sTime = scan.started_at;
+    el("wsStartTime").textContent = sTime ? new Date(sTime).toLocaleString("id-ID") : "Tidak tercatat";
   }
 
   // Update tab counts badges
@@ -196,7 +221,7 @@ function renderWorkspace(ws) {
   renderWorkspaceEvidence(ws.evidence || []);
   renderWorkspaceArtifacts(ws.artifacts || []);
   renderWorkspaceTimeline(ws.timeline || []);
-  renderWorkspaceExports(ws.export_jobs || []);
+  renderWorkspaceExports(ws.exports || ws.export_jobs || []);
 }
 
 function renderWorkspaceOverview(ws) {
@@ -243,8 +268,8 @@ function renderWorkspaceOverview(ws) {
 
   if (el("wsExecSummaryText")) {
     el("wsExecSummaryText").textContent = findingsCount
-      ? `Investigasi Autonomous Adversary Engine pada ${target} mengidentifikasi ${findingsCount} temuan keamanan (${crit} Critical, ${high} High) melintasi ${assetsCount || 1} asset subdomain dan ${servicesCount} port layanan. Seluruh bukti PoC telah divalidasi secara kriptografis melalui Quality Gate.`
-      : `Investigasi komprehensif pada ${target} selesai tanpa temuan kerentanan berisiko tinggi. Attack surface terpetakan secara lengkap (${assetsCount || 1} asset, ${servicesCount} port/service).`;
+      ? `Pemeriksaan pada ${target} mencatat ${findingsCount} temuan (${crit} Critical, ${high} High), ${assetsCount} aset dan ${servicesCount} layanan. Periksa level bukti dan hasil validasi setiap temuan sebelum menyimpulkan dampaknya.`
+      : `Belum ada temuan tercatat untuk ${target}. Data yang tersedia: ${assetsCount} aset dan ${servicesCount} layanan. Ketiadaan temuan bukan jaminan bahwa target aman atau cakupan pengujian lengkap.`;
   }
 }
 
@@ -265,9 +290,9 @@ function renderWorkspaceAssets(assets) {
         <td><code>${esc(a.ip || '-')}</code></td>
         <td><span class="pill pill-neutral">${esc(a.asset_type || 'domain')}</span></td>
         <td>${statusPill}</td>
-        <td class="text-xs">${a.created_at ? new Date(a.created_at).toLocaleDateString('id-ID') : '-'}</td>
+        <td class="text-xs">${(a.first_seen || a.created_at) ? new Date(a.first_seen || a.created_at).toLocaleDateString('id-ID') : '-'}</td>
         <td>
-          <button class="btn btn-secondary btn-xs" onclick="openAssetDetail('${esc(a.id)}')">🔍 Detail Asset</button>
+          <button class="btn btn-secondary btn-xs" onclick="openAssetDetail(${jsArg(a.id)})">🔍 Detail Asset</button>
         </td>
       </tr>
     `;
@@ -284,8 +309,8 @@ function renderWorkspaceServices(services) {
   }
 
   tbody.innerHTML = services.map((s) => {
-    const isNonStdHttp = s.is_non_standard_http ? `<span class="pill pill-warning">Non-Std HTTP</span>` : '';
-    const isTls = s.tls_enabled ? `<span class="pill pill-success">TLS/HTTPS</span>` : `<span class="pill pill-muted">Plain</span>`;
+    const isNonStdHttp = (s.is_nonstandard_http ?? s.is_non_standard_http) ? `<span class="pill pill-warning">Non-Std HTTP</span>` : '';
+    const isTls = (s.is_tls ?? s.tls_enabled) ? `<span class="pill pill-success">TLS/HTTPS</span>` : `<span class="pill pill-muted">Plain</span>`;
     const authSurface = s.is_auth_surface ? `<span class="pill pill-danger">Auth Surface</span>` : `<span class="text-xs text-muted">Standard</span>`;
 
     return `
@@ -293,7 +318,7 @@ function renderWorkspaceServices(services) {
         <td><strong>${esc(s.host || '-')}</strong></td>
         <td><span class="font-mono font-bold text-primary">${esc(String(s.port))}</span></td>
         <td><code>${esc(s.protocol || 'tcp')}</code></td>
-        <td><span class="pill pill-neutral">${esc(s.service_name || '-')}</span> ${isNonStdHttp}</td>
+        <td><span class="pill pill-neutral">${esc(s.service || s.service_name || '-')}</span> ${isNonStdHttp}</td>
         <td>${esc(s.product || '')} ${esc(s.version || '')}</td>
         <td class="text-xs font-mono text-muted truncate-cell" title="${esc(s.banner || '')}">${esc(s.banner || '-')}</td>
         <td>${isTls}</td>
@@ -319,10 +344,10 @@ function renderWorkspaceEndpoints(endpoints) {
     return `
       <tr>
         <td><span class="pill ${methodClass}">${esc((u.method || 'GET').toUpperCase())}</span></td>
-        <td class="font-mono text-xs"><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a></td>
+        <td class="font-mono text-xs"><a href="${esc(safeLink(u.url))}" target="_blank" rel="noopener">${esc(u.url)}</a></td>
         <td><span class="font-bold ${statusClass}">${esc(String(u.status_code || '-'))}</span></td>
         <td class="text-xs text-muted">${esc(u.content_type || '-')}</td>
-        <td class="text-xs">${esc(u.page_title || '-')}</td>
+        <td class="text-xs">${esc(u.title || u.page_title || '-')}</td>
       </tr>
     `;
   }).join("");
@@ -337,10 +362,11 @@ function renderWorkspaceFindings(findings) {
     return;
   }
 
-  container.innerHTML = findings.map((f, idx) => {
+  container.innerHTML = findings.slice(0, 20).map((f, idx) => {
     const sev = (f.severity || "INFO").toUpperCase();
-    const conf = (f.confidence || "CONFIRMED").toUpperCase();
-    const cveBadges = (f.cve_ids || []).map(cve => `<span class="pill pill-danger font-mono">${esc(cve)}</span>`).join(" ");
+    const conf = (f.confidence || "INCONCLUSIVE").toUpperCase();
+    const cveBadges = (f.cve_ids || (f.cve_id ? [f.cve_id] : [])).map(cve => `<span class="pill pill-danger font-mono">${esc(cve)}</span>`).join(" ");
+    const quality = f.report_quality || {status: "NEEDS_REVIEW", missing: []};
     const code = f.finding_code || `INV-F-${String(idx + 1).padStart(3, '0')}`;
     const dossier = f.poc_dossier || {};
     const reproSteps = dossier.reproduction_steps || f.reproduction_steps || [];
@@ -348,16 +374,16 @@ function renderWorkspaceFindings(findings) {
     const curlCode = dossier.curl_command || f.proof_curl || f.poc || "";
     const rawReq = dossier.raw_http_request || f.raw_http_request || "";
     const rawResp = dossier.raw_http_response || f.raw_http_response || "";
-    const expected = dossier.expected_behavior || f.expected_behavior || "Aplikasi wajib memvalidasi input & menolak akses tanpa otorisasi.";
-    const actual = dossier.actual_behavior || f.actual_behavior || f.technical_details || "Server memproses payload tanpa sanitasi & membocorkan data/kontrol.";
+    const expected = dossier.expected_behavior || f.expected_behavior || "Perilaku yang diharapkan belum dicatat.";
+    const actual = dossier.actual_behavior || f.actual_behavior || f.technical_details || "Perilaku aktual belum dicatat.";
     const ss = dossier.screenshot || f.screenshot || {};
 
-    let screenshotHtml = "";
+    let screenshotHtml = `<div class="text-xs text-muted mt-2">Kesiapan laporan: <strong>${esc(quality.status)}</strong>. Belum lengkap: ${esc(quality.missing.join(", ") || "Tetap perlu tinjauan manusia")}. Script otomatis adalah template replay, bukan bukti keberhasilan.</div>`;
     if (ss.has_screenshot && ss.image_url) {
-      screenshotHtml = `
+      screenshotHtml += `
         <div class="ws-screenshot-preview mt-3">
           <div class="ws-screenshot-header">📸 Bukti Visual (Real Browser Screenshot)</div>
-          <div class="ws-screenshot-thumb-box" onclick="openScreenshotZoom('${esc(ss.image_url)}', '${esc(ss.caption || f.title)}')">
+          <div class="ws-screenshot-thumb-box" onclick="openScreenshotZoom(${jsArg(ss.image_url)}, ${jsArg(ss.caption || f.title)})">
             <img src="${esc(ss.image_url)}" alt="Visual Evidence Proof" class="ws-screenshot-img" loading="lazy" />
             <div class="ws-screenshot-overlay">🔍 Klik untuk Perbesar Tangkapan Layar Asli</div>
           </div>
@@ -365,7 +391,7 @@ function renderWorkspaceFindings(findings) {
         </div>
       `;
     } else {
-      screenshotHtml = `
+      screenshotHtml += `
         <div class="ws-screenshot-note mt-3">
           <span class="text-xs text-muted">📸 <strong>Status Visual Proof:</strong> ${esc(ss.explanation_if_none || 'Bukti visual browser tidak berlaku untuk endpoint API/protokol ini. Bukti HTTP wire request & response lengkap disertakan di bawah.')}</span>
         </div>
@@ -393,7 +419,7 @@ function renderWorkspaceFindings(findings) {
           </div>
           <div class="flex-row-gap flex-wrap">
             <span class="pill pill-info">${esc(conf)}</span>
-            <span class="pill pill-neutral font-mono">${esc(f.cwe_id || 'CWE-200')}</span>
+            <span class="pill pill-neutral font-mono">${esc(f.cwe_id || 'Belum dipetakan')}</span>
             ${f.cve_id ? `<span class="pill pill-danger font-mono font-bold">${esc(f.cve_id)}</span>` : ''}
             ${f.cvss_score ? `<span class="pill pill-danger font-bold">CVSS ${f.cvss_score}</span>` : ''}
           </div>
@@ -414,11 +440,11 @@ function renderWorkspaceFindings(findings) {
         <!-- Interactive PoC Multi-Tab Box -->
         <div class="ws-poc-container mt-3">
           <div class="ws-poc-tab-nav">
-            <button class="ws-poc-tab-btn active" onclick="switchCardPocTab('${esc(f.id)}', 'python', this)">🐍 Python PoC Script</button>
-            <button class="ws-poc-tab-btn" onclick="switchCardPocTab('${esc(f.id)}', 'curl', this)">⚡ cURL CLI Command</button>
-            <button class="ws-poc-tab-btn" onclick="switchCardPocTab('${esc(f.id)}', 'raw_req', this)">📡 Raw HTTP Request</button>
-            <button class="ws-poc-tab-btn" onclick="switchCardPocTab('${esc(f.id)}', 'raw_resp', this)">📥 Raw Response Proof</button>
-            <button class="btn btn-secondary btn-xs ml-auto" onclick="copyCardActivePoc('${esc(f.id)}', this)">📋 Copy Script / Code</button>
+            <button class="ws-poc-tab-btn active" onclick="switchCardPocTab(${jsArg(f.id)}, 'python', this)">🐍 Python PoC Script</button>
+            <button class="ws-poc-tab-btn" onclick="switchCardPocTab(${jsArg(f.id)}, 'curl', this)">⚡ cURL CLI Command</button>
+            <button class="ws-poc-tab-btn" onclick="switchCardPocTab(${jsArg(f.id)}, 'raw_req', this)">📡 Raw HTTP Request</button>
+            <button class="ws-poc-tab-btn" onclick="switchCardPocTab(${jsArg(f.id)}, 'raw_resp', this)">📥 Raw Response Proof</button>
+            <button class="btn btn-secondary btn-xs ml-auto" onclick="copyCardActivePoc(${jsArg(f.id)}, this)">📋 Copy Script / Code</button>
           </div>
 
           <div class="ws-poc-tab-content-wrap">
@@ -436,7 +462,7 @@ function renderWorkspaceFindings(findings) {
             <span class="behavior-text">${esc(expected)}</span>
           </div>
           <div class="behavior-row mt-1">
-            <span class="behavior-tag tag-actual">❌ Perilaku Rentan Ditemukan:</span>
+            <span class="behavior-tag tag-actual">Perilaku aktual yang tercatat:</span>
             <span class="behavior-text">${esc(actual)}</span>
           </div>
         </div>
@@ -451,83 +477,23 @@ function renderWorkspaceFindings(findings) {
         ` : ''}
 
         <div class="ws-finding-footer mt-3 flex-between flex-wrap gap-2">
-          <span class="text-xs text-muted">Quality Gate: <strong>12-Point Cryptographically Verified</strong></span>
+          <span class="text-xs text-muted">Quality Gate: <strong>Periksa kelengkapan bukti</strong></span>
           <div class="flex-row-gap">
-            <button class="btn btn-secondary btn-xs" onclick="downloadSingleFindingPoC('${esc(f.id)}')">💾 Export PoC (.py)</button>
-            <button class="btn btn-primary btn-xs" onclick="openFindingPocDossier('${esc(f.id)}')">🔒 View In-Depth Analysis & PoC</button>
+            <button class="btn btn-secondary btn-xs" onclick="downloadSingleFindingPoC(${jsArg(f.id)})">💾 Export PoC (.py)</button>
+            <button class="btn btn-primary btn-xs" onclick="openFindingPocDossier(${jsArg(f.id)})">🔒 View In-Depth Analysis & PoC</button>
           </div>
         </div>
       </div>
     `;
   }).join("");
+  if (findings.length > 20) container.insertAdjacentHTML("beforeend", `<p class="empty-msg">Menampilkan 20 dari ${findings.length} temuan. Gunakan pencarian/filter untuk mempersempit hasil, atau export untuk seluruh temuan.</p>`);
 }
 
 
 function renderWorkspaceAttackChains(chains, ws) {
   const canvas = el("wsAttackGraphCanvas");
   if (!canvas) return;
-
-  const assets = ws.assets || [];
-  const services = ws.services || [];
-  const findings = ws.findings || [];
-  const artifacts = ws.artifacts || [];
-
-  if (!findings.length && !chains.length && !artifacts.length) {
-    canvas.innerHTML = `
-      <div class="empty-msg">
-        Tidak ada jalur eksploitasi aktif (Attack Chain) yang terbentuk. Sistem memverifikasi tidak ada kerentanan berantai.
-      </div>
-    `;
-    return;
-  }
-
-  // Check if we have multi-stage chained findings (e.g. artifact -> auth -> upload -> rce)
-  const hasAuth = findings.some(f => (f.finding_type || '').includes('auth') || (f.title || '').toLowerCase().includes('auth'));
-  const hasUpload = findings.some(f => (f.finding_type || '').includes('upload') || (f.title || '').toLowerCase().includes('upload'));
-  const hasArtifact = artifacts.length > 0 || findings.some(f => (f.finding_type || '').includes('artifact'));
-
-  let chainSteps = [
-    { num: 1, name: "Recon & Artifact", icon: "📁", desc: artifacts.length ? `${artifacts[0].filename || 'Database Dump'}` : "Initial Exposure", active: true, tag: "DISCOVERED" },
-    { num: 2, name: "Data Correlation", icon: "🔄", desc: "Column-to-Input Match", active: true, tag: "CORRELATED" },
-    { num: 3, name: "Auth Validation", icon: "🔑", desc: hasAuth ? "Session Acquired" : "Credentials Verified", active: hasAuth || hasArtifact, tag: hasAuth ? "VERIFIED" : "HYPOTHESIS" },
-    { num: 4, name: "Auth Delta Crawl", icon: "🌐", desc: "Protected Surface Spidered", active: hasAuth, tag: hasAuth ? "DISCOVERED" : "PENDING" },
-    { num: 5, name: "Upload Assessment", icon: "📦", desc: hasUpload ? "Canary Accepted" : "Multipart Upload", active: hasUpload, tag: hasUpload ? "ACCEPTED" : "PENDING" },
-    { num: 6, name: "Execution Probing", icon: "⚡", desc: hasUpload ? "MD5 Canary Echo" : "Safe Script Probe", active: hasUpload, tag: hasUpload ? "EXECUTED" : "PENDING" },
-    { num: 7, name: "RCE Impact", icon: "💥", desc: hasUpload ? "Full Code Execution" : "System Impact", active: hasUpload, tag: hasUpload ? "CONFIRMED" : "PENDING", critical: true },
-  ];
-
-  let nodesHtml = `
-    <div class="attack-chain-flow-container">
-      <div class="chain-stepper-header mb-3">
-        <div class="flex-between">
-          <span class="font-bold text-sm">⛓️ Autonomous Multi-Stage Attack Journey (7-Stage Lineage):</span>
-          <span class="pill ${hasUpload ? 'pill-danger' : 'pill-primary'} text-xs font-mono">
-            ${hasUpload ? '🔥 CRITICAL RCE CHAIN CONFIRMED' : '⚡ AUTONOMOUS CHAIN ACTIVE'}
-          </span>
-        </div>
-      </div>
-      <div class="ws-chain-stepper-grid">
-        ${chainSteps.map((st, idx) => `
-          <div class="ws-chain-step-card ${st.active ? 'step-active' : 'step-idle'} ${st.critical && st.active ? 'step-critical' : ''}">
-            <div class="step-num-badge">${st.num}</div>
-            <div class="step-icon">${st.icon}</div>
-            <div class="step-title font-bold text-xs">${esc(st.name)}</div>
-            <div class="step-desc text-muted text-xs">${esc(st.desc)}</div>
-            <span class="step-pill pill ${st.active ? (st.critical ? 'pill-danger' : 'pill-primary') : 'pill-neutral'}">${esc(st.tag)}</span>
-          </div>
-          ${idx < chainSteps.length - 1 ? '<div class="chain-arrow">➔</div>' : ''}
-        `).join("")}
-      </div>
-
-      <div class="chain-summary-box mt-3 p-3 card sketch-card">
-        <div class="text-xs font-mono text-muted">
-          💡 <strong>Autonomous Decision Context:</strong> Every step in the attack chain automatically validates preconditions, preserves non-destructive safety, and synthesizes cryptographically verified evidence packages.
-        </div>
-      </div>
-    </div>
-  `;
-
-  canvas.innerHTML = nodesHtml;
+  canvas.innerHTML = `<div class="empty-msg">Belum ada rantai eksploitasi tervalidasi yang tersimpan. Temuan upload atau autentikasi saja tidak membuktikan RCE. Tinjau temuan dan bukti masing-masing sebelum menghubungkannya.</div>`;
 }
 
 function renderWorkspaceEvidence(evidence) {
@@ -596,7 +562,7 @@ function renderWorkspaceArtifacts(artifacts) {
         <td class="text-xs font-mono">${formatBytes(szBytes)}</td>
         <td class="text-xs font-mono text-muted">${esc((art.sha256_hash || '-').slice(0, 16))}...</td>
         <td>
-          <button class="btn btn-primary btn-xs" onclick="openArtifactPreview('${esc(art.id)}')">👁️ Pratinjau</button>
+          <button class="btn btn-primary btn-xs" onclick="openArtifactPreview(${jsArg(art.id)})">👁️ Pratinjau</button>
         </td>
       </tr>
     `;
@@ -792,9 +758,9 @@ async function openArtifactPreview(artifactId) {
                       </td>
                       <td>
                         <div class="flex-row-gap flex-wrap">
-                          <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText('${esc(hFull)}'); showToast('Hash disalin!', 'success');">📋 Salin Hash</button>
+                          <button class="btn btn-ghost btn-xs" onclick="navigator.clipboard.writeText(${jsArg(hFull)}); showToast('Hash disalin!', 'success');">📋 Salin Hash</button>
                           ${isCracked ? `
-                            <button class="btn btn-success btn-xs" onclick="navigator.clipboard.writeText('${esc(plaintext)}'); showToast('Password plaintext disalin!', 'success');">🔑 Salin Pass</button>
+                            <button class="btn btn-success btn-xs" onclick="navigator.clipboard.writeText(${jsArg(plaintext)}); showToast('Password plaintext disalin!', 'success');">🔑 Salin Pass</button>
                           ` : ''}
                         </div>
                       </td>
@@ -994,14 +960,14 @@ function renderWorkspaceExports(exportJobs) {
         : `<span class="pill pill-danger">${st}</span>`);
 
     const downloadBtn = (st === 'COMPLETED' && job.download_url)
-      ? `<a href="${esc(job.download_url)}" class="btn btn-success btn-xs" target="_blank" download>📥 Download</a>`
+      ? `<a href="${esc(safeLink(job.download_url))}" class="btn btn-success btn-xs" target="_blank" download>📥 Download</a>`
       : `<button class="btn btn-secondary btn-xs" disabled>⏳ Pending</button>`;
 
     return `
       <tr>
-        <td><strong>${esc(job.format.toUpperCase())}</strong></td>
-        <td class="font-mono text-xs">${esc(job.file_name || '-')}</td>
-        <td>${stBadge}</td>
+        <td><strong>${esc((job.export_type || job.format || "export").toUpperCase())}</strong></td>
+        <td class="font-mono text-xs">${esc(job.filename || job.file_name || '-')}</td>
+        <td>${stBadge}${st === 'FAILED' ? `<div class="text-xs text-danger">${esc(job.error_message || 'Export gagal. Silakan coba lagi.')}</div>` : ''}</td>
         <td class="font-mono text-xs">${formatBytes(job.file_size || 0)}</td>
         <td class="font-mono text-xs text-muted">${esc((job.sha256_hash || '-').slice(0, 16))}...</td>
         <td class="text-xs">${job.completed_at ? new Date(job.completed_at).toLocaleTimeString('id-ID') : '-'}</td>
@@ -1017,9 +983,13 @@ async function triggerAsyncExport(format) {
     return;
   }
 
+  const scanId = currentWorkspaceScanId;
+  const key = `${scanId}:${format}`;
+  if (pendingExports.has(key)) return;
+  pendingExports.add(key);
   try {
     showToast(`Memulai pembuatan export ${format.toUpperCase()} di latar belakang...`, "info");
-    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(currentWorkspaceScanId)}/export/${encodeURIComponent(format)}`, {
+    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/export/${encodeURIComponent(format)}`, {
       method: "POST"
     });
 
@@ -1032,30 +1002,38 @@ async function triggerAsyncExport(format) {
     showToast(`Tugas export ${format.toUpperCase()} berhasil dimasukkan antrian!`, "success");
 
     // Refresh workspace to get updated export job
-    await loadWorkspaceData(currentWorkspaceScanId);
+    if (currentWorkspaceScanId !== scanId) return;
+    await loadWorkspaceData(scanId);
 
     // Poll for export completion
     startExportPolling();
   } catch (err) {
     showToast("Gagal memulai export: " + err.message, "danger");
+  } finally {
+    pendingExports.delete(key);
   }
 }
 
 function startExportPolling() {
   if (exportPollInterval) clearInterval(exportPollInterval);
   let attempts = 0;
+  let inFlight = false;
+  const scanId = currentWorkspaceScanId;
 
   exportPollInterval = setInterval(async () => {
+    if (inFlight || document.hidden) return;
     attempts++;
-    if (attempts > 30 || !currentWorkspaceScanId) {
+    if (attempts > 30 || !currentWorkspaceScanId || currentWorkspaceScanId !== scanId) {
       clearInterval(exportPollInterval);
       return;
     }
 
     try {
-      const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(currentWorkspaceScanId)}/exports`);
+      inFlight = true;
+      const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/exports`);
       if (res.ok) {
         const jobs = await res.json();
+        if (currentWorkspaceScanId !== scanId) return;
         renderWorkspaceExports(jobs);
         const hasPending = jobs.some(j => j.status === "QUEUED" || j.status === "PROCESSING");
         if (!hasPending) {
@@ -1064,6 +1042,8 @@ function startExportPolling() {
       }
     } catch (e) {
       console.debug("Export poll skip:", e);
+    } finally {
+      inFlight = false;
     }
   }, 2000);
 }
@@ -1128,6 +1108,22 @@ function setupReportHubEvents() {
     });
   }
 
+  el("wsReloadAttackGraphBtn")?.addEventListener("click", async () => {
+    if (!currentWorkspaceScanId) return;
+    const scanId = currentWorkspaceScanId;
+    const button = el("wsReloadAttackGraphBtn");
+    button.disabled = true;
+    try {
+      const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/attack-chains`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const graph = await res.json();
+      if (currentWorkspaceScanId !== scanId) return;
+      const canvas = el("wsAttackGraphCanvas");
+      canvas.innerHTML = `<p class="text-muted">Relasi aset yang tercatat. Relasi ini bukan bukti rantai eksploitasi berhasil.</p><div class="ws-chain-stepper-grid">${(graph.nodes || []).map(node => `<div class="ws-chain-step-card"><strong>${esc(node.label)}</strong><div>${esc(node.type)}</div></div>`).join("")}</div>`;
+    } catch (error) { showToast("Gagal memuat relasi aset: " + error.message, "danger"); }
+    finally { button.disabled = false; }
+  });
+
   // Async Export triggers
   document.querySelectorAll(".ws-btn-export").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1153,7 +1149,7 @@ function setupReportHubEvents() {
     serviceInput.addEventListener("input", (e) => {
       const q = e.target.value.toLowerCase();
       const svcs = (currentWorkspaceData?.services || []).filter(s =>
-        (s.service_name || "").toLowerCase().includes(q) ||
+        (s.service || s.service_name || "").toLowerCase().includes(q) ||
         String(s.port).includes(q) ||
         (s.host || "").toLowerCase().includes(q) ||
         (s.banner || "").toLowerCase().includes(q)
@@ -1187,7 +1183,7 @@ function setupReportHubEvents() {
         (f.title || "").toLowerCase().includes(q) ||
         (f.cwe_id || "").toLowerCase().includes(q) ||
         (f.description || "").toLowerCase().includes(q) ||
-        (f.url || "").toLowerCase().includes(q)
+        (f.location || f.url || "").toLowerCase().includes(q)
       );
     }
     renderWorkspaceFindings(list);
@@ -1228,7 +1224,7 @@ window.copyCardActivePoc = function(findingId, btn) {
   if (!activePane) return;
 
   const textToCopy = activePane.innerText || activePane.textContent;
-  navigator.clipboard.writeText(textToCopy).then(() => {
+  writeClipboard(textToCopy).then(() => {
     const originalText = btn.textContent;
     btn.textContent = "✅ Copied!";
     btn.classList.add("btn-success");
@@ -1290,13 +1286,13 @@ window.openFindingPocDossier = async function(findingId) {
     const sev = (finding?.severity || dossier?.severity || "INFO").toUpperCase();
     const title = finding?.title || dossier?.title || "Security Finding";
     const code = finding?.finding_code || `INV-F-${findingId.slice(0, 6)}`;
-    const cwe = dossier?.cwe_id || finding?.cwe_id || "CWE-200";
+    const cwe = dossier?.cwe_id || finding?.cwe_id || "Belum dipetakan";
     const cve = dossier?.cve_id || finding?.cve_id || "";
     const cvss = dossier?.cvss_score || finding?.cvss_score || "-";
     const reproSteps = dossier?.reproduction_steps || [];
     const ss = dossier?.screenshot || {};
-    const expected = dossier?.expected_behavior || "Aplikasi wajib memvalidasi input & menolak akses tanpa otorisasi.";
-    const actual = dossier?.actual_behavior || finding?.technical_details || "Server memproses payload tanpa sanitasi & membocorkan data/kontrol.";
+    const expected = dossier?.expected_behavior || "Perilaku yang diharapkan belum dicatat.";
+    const actual = dossier?.actual_behavior || finding?.technical_details || "Perilaku aktual belum dicatat.";
 
     const sevBadge = el("wsPocModalSevBadge");
     if (sevBadge) {
@@ -1313,7 +1309,7 @@ window.openFindingPocDossier = async function(findingId) {
       screenshotSection = `
         <div class="poc-section mt-4">
           <h4 class="poc-section-heading">📸 Visual Evidence (Real Browser Screenshot)</h4>
-          <div class="ws-screenshot-modal-wrap mt-2" onclick="openScreenshotZoom('${esc(ss.image_url)}', '${esc(ss.caption || title)}')">
+          <div class="ws-screenshot-modal-wrap mt-2" onclick="openScreenshotZoom(${jsArg(ss.image_url)}, ${jsArg(ss.caption || title)})">
             <img src="${esc(ss.image_url)}" alt="Visual Proof Capture" class="ws-screenshot-full-img" />
           </div>
           <div class="text-xs text-muted mt-1">${esc(ss.caption || '')} (Klik gambar untuk zoom layar penuh)</div>
@@ -1336,7 +1332,7 @@ window.openFindingPocDossier = async function(findingId) {
           <div class="poc-meta-item"><strong>Target URL:</strong> <code>${esc(dossier?.target_url || finding?.location || '-')}</code></div>
           <div class="poc-meta-item"><strong>CWE:</strong> <span class="pill pill-neutral font-mono">${esc(cwe)}</span></div>
           ${cve ? `<div class="poc-meta-item"><strong>CVE:</strong> <span class="pill pill-danger font-mono font-bold">${esc(cve)}</span></div>` : ''}
-          <div class="poc-meta-item"><strong>CVSS 4.0:</strong> <span class="pill pill-danger font-bold">${esc(String(cvss))}</span></div>
+          <div class="poc-meta-item"><strong>CVSS (versi belum dicatat):</strong> <span class="pill pill-danger font-bold">${esc(String(cvss))}</span></div>
           <div class="poc-meta-item"><strong>Method:</strong> <span class="pill pill-primary">${esc(dossier?.method || 'GET')}</span></div>
           <div class="poc-meta-item"><strong>Parameter:</strong> <code>${esc(dossier?.parameter || 'N/A')}</code></div>
         </div>
@@ -1428,7 +1424,7 @@ window.copyActiveModalPoc = function(btn) {
   if (!activePane) return;
 
   const textToCopy = activePane.innerText || activePane.textContent;
-  navigator.clipboard.writeText(textToCopy).then(() => {
+  writeClipboard(textToCopy).then(() => {
     const orig = btn.textContent;
     btn.textContent = "✅ Copied!";
     btn.classList.add("btn-success");
@@ -1464,4 +1460,3 @@ window.openScreenshotZoom = function(imgUrl, caption) {
 window.closeScreenshotZoom = function() {
   el("wsScreenshotLightbox")?.classList.add("hidden");
 };
-

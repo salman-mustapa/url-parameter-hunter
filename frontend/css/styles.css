@@ -1278,7 +1278,7 @@ html, body {
 /* Trust Signals Bar */
 .trust-signals-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 10px;
   margin: 14px 0;
 }
@@ -5063,7 +5063,7 @@ html, body {
 
 .detail-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -5178,7 +5178,7 @@ html, body {
 /* Quality Gates Grid (§40) */
 .quality-gate-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
   gap: 8px;
 }
 
@@ -5214,7 +5214,7 @@ html, body {
 /* Finding Info Grid */
 .finding-info-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -5258,7 +5258,7 @@ html, body {
 
 .impact-matrix-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
   gap: 8px;
 }
 
@@ -5611,7 +5611,7 @@ html, body {
 
 .v4-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
   gap: 10px;
 }
 
@@ -5672,7 +5672,7 @@ html, body {
 
 .v4-subsections-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 14px;
 }
 
@@ -6151,7 +6151,7 @@ html, body {
 
 .v4-tool-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
   gap: 12px;
 }
 
@@ -7234,7 +7234,7 @@ html, body {
 /* Stats Cards Grid */
 .ws-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
   gap: 14px;
   margin-bottom: 20px;
 }
@@ -7268,7 +7268,7 @@ html, body {
 /* Severity & Confidence Matrix Grid */
 .ws-matrix-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -7560,7 +7560,7 @@ html, body {
 
 .ws-evidence-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   gap: 12px;
 }
 
@@ -7675,7 +7675,7 @@ html, body {
 /* Async Export Grid */
 .ws-export-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 14px;
   margin-top: 14px;
 }

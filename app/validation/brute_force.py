@@ -10,6 +10,8 @@ Features:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import asyncio
 import hashlib
 import logging
@@ -214,7 +216,7 @@ class ControlledBruteForceValidator:
         """
         candidates: List[BruteForceCandidate] = []
 
-        async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=False) as client:
+        async with ValidationHTTPClient(timeout=_TIMEOUT, verify=False, follow_redirects=False) as client:
             form_info = await self._detect_form_fields(client, url)
             if not form_info:
                 return candidates
@@ -420,7 +422,7 @@ class ControlledBruteForceValidator:
             ("root", "password"),
         ]
 
-        async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=False) as client:
+        async with ValidationHTTPClient(timeout=_TIMEOUT, verify=False, follow_redirects=False) as client:
             try:
                 resp = await client.get(url, headers=_HEADERS)
                 if resp.status_code != 200:

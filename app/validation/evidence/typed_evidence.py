@@ -8,9 +8,12 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
+from uuid import uuid4
+
+from app.reporting.redaction import RedactionEngine
 
 
 class EvidenceType(str, Enum):
@@ -23,6 +26,10 @@ class EvidenceType(str, Enum):
     TLS = "TLS"
     TCP = "TCP"
     AUTH_STATE = "AUTH_STATE"
+    AUTH_CONTEXT = "AUTH_CONTEXT"
+    AUTHORIZATION_CONTEXT = "AUTHORIZATION_CONTEXT"
+    FILE_ACCESS = "FILE_ACCESS"
+    ERROR_SIGNATURE = "ERROR_SIGNATURE"
     SESSION_STATE = "SESSION_STATE"
     IDENTITY_CONTEXT = "IDENTITY_CONTEXT"
     RESOURCE_ACCESS = "RESOURCE_ACCESS"
@@ -42,56 +49,91 @@ class EvidenceType(str, Enum):
 @dataclass
 class TypedEvidenceItem:
     """Individual typed technical evidence unit."""
+
     evidence_type: EvidenceType
     title: str
     description: str
-    data: Dict[str, Any]
+    data: dict[str, Any]
     is_primary_proof: bool = False
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    id: str = field(default_factory=lambda: uuid4().hex)
+    asset: str = ""
+    request: dict[str, Any] = field(default_factory=dict)
+    response: dict[str, Any] = field(default_factory=dict)
+    observation: str = ""
+    comparison: dict[str, Any] = field(default_factory=dict)
+    relevance: float = 0.0
+    confidence: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "evidence_type": self.evidence_type.value if isinstance(self.evidence_type, EvidenceType) else str(self.evidence_type),
-            "title": self.title,
-            "description": self.description,
-            "data": self.data,
-            "is_primary_proof": self.is_primary_proof,
-            "timestamp": self.timestamp,
-        }
+    def __post_init__(self) -> None:
+        self.evidence_type = EvidenceType(self.evidence_type)
+        if not self.id or not 0 <= self.confidence <= 1 or not 0 <= self.relevance <= 1:
+            raise ValueError("Evidence requires an ID and confidence/relevance in [0, 1]")
+        if datetime.fromisoformat(self.timestamp).utcoffset() is None:
+            raise ValueError("Evidence timestamp must include a timezone")
+
+    @property
+    def type(self) -> EvidenceType:
+        return self.evidence_type
+
+    def to_dict(self) -> dict[str, Any]:
+        return RedactionEngine.redact_dict(
+            {
+                "id": self.id,
+                "type": self.evidence_type.value,
+                "evidence_type": self.evidence_type.value
+                if isinstance(self.evidence_type, EvidenceType)
+                else str(self.evidence_type),
+                "title": self.title,
+                "description": self.description,
+                "data": self.data,
+                "is_primary_proof": self.is_primary_proof,
+                "timestamp": self.timestamp,
+                "asset": self.asset,
+                "request": self.request,
+                "response": self.response,
+                "observation": self.observation or self.description,
+                "comparison": self.comparison,
+                "relevance": self.relevance,
+                "confidence": self.confidence,
+            }
+        )
 
 
 @dataclass
 class DifferentialObservation:
     """Standardized Differential Testing Record (Baseline -> Control -> Test -> Compare)."""
-    baseline_request: Dict[str, Any]
-    baseline_response: Dict[str, Any]
-    control_request: Optional[Dict[str, Any]] = None
-    control_response: Optional[Dict[str, Any]] = None
-    test_request: Dict[str, Any] = field(default_factory=dict)
-    test_response: Dict[str, Any] = field(default_factory=dict)
-    differences: List[str] = field(default_factory=list)
+
+    baseline_request: dict[str, Any]
+    baseline_response: dict[str, Any]
+    control_request: dict[str, Any] | None = None
+    control_response: dict[str, Any] | None = None
+    test_request: dict[str, Any] = field(default_factory=dict)
+    test_response: dict[str, Any] = field(default_factory=dict)
+    differences: list[str] = field(default_factory=list)
     significance_score: float = 0.0  # 0.0 - 1.0
     behavioral_anomaly_confirmed: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, Any]:
+        return RedactionEngine.redact_dict(asdict(self))
 
 
 @dataclass
 class TypedEvidencePackage:
     """Cryptographically structured evidence container meeting audit & bug bounty standards."""
+
     finding_id: str
     vulnerability_type: str
     target_url: str
     contract_id: str
-    items: List[TypedEvidenceItem] = field(default_factory=list)
-    differential: Optional[DifferentialObservation] = None
-    reproduction_command: Optional[str] = None
-    reproduction_steps: List[str] = field(default_factory=list)
+    items: list[TypedEvidenceItem] = field(default_factory=list)
+    differential: DifferentialObservation | None = None
+    reproduction_command: str | None = None
+    reproduction_steps: list[str] = field(default_factory=list)
     confidence_score: int = 0
-    validation_status: str = "VALIDATED"
+    validation_status: str = "DISCOVERED"
     sha256_fingerprint: str = ""
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def compute_fingerprint(self) -> str:
         """Computes deterministic SHA-256 fingerprint over all technical evidence."""
@@ -99,7 +141,7 @@ class TypedEvidencePackage:
             {
                 "finding_id": self.finding_id,
                 "vulnerability_type": self.vulnerability_type,
-                "target_url": self.target_url,
+                "target_url": RedactionEngine.redact_text(self.target_url),
                 "contract_id": self.contract_id,
                 "items": [item.to_dict() for item in self.items],
                 "differential": self.differential.to_dict() if self.differential else None,
@@ -110,20 +152,25 @@ class TypedEvidencePackage:
         self.sha256_fingerprint = hashlib.sha256(raw_payload.encode()).hexdigest()
         return self.sha256_fingerprint
 
-    def to_dict(self) -> Dict[str, Any]:
-        if not self.sha256_fingerprint:
-            self.compute_fingerprint()
-        return {
-            "finding_id": self.finding_id,
-            "vulnerability_type": self.vulnerability_type,
-            "target_url": self.target_url,
-            "contract_id": self.contract_id,
-            "items": [item.to_dict() for item in self.items],
-            "differential": self.differential.to_dict() if self.differential else None,
-            "reproduction_command": self.reproduction_command,
-            "reproduction_steps": self.reproduction_steps,
-            "confidence_score": self.confidence_score,
-            "validation_status": self.validation_status,
-            "sha256_fingerprint": self.sha256_fingerprint,
-            "created_at": self.created_at,
-        }
+    def to_dict(self) -> dict[str, Any]:
+        self.compute_fingerprint()
+        return RedactionEngine.redact_dict(
+            {
+                "finding_id": self.finding_id,
+                "vulnerability_type": self.vulnerability_type,
+                "target_url": self.target_url,
+                "contract_id": self.contract_id,
+                "items": [item.to_dict() for item in self.items],
+                "differential": self.differential.to_dict() if self.differential else None,
+                "reproduction_command": self.reproduction_command,
+                "reproduction_steps": self.reproduction_steps,
+                "confidence_score": self.confidence_score,
+                "validation_status": self.validation_status,
+                "sha256_fingerprint": self.sha256_fingerprint,
+                "created_at": self.created_at,
+            }
+        )
+
+
+# Public domain name; existing collector imports remain compatible.
+Evidence = TypedEvidenceItem

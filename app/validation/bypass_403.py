@@ -12,6 +12,8 @@ All attempts are controlled and non-destructive (V5 §4 SAFE tier).
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 import re
 import uuid
@@ -82,7 +84,7 @@ class Bypass403Engine:
     ) -> Optional[httpx.Response]:
         hdrs = {**_HEADERS, **(headers or {})}
         try:
-            async with httpx.AsyncClient(
+            async with ValidationHTTPClient(
                 timeout=_TIMEOUT, verify=False, follow_redirects=follow, http2=False,
             ) as c:
                 return await c.request(method, url, headers=hdrs)

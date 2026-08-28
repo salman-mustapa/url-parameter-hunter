@@ -246,7 +246,7 @@ async def _process_and_save_validated_finding(
             logger.debug("LLM deep triage note: %s", llm_triage_err)
 
     # 2. Evaluate via Proof Quality Gate (V8 §27, §40)
-    qg_res = ProofQualityGate.evaluate(norm_res, scope_decision="ALLOWED")
+    qg_res = ProofQualityGate.evaluate(norm_res, scope_decision="ALLOWED" if ctx.scope.url_allowed(norm_res.endpoint_url) else "BLOCKED")
     if len(qg_res) == 4:
         passed, final_status, exploitability_state, checklist = qg_res
     else:
@@ -318,6 +318,7 @@ async def _process_and_save_validated_finding(
 
     finding = await result_service.upsert_finding(
         db,
+        validated_result=norm_res,
         scan_id=ctx.scan_id,
         asset_id=asset_id,
         finding_type=norm_res.vulnerability_type,
@@ -442,10 +443,12 @@ async def _process_and_save_validated_finding(
             target_url=norm_res.endpoint_url or f"https://{target_host}/",
             trigger="finding",
             finding_title=finding.title,
+            ctx=ctx,
         )
         if ss:
             cur_ev = dict(finding.evidence or {})
             cur_ev["screenshot_id"] = ss.id
+            cur_ev["screenshot_kind"] = "browser"
             cur_ev["screenshot_url"] = f"/api/screenshots/{ss.id}/image"
             cur_ev["screenshot_thumb"] = f"/api/screenshots/{ss.id}/thumbnail"
             cur_ev["sha256"] = ss.content_hash

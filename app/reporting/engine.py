@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from app.reporting.poc_builder import PocBuilder
 from app.reporting.redaction import RedactionEngine
+from app.reporting.serializers import finding_quality
 
 
 
@@ -16,6 +17,28 @@ class ReportEngine:
     Produces audit-grade, sanitized security assessment reports in Markdown, HTML, JSON, and ready-to-use PDF.
     """
 
+    @classmethod
+    def _prepare_findings(cls, findings, perspective="customer"):
+        result = []
+        for original in findings:
+            f = dict(original)
+            evidence = dict(f.get("evidence") or {})
+            for key in ("actual_result", "expected_result", "reproduction_steps", "preconditions"):
+                if f.get(key):
+                    evidence.setdefault(key, f[key])
+            if f.get("poc"):
+                evidence.setdefault("curl", f["poc"])
+            f["evidence"] = evidence
+            f["report_quality"] = finding_quality(f)
+            f["poc_dossier"] = PocBuilder.generate_dossier(
+                title=f.get("title") or "Finding", finding_type=f.get("finding_type") or "",
+                severity=f.get("severity") or "INFO", target_url=f.get("location") or "",
+                target_host=f.get("asset_hostname") or "", evidence=evidence,
+                parameter=f.get("parameter"), cwe_id=f.get("cwe_id"), cve_id=f.get("cve_id"),
+                cvss_score=f.get("cvss_score"), method=evidence.get("method", "GET"))
+            result.append(f)
+        return RedactionEngine.redact_dict(result) if perspective == "customer" else result
+
     @staticmethod
     def _format_report_time(value: Any, fallback: str) -> str:
         if not value:
@@ -23,6 +46,40 @@ class ReportEngine:
         if hasattr(value, "isoformat"):
             return value.isoformat()
         return str(value)
+
+    @staticmethod
+    def _engagement_lines(stats):
+        context = stats.get("report_context") or {}
+        profile = context.get("report") or {}
+        rules = context.get("rules") or {}
+        def value(text):
+            return str(text or "Not recorded").replace("\n", " ").replace("\r", " ").replace("`", "'")
+        return [
+            "## Engagement & Report Identity", "",
+            *[f"- **{label}:** {value(profile.get(key))}" for label, key in (
+                ("Organization", "organization"), ("Program / Engagement", "program"),
+                ("Assessor", "assessor"), ("Asset", "asset_name"), ("Asset Type", "asset_type"),
+                ("Application Version", "application_version"), ("Responsible Contact", "contact"))],
+            f"- **Classification:** {value(profile.get('classification') or 'CONFIDENTIAL')}",
+            f"- **Authorization Reference:** {value(context.get('authorization_reference'))}",
+            f"- **Permitted Window:** {value(rules.get('starts_at'))} to {value(rules.get('ends_at'))}",
+            f"- **Execution Window:** {value(context.get('started_at'))} to {value(context.get('completed_at'))}",
+            f"- **Program Allowlist:** {value(', '.join(rules.get('scope_hosts') or []))}",
+            f"- **Exclusions:** {value(', '.join(rules.get('excluded_hosts') or []))}",
+            f"- **Allowed Ports:** {value(', '.join(str(port) for port in rules.get('allowed_ports') or []))}",
+            f"- **Requested HTTP RPS Cap:** {value(rules.get('max_rps'))} (per-tool enforcement must be reviewed)",
+            f"- **Profile / Level:** {value(context.get('profile'))} / {value(context.get('validation_level'))}",
+            f"- **Program Notes:** {value(rules.get('notes'))}",
+            f"- **Business Context:** {value(profile.get('executive_context'))}",
+            "", "Recorded scope and authorization are operator-supplied; they are not independent evidence of permission.", "",
+        ]
+
+    @staticmethod
+    def _technology_candidates(technologies):
+        from app.intelligence.cve import CveIntelligence
+        return [{"technology": t.get("name"), "version": t.get("version"), **candidate}
+                for t in technologies[:200] if t.get("name")
+                for candidate in CveIntelligence.match_candidates(t["name"], t.get("version"))]
 
     @classmethod
     def generate_markdown(
@@ -38,7 +95,8 @@ class ReportEngine:
         view_perspective: str = "customer",
     ) -> str:
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        redacted_findings = RedactionEngine.redact_dict(findings) if view_perspective == "customer" else findings
+        redacted_findings = cls._prepare_findings(findings, view_perspective)
+        profile = (stats.get("report_context") or {}).get("report") or {}
 
         lines = [
             f"# 🛡️ Security Assessment & Bug Hunting Report",
@@ -46,15 +104,15 @@ class ReportEngine:
             f"**Target Scope:** `{target}`  ",
             f"**Scan ID:** `{scan_id}`  ",
             f"**Date Generated:** `{date_str}`  ",
-            f"**Assessor / Operator:** `{operator or 'Automated Security Assessment Engine'}`  ",
-            f"**Classification:** `CONFIDENTIAL / TLP:AMBER`  ",
+            f"**Assessor / Operator:** `{profile.get('assessor') or operator or 'Not recorded'}`  ",
+            f"**Classification:** `{profile.get('classification') or 'CONFIDENTIAL'}`  ",
             f"",
             f"---",
             f"",
             f"## 1. Executive Summary",
             f"",
-            f"An authorized technical security assessment was conducted against the attack surface of `{target}`.",
-            f"The engagement focused on asset discovery, service enumeration, parameter extraction, and security vulnerability validation.",
+            f"This report summarizes stored assessment records for `{target}`.",
+            f"Review scan execution logs, authorization and evidence completeness before relying on these results.",
             f"",
             f"| Metric | Total Discovered |",
             f"|---|---|",
@@ -62,15 +120,15 @@ class ReportEngine:
             f"| **Open Ports & Services** | {stats.get('total_ports', len(ports))} |",
             f"| **Discovered URLs / Endpoints** | {stats.get('total_urls', 0)} |",
             f"| **Identified Technologies** | {stats.get('total_technologies', len(technologies))} |",
-            f"| **Validated Security Findings** | **{len(findings)}** |",
+            f"| **Recorded Security Findings** | **{len(findings)}** |",
             f"",
             f"---",
             f"",
             f"## 2. Scope & Authorization Boundary (§102)",
             f"",
-            f"- **Authorized Target:** `{target}`",
-            f"- **Methodology:** Non-destructive active reconnaissance, parameter mapping, heuristic validation.",
-            f"- **Rate Limit:** Enforced with safety controls and global kill-switch capability.",
+            f"- **Recorded Target:** `{target}`",
+            f"- **Methodology:** Profile-dependent checks; consult the execution log for checks actually completed.",
+            f"- **Rate Limit:** Consult scan configuration and execution logs; this report does not independently verify rate-limit enforcement.",
             f"",
             f"---",
             f"",
@@ -90,49 +148,56 @@ class ReportEngine:
             f"",
             f"---",
             f"",
-            f"## 4. Validated Security Findings & Proof of Concept (§52, §101)",
+            f"## 4. Recorded Security Findings & Proof of Concept (§52, §101)",
             f"",
         ])
 
         if not redacted_findings:
-            lines.append("✅ **Clean State Verified** — No open security vulnerabilities were confirmed during this assessment engagement.")
+            lines.append("✅ **No Findings Recorded** — No findings are recorded. This does not establish that the target is secure or that test coverage is complete.")
         else:
             for i, f in enumerate(redacted_findings, 1):
                 code = f.get("finding_code") or f"BH-2026-{i:03d}"
                 sev = f.get("severity", "INFO").upper()
                 cwe = f" ({f.get('cwe_id')})" if f.get("cwe_id") else ""
                 cvss = f" [CVSS {f.get('cvss_score')}]" if f.get("cvss_score") else ""
-                loc = f.get("location") or f.get("url") or "/"
+                loc = f.get("location") or f.get("url") or "Not recorded"
                 poc = f.get("poc") or f.get("poc_curl") or f.get("curl_command") or f"curl -s -k -X GET '{loc}'"
-                tech_details = f.get("technical_details") or "Observed behavioral deviation or signature pattern match."
+                tech_details = f.get("technical_details") or "Technical observations not recorded."
                 evidence_info = f.get("evidence")
 
-                found_at = cls._format_report_time(f.get("first_seen"), date_str)
-                confirmed_at = cls._format_report_time(f.get("last_seen"), found_at)
+                found_at = cls._format_report_time(f.get("first_seen"), "Not recorded")
+                confirmed_at = cls._format_report_time(f.get("last_seen"), "Not recorded")
 
                 lines.extend([
                     f"### {code}: [{sev}] {f.get('title')}{cwe}{cvss}",
                     f"",
-                    f"- **Status:** `{f.get('status', 'CONFIRMED')}`",
-                    f"- **Confidence:** `{f.get('confidence', 'CONFIRMED')}`",
+                    f"- **Status:** `{f.get('status') or 'NOT_RECORDED'}`",
+                    f"- **Confidence:** `{f.get('confidence') or 'INCONCLUSIVE'}`",
                     f"- **Asset Location:** `{f.get('asset_hostname') or target}`",
                     f"- **Endpoint / Parameter:** `{loc}`",
-                    f"- **Discovery Timeline:** Found: `{found_at}` | Confirmed: `{confirmed_at}`",
+                    f"- **Discovery Timeline:** First seen: `{found_at}` | Last updated: `{confirmed_at}`",
+                    f"- **Evidence Level:** `{f.get('evidence_level') or 'E0'}`",
+                    f"- **Report Readiness:** `{f['report_quality']['status']}`",
+                    f"- **Missing Evidence / Context:** {', '.join(f['report_quality']['missing']) or 'None in completeness check; human review still required.'}",
+                    "- **Reproduction note:** Generated replay templates are not proof that a vulnerability was reproduced.",
                     f"",
                     f"#### 1. Summary",
-                    f"{f.get('executive_explanation') or f.get('summary') or f.get('description', 'Demonstrated security boundary violation.')}",
+                    f"{f.get('executive_explanation') or f.get('summary') or f.get('description') or 'Summary not recorded.'}",
                     f"",
                     f"#### 2. Description & Mechanism",
-                    f"{f.get('description', 'No description provided.')}",
+                    f"{f.get('description') or 'Description not recorded.'}",
                     f"",
                     f"#### 3. Risk & Business Impact",
-                    f"{f.get('business_impact') or f.get('impact', 'Potential security boundary deviation or unauthorized access risk.')}",
+                    f"{f.get('business_impact') or f.get('impact') or 'Impact not recorded.'}",
+                    f"- **CVSS Version / Vector:** {f.get('cvss_version') or 'Not recorded'} / {f.get('cvss_vector') or 'Not recorded'}",
+                    f"- **CVE Applicability:** {f.get('cve_match_status') or 'Not assessed'}; product, version range and configuration require validation.",
+                    f"- **Impact Dimensions (CIA):** {json.dumps(f.get('impact_matrix') or {}, ensure_ascii=False)}",
                     f"",
                 ])
 
                 # Root cause analysis
                 root_cause = f.get("root_cause")
-                rc_text = root_cause if isinstance(root_cause, str) else (root_cause.get("explanation", str(root_cause)) if root_cause else "Improper input sanitization, missing authorization boundaries, or vulnerable third-party dependencies.")
+                rc_text = root_cause if isinstance(root_cause, str) else (root_cause.get("explanation", str(root_cause)) if root_cause else "Root cause not established.")
                 lines.extend([
                     f"#### 4. Root Cause Analysis",
                     f"{rc_text}",
@@ -176,7 +241,7 @@ class ReportEngine:
                     f"**Step-by-Step Manual Reproduction Guide:**",
                     f"{repro_steps_rendered}",
                     f"",
-                    f"**Standalone Python PoC Script:**",
+                    f"**Python Replay Template (Not Executed):**",
 
                     f"```python",
                     f"{dossier.get('python_poc', '')}",
@@ -192,7 +257,7 @@ class ReportEngine:
                     f"{dossier.get('raw_http_request', '')}",
                     f"```",
                     f"",
-                    f"**Wire-Level HTTP Response Proof:**",
+                    f"**Recorded HTTP Response / Missing Evidence:**",
                     f"```http",
                     f"{dossier.get('raw_http_response', '')}",
                     f"```",
@@ -256,10 +321,10 @@ class ReportEngine:
                             f"",
                             f"| Property | Value |",
                             f"|---|---|",
-                            f"| **Execution Confirmed** | `{exploitation_data.get('rce_confirmed', True)}` |",
+                            f"| **Execution Confirmed** | `{exploitation_data.get('rce_confirmed', 'Not recorded')}` |",
                             f"| **Uploaded Canary URL** | `{exploitation_data.get('uploaded_url', 'N/A')}` |",
                             f"| **Canary Validation Hash** | `{exploitation_data.get('canary_hash', 'N/A')}` |",
-                            f"| **Execution Proof** | `{exploitation_data.get('execution_proof', 'Benign canary echo validated')}` |",
+                            f"| **Execution Proof** | `{exploitation_data.get('execution_proof', 'Not recorded')}` |",
                             f"",
                         ])
 
@@ -447,7 +512,7 @@ class ReportEngine:
 
                 lines.extend([
                     f"#### 6. Remediation & Engineering Fixes",
-                    f"{f.get('remediation', 'Apply latest vendor patches and follow secure configuration baselines.')}",
+                    f"{f.get('remediation') or 'Remediation not recorded.'}",
                     f"",
                     f"- **References:** {ref_str}",
                     f"- **Retest Status:** `{f.get('retest_status', 'PENDING')}`",
@@ -456,53 +521,33 @@ class ReportEngine:
                     f"",
                 ])
 
-        # Section 5: Autonomous Multi-Stage Attack Chains (V5 §46, §47)
-        from app.intelligence.attack_chain import AttackChainCorrelator
-        chains = AttackChainCorrelator.analyze_scan_findings(target, redacted_findings, technologies)
-        if chains:
-            lines.extend([
-                f"## 5. Autonomous Attack Chains & Threat Scenario Modeling (§46, §47)",
-                f"",
-                f"The assessment engine correlated isolated findings into **{len(chains)} multi-stage exploit chains**, demonstrating end-to-end compromise feasibility from an adversary's perspective:",
-                f"",
-            ])
-            for ch in chains:
-                lines.extend([
-                    f"### ⚔️ [{ch.severity}] {ch.name}",
-                    f"",
-                    f"- **Estimated Time to Compromise (TTC):** `{ch.estimated_ttc}`",
-                    f"- **Calculated Blast Radius:** `{ch.blast_radius}`",
-                    f"- **Likelihood / Exploitability:** `{ch.likelihood}`",
-                    f"- **Business / Regulatory Risk:** `{ch.financial_risk_rating}`",
-                    f"- **Remediation Priority:** **`{ch.remediation_priority}`**",
-                    f"",
-                    f"**Adversary Attack Narrative:**  ",
-                    f"{ch.narrative}",
-                    f"",
-                    f"**Visual Attack Path Diagram (Mermaid):**",
-                    f"```mermaid",
-                    f"{ch.mermaid_diagram}",
-                    f"```",
-                    f"",
-                    f"**Multi-Step Execution Breakdown:**",
-                ])
-                for st in ch.steps:
-                    lines.append(f"{st.step_number}. **[{st.phase}]** `{st.title}` on `{st.target_url}`: {st.description} (MITRE: `{st.technique}`)")
-                lines.extend([
-                    f"",
-                    f"---",
-                    f"",
-                ])
-
         lines.extend([
-            f"## 6. Methodology & Safety Statement",
+            f"## 5. Methodology & Safety Statement",
             f"",
-            f"All security tests and validations were performed non-destructively in accordance with the specified authorization scope.",
-            f"No Denial of Service (DoS) or destructive exploits were attempted.",
+            f"The report summarizes stored records only. Review authorization, scan profile and execution logs to establish what was tested.",
+            f"Missing findings or evidence do not prove absence of vulnerabilities. Generated replay examples require review before execution.",
             f"",
             f"_Report generated autonomously by Hunter Aja Advanced Security Intelligence Platform — Confidential Audit Record._",
         ])
 
+        summary = ["## Finding Register & Review Priorities", "",
+                   "Severity is recorded, not independently recalculated. Prioritize validated impact and owner review; missing evidence is not proof.", "",
+                   "| ID | Severity | Finding | Evidence | Readiness |", "|---|---|---|---|---|"]
+        for f in sorted(redacted_findings, key=lambda row: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"].index(row.get("severity")) if row.get("severity") in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] else 5):
+            values = [f.get("finding_code") or f.get("id") or "Unassigned", f.get("severity"), f.get("title"), f.get("evidence_level") or "E0", f["report_quality"]["status"]]
+            summary.append("| " + " | ".join(str(v or "Not recorded").replace("|", "/").replace("\n", " ") for v in values) + " |")
+        insert = lines.index("## 1. Executive Summary")
+        lines[insert:insert] = cls._engagement_lines(stats)
+        insert = lines.index("## 3. Attack Surface & Technology Inventory")
+        lines[insert:insert] = summary + [""]
+        candidates = cls._technology_candidates(technologies)
+        if candidates:
+            lines.extend(["", "## Appendix: CVE Research Candidates", "",
+                          "Offline catalog suggestions only. Verify vendor advisories, component/version, configuration and prerequisites. No exploitation or current catalog freshness is asserted.", ""])
+            for candidate in candidates[:100]:
+                lines.append(f"- {candidate['cve_id']} | {candidate['technology']} {candidate.get('version') or 'version unknown'} | {candidate['match_status']} | https://nvd.nist.gov/vuln/detail/{candidate['cve_id']}")
+            if len(candidates) > 100:
+                lines.append(f"Showing 100 of {len(candidates)} candidates; the JSON report contains the complete candidate list for the first 200 technologies.")
         return "\n".join(lines)
 
     @classmethod
@@ -520,15 +565,17 @@ class ReportEngine:
     ) -> str:
         """Render complete sanitized JSON dataset for SIEM/SOAR/automation ingestion."""
         date_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        redacted_findings = RedactionEngine.redact_dict(findings) if view_perspective == "customer" else findings
+        redacted_findings = cls._prepare_findings(findings, view_perspective)
+        profile = (stats.get("report_context") or {}).get("report") or {}
         data = {
             "report_metadata": {
                 "scan_id": scan_id,
                 "target": target,
                 "generated_at": date_str,
-                "operator": operator or "Automated Security Assessment Engine",
-                "classification": "CONFIDENTIAL / TLP:AMBER",
+                "operator": profile.get("assessor") or operator,
+                "classification": profile.get("classification") or "CONFIDENTIAL",
                 "version": "8.0.0",
+                "engagement": stats.get("report_context") or {},
             },
             "summary": {
                 "total_assets": stats.get("total_assets", len(assets)),
@@ -541,6 +588,7 @@ class ReportEngine:
             "assets": assets,
             "ports": ports,
             "technologies": technologies,
+            "cve_research_candidates": cls._technology_candidates(technologies),
         }
         return json.dumps(data, indent=2, default=str)
 
@@ -558,7 +606,11 @@ class ReportEngine:
     ) -> str:
         """Render executive HTML report with responsive styling and print/PDF optimization."""
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%d %B %Y, %H:%M:%S UTC")
-        redacted_findings = RedactionEngine.redact_dict(findings)
+        redacted_findings = cls._prepare_findings(findings)
+        profile = (stats.get("report_context") or {}).get("report") or {}
+        identity_html = "<section>" + "".join(f"<p>{html.escape(line.lstrip('# ').removeprefix('- ').replace('**', ''))}</p>" for line in cls._engagement_lines(stats) if line) + "</section>"
+        logo = profile.get("logo_data_url") or ""
+        logo_html = f'<img alt="Organization logo supplied by operator" src="{html.escape(logo)}" style="max-width:220px;max-height:90px;object-fit:contain">' if logo.startswith("data:image/png;base64,") else ""
 
         total_assets = stats.get('total_assets', len(assets))
         total_ports = stats.get('total_ports', len(ports))
@@ -571,8 +623,8 @@ class ReportEngine:
             <div class="clean-state-box">
                 <span class="clean-icon">✅</span>
                 <div>
-                    <h3>Clean State Verified</h3>
-                    <p>No confirmed security vulnerabilities were identified during this assessment engagement.</p>
+                    <h3>No Findings Recorded</h3>
+                    <p>No findings are recorded. This does not establish that the target is secure or test coverage complete.</p>
                 </div>
             </div>
             """
@@ -584,12 +636,12 @@ class ReportEngine:
                 cwe = f" ({html.escape(f['cwe_id'])})" if f.get("cwe_id") else ""
                 cvss = f" [CVSS {html.escape(str(f['cvss_score']))}]" if f.get("cvss_score") else ""
                 desc = html.escape(str(f.get("description", "No description.")))
-                impact = html.escape(str(f.get("impact", "Potential security risk.")))
-                tech = html.escape(str(f.get("technical_details") or "Validation executed via dynamic checks."))
-                rem = html.escape(str(f.get("remediation", "Apply latest security patches.")))
+                impact = html.escape(str(f.get("impact") or "Impact not recorded."))
+                tech = html.escape(str(f.get("technical_details") or "Validation details not recorded."))
+                rem = html.escape(str(f.get("remediation") or "Remediation not recorded."))
                 loc = html.escape(str(f.get("location") or f.get("url") or f.get("asset_hostname") or target))
-                status = html.escape(str(f.get("status", "CONFIRMED")))
-                conf = html.escape(str(f.get("confidence", "CONFIRMED")))
+                status = html.escape(str(f.get("status") or "NOT_RECORDED"))
+                conf = html.escape(str(f.get("confidence") or "INCONCLUSIVE"))
 
                 # PoC Dossier
                 dossier = f.get("poc_dossier")
@@ -647,7 +699,7 @@ class ReportEngine:
                 <div class="finding-block severity-{sev.lower()}">
                     <div class="finding-header">
                         <span class="severity-tag tag-{sev.lower()}">{sev}</span>
-                        <h4>{code}: {title}{cwe}{cvss}</h4>
+                        <h4>{code}: {title}{cwe}{cvss}</h4><p><strong>Report readiness:</strong> {html.escape(f["report_quality"]["status"])} | Missing: {html.escape(", ".join(f["report_quality"]["missing"]) or "Human review still required")}</p>
                     </div>
                     <div class="finding-meta">
                         <span><strong>Asset:</strong> <code>{html.escape(f.get('asset_hostname') or target)}</code></span>
@@ -674,7 +726,7 @@ class ReportEngine:
                         </ol>
                     </div>
                     <div class="finding-section poc">
-                        <strong>2. Standalone Python PoC Script:</strong>
+                        <strong>2. Python Replay Template (Not Executed):</strong>
                         <pre class="poc-box"><code class="language-python">{html.escape(dossier.get('python_poc', ''))}</code></pre>
                     </div>
                     <div class="finding-section poc">
@@ -686,13 +738,13 @@ class ReportEngine:
                         <pre class="poc-box"><code>{html.escape(dossier.get('raw_http_request', ''))}</code></pre>
                     </div>
                     <div class="finding-section poc">
-                        <strong>5. Wire-Level HTTP Response Proof:</strong>
+                        <strong>5. Recorded HTTP Response / Missing Evidence:</strong>
                         <pre class="poc-box"><code>{html.escape(dossier.get('raw_http_response', ''))}</code></pre>
                     </div>
                     {screenshot_html}
                     <div class="finding-section" style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; margin-top: 10px;">
                         <div><strong>Expected Secure Behavior:</strong> <span style="color: #4ade80;">{html.escape(dossier.get('expected_behavior', ''))}</span></div>
-                        <div style="margin-top: 6px;"><strong>Actual Vulnerable Behavior:</strong> <span style="color: #f87171;">{html.escape(dossier.get('actual_behavior', ''))}</span></div>
+                        <div style="margin-top: 6px;"><strong>Recorded Actual Behavior:</strong> <span style="color: #f87171;">{html.escape(dossier.get('actual_behavior', ''))}</span></div>
                     </div>
                     {evidence_block}
                     <div class="finding-section remediation">
@@ -918,15 +970,17 @@ class ReportEngine:
             <button class="print-btn" onclick="window.print()">🖨️ Print / Save as PDF</button>
         </div>
         <header class="report-header">
+            {logo_html}
             <h1 class="report-title">🛡️ Security Assessment & Bug Hunting Report</h1>
             <div class="report-meta-grid">
                 <div><strong>Target Scope:</strong> <code>{html.escape(target)}</code></div>
                 <div><strong>Scan ID:</strong> <code>{html.escape(scan_id)}</code></div>
                 <div><strong>Date Generated:</strong> {date_str}</div>
-                <div><strong>Assessor:</strong> {html.escape(operator or 'Automated Assessment Engine')}</div>
-                <div><strong>Classification:</strong> <span style="color: #f85149; font-weight: bold;">CONFIDENTIAL / TLP:AMBER</span></div>
+                <div><strong>Assessor:</strong> {html.escape(profile.get('assessor') or operator or 'Not recorded')}</div>
+                <div><strong>Classification:</strong> <span style="color: #f85149; font-weight: bold;">{html.escape(profile.get('classification') or 'CONFIDENTIAL')}</span></div>
             </div>
         </header>
+        {identity_html}
 
         <section>
             <h2>1. Executive Summary</h2>
@@ -957,7 +1011,7 @@ class ReportEngine:
         <section>
             <h2>2. Scope & Authorization Boundary (§102)</h2>
             <p style="font-size: 0.9rem; color: #c9d1d9; margin-bottom: 8px;">
-                Authorized Target: <code>{html.escape(target)}</code>. Assessment executed strictly non-destructively with rate limiting and safety controls.
+                Recorded Target: <code>{html.escape(target)}</code>. Execution scope, authorization, completed checks and safety outcomes must be reviewed in scan logs.
             </p>
         </section>
 
@@ -969,14 +1023,14 @@ class ReportEngine:
         </section>
 
         <section>
-            <h2>4. Validated Security Findings & Proof of Concept (§52, §101)</h2>
+            <h2>4. Recorded Security Findings & Proof of Concept (§52, §101)</h2>
             {findings_html}
         </section>
 
         <section>
             <h2>5. Methodology & Scope Verification</h2>
             <p style="font-size: 0.9rem; color: #8b949e;">
-                All assessments were executed in adherence with the designated target scope boundary using non-destructive methodologies. Findings have been verified against false positives and sanitized for sensitive credential disclosures.
+                Stored assessment records require human validation. Generated replay examples are not execution evidence. Sensitive fields are filtered, but review every export before sharing.
             </p>
         </section>
 
@@ -988,536 +1042,130 @@ class ReportEngine:
 </html>"""
 
     @classmethod
-    def generate_pdf(
-        cls,
-        scan_id: str,
-        target: str,
-        stats: Dict[str, Any],
-        findings: List[Dict[str, Any]],
-        assets: List[Dict[str, Any]],
-        ports: List[Dict[str, Any]],
-        technologies: List[Dict[str, Any]],
-        operator: Optional[str] = None,
-    ) -> bytes:
-        """Generate audit-grade, printable PDF security assessment report conforming to Architecture v2 (§52, §100, §101)."""
-        from reportlab.lib.pagesizes import A4
+    def generate_pdf(cls, scan_id, target, stats, findings, assets, ports, technologies,
+                     operator=None, view_perspective="customer", report_type="full") -> bytes:
+        """Render canonical report content without blocking on external resources."""
+        import re
         from reportlab.lib import colors
-        from reportlab.platypus import (
-            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, HRFlowable
-        )
+        from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.pdfgen import canvas
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
-        class NumberedCanvas(canvas.Canvas):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self._saved_page_states = []
-
-            def showPage(self):
-                self._saved_page_states.append(dict(self.__dict__))
-                self._startPage()
-
-            def save(self):
-                num_pages = len(self._saved_page_states)
-                for state in self._saved_page_states:
-                    self.__dict__.update(state)
-                    self.draw_page_decorations(num_pages)
-                    canvas.Canvas.showPage(self)
-                canvas.Canvas.save(self)
-
-            def draw_page_decorations(self, page_count):
-                self.saveState()
-                self.setFont("Helvetica-Bold", 8)
-                self.setFillColor(colors.HexColor("#64748B"))
-
-                # Header (on pages > 1)
-                if self._pageNumber > 1:
-                    self.drawString(40, 808, "HUNTER AJA PRO v2.0 — SECURITY ASSESSMENT REPORT")
-                    self.drawRightString(555, 808, "CONFIDENTIAL / TLP:AMBER")
-                    self.setStrokeColor(colors.HexColor("#CBD5E1"))
-                    self.setLineWidth(0.75)
-                    self.line(40, 802, 555, 802)
-
-                # Footer on all pages
-                self.setStrokeColor(colors.HexColor("#CBD5E1"))
-                self.setLineWidth(0.75)
-                self.line(40, 42, 555, 42)
-                self.setFont("Helvetica", 8)
-                self.drawString(40, 30, "Hunter Aja Attack Surface Intelligence Platform • Confidential Audit Record")
-                page_text = f"Page {self._pageNumber} of {page_count}"
-                self.drawRightString(555, 30, page_text)
-                self.restoreState()
-
+        source = cls.generate_markdown(scan_id, target, stats, findings, assets, ports, technologies,
+                                       operator, view_perspective)
+        if report_type == "executive":
+            source = source.split("## 3.", 1)[0] + "\n## Findings Requiring Review\n"
+            for f in cls._prepare_findings(findings, view_perspective):
+                source += (f"\n### [{f.get('severity')}] {f.get('title')}\n"
+                           f"Readiness: {f['report_quality']['status']} | Missing: {', '.join(f['report_quality']['missing']) or 'None'}\n\n"
+                           f"Impact: {f.get('business_impact') or f.get('impact') or 'Not recorded'}\n\n"
+                           f"Remediation: {f.get('remediation') or 'Not recorded'}\n")
+        elif report_type == "technical":
+            source = "# Technical Evidence Report\n\n" + "\n".join(cls._engagement_lines(stats)) + "\n## 2." + source.split("## 2.", 1)[-1]
+        source = source.replace("Security Assessment & Bug Hunting Report", f"{report_type.title()} Security Assessment Report")
         buf = io.BytesIO()
-        doc = SimpleDocTemplate(
-            buf,
-            pagesize=A4,
-            leftMargin=40,
-            rightMargin=40,
-            topMargin=50,
-            bottomMargin=50,
-        )
-
+        doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=40, leftMargin=40,
+                                topMargin=44, bottomMargin=44, title=f"{report_type.title()} assessment - {target}")
         styles = getSampleStyleSheet()
-
-        title_style = ParagraphStyle(
-            'DocTitle',
-            parent=styles['Normal'],
-            fontName='Helvetica-Bold',
-            fontSize=18,
-            leading=22,
-            textColor=colors.HexColor("#0F172A"),
-        )
-
-        subtitle_style = ParagraphStyle(
-            'DocSubTitle',
-            parent=styles['Normal'],
-            fontName='Helvetica-Bold',
-            fontSize=10,
-            leading=13,
-            textColor=colors.HexColor("#64748B"),
-        )
-
-        h1_style = ParagraphStyle(
-            'H1',
-            parent=styles['Normal'],
-            fontName='Helvetica-Bold',
-            fontSize=12,
-            leading=15,
-            textColor=colors.HexColor("#0F172A"),
-            spaceBefore=12,
-            spaceAfter=6,
-        )
-
-        body_style = ParagraphStyle(
-            'Body',
-            parent=styles['Normal'],
-            fontName='Helvetica',
-            fontSize=8.5,
-            leading=12,
-            textColor=colors.HexColor("#334155"),
-        )
-
-        mono_style = ParagraphStyle(
-            'Mono',
-            parent=styles['Normal'],
-            fontName='Courier',
-            fontSize=7.5,
-            leading=10,
-            textColor=colors.HexColor("#0F172A"),
-        )
-
-        poc_code_style = ParagraphStyle(
-            'PocCode',
-            parent=styles['Normal'],
-            fontName='Courier-Bold',
-            fontSize=7.5,
-            leading=10,
-            textColor=colors.HexColor("#065F46"),
-        )
-
+        styles.add(ParagraphStyle("CodeLine", fontName="Courier", fontSize=7, leading=10,
+                                  backColor=colors.HexColor("#f1f5f9"), splitLongWords=True))
+        styles.add(ParagraphStyle("ReportBody", parent=styles["BodyText"], fontSize=9, leading=13,
+                                  spaceAfter=4, splitLongWords=True))
+        styles.add(ParagraphStyle("Cell", parent=styles["ReportBody"], fontSize=8, leading=11))
+        for level, size in ((1, 18), (2, 13), (3, 11)):
+            styles[f"Heading{level}"].fontSize = size
+            styles[f"Heading{level}"].leading = size + 3
+            styles[f"Heading{level}"].spaceBefore = 10 if level < 3 else 7
+            styles[f"Heading{level}"].spaceAfter = 5
+            styles[f"Heading{level}"].keepWithNext = True
         story = []
+        logo = ((stats.get("report_context") or {}).get("report") or {}).get("logo_data_url") or ""
+        if logo.startswith("data:image/png;base64,"):
+            import base64
+            from reportlab.platypus import Image as ReportImage
+            logo_image = ReportImage(io.BytesIO(base64.b64decode(logo.split(",", 1)[1])), width=180, height=80, kind="proportional", hAlign="LEFT")
+            story.extend([logo_image, Spacer(1, 12)])
+        in_code = False
+        table_rows = []
 
-        # 1. Header Banner
-        story.append(Paragraph("HUNTER AJA PRO v2.0", subtitle_style))
-        story.append(Paragraph("SECURITY ASSESSMENT & ATTACK SURFACE REPORT", title_style))
-        story.append(Spacer(1, 6))
-        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor("#0F172A"), spaceAfter=10))
+        def text(value):
+            # Standard PDF fonts do not support emoji. Keep content legible on every host.
+            return str(value).replace("—", "-").replace("–", "-").encode("cp1252", "ignore").decode("cp1252")
 
-        # Metadata Table
-        date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        meta_data = [
-            [Paragraph("<b>Target Scope:</b>", body_style), Paragraph(f"<code>{target}</code>", mono_style),
-             Paragraph("<b>Date Generated:</b>", body_style), Paragraph(date_str, body_style)],
-            [Paragraph("<b>Scan ID:</b>", body_style), Paragraph(f"<code>{scan_id}</code>", mono_style),
-             Paragraph("<b>Classification:</b>", body_style), Paragraph("<font color='#DC2626'><b>CONFIDENTIAL / TLP:AMBER</b></font>", body_style)],
-            [Paragraph("<b>Assessor / Engine:</b>", body_style), Paragraph(operator or "Hunter Aja v2 Autonomous Engine", body_style),
-             Paragraph("<b>Safety Mode:</b>", body_style), Paragraph("<font color='#059669'><b>Non-Destructive Active Scope</b></font>", body_style)],
-        ]
-        meta_table = Table(meta_data, colWidths=[95, 160, 95, 165])
-        meta_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
-            ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
-            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-            ('TOPPADDING', (0,0), (-1,-1), 4),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ]))
-        story.append(meta_table)
-        story.append(Spacer(1, 10))
+        def para(value, style="ReportBody"):
+            escaped = html.escape(text(value))
+            if style == "CodeLine":
+                escaped = escaped.replace(" ", "&#160;")
+            else:
+                escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+                escaped = re.sub(r"`([^`]+)`", r"<font name='Courier'>\1</font>", escaped)
+                escaped = re.sub(r"^_(.+)_$", r"<i>\1</i>", escaped)
+            return Paragraph(escaped or " ", styles[style])
 
-        # 2. Executive Summary
-        story.append(Paragraph("1. Executive Summary", h1_style))
-        story.append(Paragraph(
-            f"An authorized technical security reconnaissance and assessment was performed against <b>{target}</b>. "
-            f"The evaluation encompassed automated DNS mapping, active port probing, dynamic parameter extraction, "
-            f"technology stack identification, and heuristic security verification according to Architecture v2 specifications.",
-            body_style
-        ))
-        story.append(Spacer(1, 8))
+        def flush_table():
+            if not table_rows:
+                return
+            columns = max(len(row) for row in table_rows)
+            rows = [[para(cell, "Cell") for cell in row + [""] * (columns-len(row))] for row in table_rows]
+            # Keep ordinary rows intact; only very tall evidence rows may split.
+            oversized_row = any(max(cell.wrap(doc.width / columns - 12, doc.height)[1] for cell in row)
+                                > doc.height - 60 for row in rows)
+            table = Table(rows, colWidths=[doc.width / columns] * columns, repeatRows=1,
+                          hAlign="LEFT", splitByRow=1, splitInRow=int(oversized_row))
+            table.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#e2e8f0")),
+                                      ("VALIGN", (0,0), (-1,-1), "TOP"),
+                                      ("GRID", (0,0), (-1,-1), .3, colors.HexColor("#cbd5e1")),
+                                      ("LEFTPADDING", (0,0), (-1,-1), 6),
+                                      ("RIGHTPADDING", (0,0), (-1,-1), 6)]))
+            story.extend([table, Spacer(1,8)])
+            table_rows.clear()
 
-        # Metrics Table
-        total_assets = stats.get('total_assets', len(assets))
-        total_ports = stats.get('total_ports', len(ports))
-        total_urls = stats.get('total_urls', 0)
-        total_tech = stats.get('total_technologies', len(technologies))
-        total_findings = len(findings)
+        for line in source.splitlines():
+            if line.startswith("```"):
+                flush_table()
+                in_code = not in_code
+                continue
+            if in_code:
+                # Short splittable paragraphs prevent long evidence from overflowing a page.
+                for offset in range(0, max(1, len(line)), 105):
+                    story.append(para(line[offset:offset+105], "CodeLine"))
+                continue
+            if line.startswith("|"):
+                if not re.fullmatch(r"[| :\-]+", line):
+                    table_rows.append([cell.strip() for cell in line.strip("|").split("|")])
+                continue
+            flush_table()
+            if line.startswith("#"):
+                level = min(3, len(line) - len(line.lstrip("#")))
+                story.append(para(line.lstrip("# "), f"Heading{level}"))
+            elif line.strip() and line.strip() != "---":
+                story.append(para(line))
+            elif story and not (isinstance(story[-1], Paragraph) and getattr(story[-1].style, "keepWithNext", False)):
+                story.append(Spacer(1,2))
+        flush_table()
 
-        metrics_data = [
-            ["Subdomains / Assets", "Open Ports", "Discovered URLs", "Technologies", "Security Findings"],
-            [str(total_assets), str(total_ports), str(total_urls), str(total_tech), str(total_findings)]
-        ]
-        metrics_table = Table(metrics_data, colWidths=[103]*5)
-        metrics_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,0), 8),
-            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-            ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#F1F5F9")),
-            ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,1), (-1,1), 12),
-            ('TEXTCOLOR', (4,1), (4,1), colors.HexColor("#DC2626") if total_findings > 0 else colors.HexColor("#059669")),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('TOPPADDING', (0,0), (-1,-1), 5),
-            ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
-        ]))
-        story.append(metrics_table)
-        story.append(Spacer(1, 10))
+        def footer(canvas, document):
+            canvas.setFont("Helvetica", 8)
+            canvas.setFillColor(colors.HexColor("#64748b"))
+            classification = ((stats.get("report_context") or {}).get("report") or {}).get("classification") or "CONFIDENTIAL"
+            canvas.drawString(40, 24, f"{text(classification)} | Evidence completeness requires human review")
+            canvas.drawRightString(A4[0]-40, 24, f"Page {document.page}")
 
-        # 3. Scope & Authorization Architecture (§102)
-        story.append(Paragraph("2. Scope & Authorization Boundary (§102)", h1_style))
-        story.append(Paragraph(
-            f"All assessment activities were conducted strictly within the authorized scope of <code>{target}</code>. "
-            f"Out-of-scope assets and sibling subdomains were isolated by the Scope Engine. "
-            f"No destructive operations, denial-of-service tests, or unauthenticated data tampering were performed.",
-            body_style
-        ))
-        story.append(Spacer(1, 8))
-
-        # 4. Attack Surface & Technology Stack
-        story.append(Paragraph("3. Technology Inventory & Attack Surface", h1_style))
-        if technologies:
-            tech_rows = [["Technology Name", "Version / Category", "Host Asset"]]
-            for t in technologies[:15]:
-                tech_rows.append([
-                    t.get("name", "-"),
-                    t.get("version") or t.get("category") or "Detected",
-                    t.get("hostname") or target
-                ])
-            tech_table = Table(tech_rows, colWidths=[160, 160, 195])
-            tech_table.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1E293B")),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,0), 8),
-                ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#F8FAFC")),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-                ('FONTSIZE', (0,1), (-1,-1), 8),
-                ('TOPPADDING', (0,0), (-1,-1), 3),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-            ]))
-            story.append(tech_table)
-        else:
-            story.append(Paragraph("<i>No specialized technology signatures detected on exposed endpoints.</i>", body_style))
-        story.append(Spacer(1, 10))
-
-        # 5. Validated Security Findings (§52, §101)
-        story.append(Paragraph("4. Validated Security Findings & Proof of Concept (§52, §101)", h1_style))
-        redacted_findings = RedactionEngine.redact_dict(findings)
-
-        if not redacted_findings:
-            clean_box = [
-                [Paragraph("<b>✅ Clean State Verified</b>", ParagraphStyle('CleanH', parent=body_style, fontName='Helvetica-Bold', fontSize=10, textColor=colors.HexColor("#065F46")))],
-                [Paragraph("No open vulnerabilities or critical misconfigurations were confirmed during this engagement.", body_style)]
-            ]
-            clean_table = Table(clean_box, colWidths=[515])
-            clean_table.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#D1FAE5")),
-                ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#059669")),
-                ('TOPPADDING', (0,0), (-1,-1), 8),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
-                ('LEFTPADDING', (0,0), (-1,-1), 12),
-            ]))
-            story.append(clean_table)
-        else:
-            for idx, f in enumerate(redacted_findings, 1):
-                code = html.escape(str(f.get("finding_code") or f"BH-2026-{idx:03d}"))
-                sev = str(f.get("severity", "INFO")).upper()
-                title = html.escape(str(f.get("title", "Security Finding")))
-                cwe = html.escape(str(f.get("cwe_id") or "N/A"))
-                cvss = html.escape(str(f.get("cvss_score") or "N/A"))
-                loc = html.escape(str(f.get("location") or f.get("url") or "/"))
-                asset_name = html.escape(str(f.get("asset_hostname") or target))
-                raw_poc = f.get("poc") or f.get("poc_curl") or f.get("curl_command") or f"curl -s -k -X GET '{loc}'"
-                poc = html.escape(str(raw_poc))
-                tech = html.escape(str(f.get("technical_details") or "Validation confirmed via dynamic behavioral checks."))
-                desc_text = html.escape(str(f.get("description") or "No description provided."))
-                impact_text = html.escape(str(f.get("impact") or "Potential security exposure."))
-                remed_text = html.escape(str(f.get("remediation") or "Apply secure development baselines and patch management."))
-                conf_text = html.escape(str(f.get("confidence") or "CONFIRMED"))
-                status_text = html.escape(str(f.get("status") or "OPEN"))
-                retest_text = html.escape(str(f.get("retest_status") or "PENDING"))
-
-                sev_bg = colors.HexColor("#FEE2E2") if sev in ("CRITICAL", "HIGH") else colors.HexColor("#FEF3C7") if sev == "MEDIUM" else colors.HexColor("#E0F2FE")
-                sev_fg = colors.HexColor("#991B1B") if sev in ("CRITICAL", "HIGH") else colors.HexColor("#92400E") if sev == "MEDIUM" else colors.HexColor("#0369A1")
-
-                # Build PoC Dossier for PDF
-                dossier = f.get("poc_dossier")
-                if not dossier:
-                    dossier = PocBuilder.generate_dossier(
-                        title=f.get("title", "Finding"),
-                        finding_type=f.get("finding_type") or f.get("title", ""),
-                        severity=sev,
-                        target_url=loc,
-                        target_host=asset_name,
-                        parameter=f.get("parameter"),
-                        method=f.get("method", "GET"),
-                        payload=f.get("payload"),
-                        cwe_id=f.get("cwe_id"),
-                        cve_id=f.get("cve_id"),
-                        cvss_score=f.get("cvss_score"),
-                        description=f.get("description"),
-                        technical_details=tech,
-                        evidence=f.get("evidence") if isinstance(f.get("evidence"), dict) else {},
-                        has_real_screenshot=bool(f.get("screenshot_path") and os.path.exists(f.get("screenshot_path"))),
-                        screenshot_url=f.get("screenshot_url") or f.get("screenshot_path"),
-                    )
-
-                repro_steps_pdf = "<br/>".join(f"<b>{s_idx}.</b> {html.escape(s)}" for s_idx, s in enumerate(dossier.get("reproduction_steps", []), 1))
-                exp_act_pdf = f"<b>Expected:</b> {html.escape(dossier.get('expected_behavior', ''))}<br/><b>Actual:</b> {html.escape(dossier.get('actual_behavior', ''))}"
-
-                # Real Screenshot in PDF
-                from reportlab.platypus import Image as RLImage
-                ss_cell_content = None
-                ss_candidate = f.get("screenshot_path") or f.get("storage_path") or ""
-                if ss_candidate and os.path.exists(ss_candidate):
-                    try:
-                        ss_cell_content = RLImage(ss_candidate, width=380, height=210)
-                    except Exception:
-                        ss_cell_content = Paragraph("<i>Real visual proof attached in investigation archive package.</i>", body_style)
-                else:
-                    ss_cell_content = Paragraph("<i>Visual browser screenshot not applicable for this API finding. Complete wire-level HTTP response proof is documented.</i>", body_style)
-
-                finding_rows = [
-                    [Paragraph(f"<b>{code}: [{sev}] {title}</b>", ParagraphStyle('FH', parent=body_style, fontName='Helvetica-Bold', fontSize=9, textColor=sev_fg)), ""],
-                    [Paragraph("<b>Asset / Location:</b>", body_style), Paragraph(f"<code>{asset_name}</code> — <code>{loc}</code>", mono_style)],
-                    [Paragraph("<b>CWE / CVSS Score:</b>", body_style), Paragraph(f"{cwe} (CVSS: {cvss})", body_style)],
-                    [Paragraph("<b>Confidence / Status:</b>", body_style), Paragraph(f"{conf_text} / {status_text}", body_style)],
-                    [Paragraph("<b>Description:</b>", body_style), Paragraph(desc_text, body_style)],
-                    [Paragraph("<b>Impact:</b>", body_style), Paragraph(impact_text, body_style)],
-                    [Paragraph("<b>Technical Details:</b>", body_style), Paragraph(tech, body_style)],
-                    [Paragraph("<b>Reproduction Steps:</b>", body_style), Paragraph(repro_steps_pdf, body_style)],
-                    [Paragraph("<b>cURL PoC Command:</b>", body_style), Paragraph(f"<code>{html.escape(dossier.get('curl_command', poc))}</code>", poc_code_style)],
-                    [Paragraph("<b>Behavioral Proof:</b>", body_style), Paragraph(exp_act_pdf, body_style)],
-                    [Paragraph("<b>Visual Proof:</b>", body_style), ss_cell_content],
-                    [Paragraph("<b>Remediation:</b>", body_style), Paragraph(remed_text, body_style)],
-                    [Paragraph("<b>Retest Status:</b>", body_style), Paragraph(f"<code>{retest_text}</code>", mono_style)],
-                ]
-
-                ftbl = Table(finding_rows, colWidths=[120, 395])
-                ftbl.setStyle(TableStyle([
-                    ('SPAN', (0,0), (1,0)),
-                    ('BACKGROUND', (0,0), (-1,0), sev_bg),
-                    ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#FFFFFF")),
-                    ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
-                    ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#F1F5F9")),
-                    ('TOPPADDING', (0,0), (-1,-1), 3),
-                    ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-                    ('LEFTPADDING', (0,0), (-1,-1), 6),
-                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                ]))
-                story.append(ftbl)
-                story.append(Spacer(1, 8))
-
-
-        story.append(Spacer(1, 10))
-
-        # 6. Methodology & Safety Declaration
-        story.append(Paragraph("5. Methodology & Residual Risk Assessment", h1_style))
-        story.append(Paragraph(
-            "This assessment report reflects the security posture of the identified attack surface at the time of testing. "
-            "Residual risks should be addressed in accordance with internal risk acceptance frameworks. "
-            "Continuous parameter monitoring and differential scanning are recommended.",
-            body_style
-        ))
-
-        doc.build(story, canvasmaker=NumberedCanvas)
+        doc.build(story, onFirstPage=footer, onLaterPages=footer)
         return buf.getvalue()
 
     @classmethod
     def generate_bug_bounty_markdown(cls, finding: Dict[str, Any], target: str) -> str:
-        """Generate Bug Bounty report in standardized HackerOne/Bugcrowd markdown format (§32)."""
-        code = finding.get("finding_code") or "BH-2026-001"
-        title = finding.get("title", "Security Vulnerability")
-        sev = str(finding.get("severity", "HIGH")).upper()
-        conf = str(finding.get("confidence", "CONFIRMED")).upper()
-        e_level = finding.get("evidence_level") or "E3"
-        e_desc = {"E0": "Observation", "E1": "Technical Indicator", "E2": "Reproducible Vulnerability", "E3": "Demonstrated Security Impact", "E4": "Full Impact Evidence"}.get(e_level, "Demonstrated Security Impact")
-        asset_url = finding.get("location") or finding.get("url") or f"https://{target}/"
-        cwe = finding.get("cwe_id") or "CWE-200"
-        cve = finding.get("cve_id") or "N/A"
-        cvss = finding.get("cvss_score") or "7.5"
-        poc = finding.get("poc") or finding.get("poc_curl") or f"curl -s -k '{asset_url}'"
-        desc = finding.get("description") or "Security control boundary deviation identified on target asset."
-        impact_txt = finding.get("impact") or "Potential unauthorized data access or integrity deviation."
-        remed = finding.get("remediation") or "Implement strict parameter validation, contextual escaping, and secure configuration."
-
-        matrix = finding.get("impact_matrix") or {}
-        c_val = matrix.get("confidentiality", "HIGH" if sev in ("HIGH", "CRITICAL") else "MEDIUM")
-        i_val = matrix.get("integrity", "MEDIUM" if sev in ("HIGH", "CRITICAL") else "LOW")
-        a_val = matrix.get("availability", "LOW")
-
-        return f"""# [{sev}] {code}: {title}
-
-## Summary
-{desc}
-
-## Severity
-**{sev}**
-
-## Confidence
-**{conf}**
-
-## Evidence Level
-**{e_level} — {e_desc}**
-
-## Asset
-`{finding.get('asset_hostname') or target}`  
-**Endpoint:** `{asset_url}`
-
-## Affected Component
-`{finding.get('parameter') or 'HTTP Endpoint & Request Router'}`
-
-## CWE
-`{cwe}`
-
-## CVE Reference
-`{cve}`
-
-## CVSS Score
-**Score:** `{cvss}`
-
-## Technical Description & Root Cause
-{finding.get('technical_details') or desc}
-
-## Preconditions
-1. Target endpoint `{asset_url}` is network accessible.
-2. Standard HTTP/HTTPS client available (e.g. cURL, Browser).
-
-## Steps to Reproduce
-1. Dispatch the following proof-of-concept request against the target service:
-```bash
-{poc}
-```
-2. Observe the application's response metadata and behavioral shift.
-3. Validate that the security constraint was bypassed under controlled testing.
-
-## Expected Result
-Application rejects or safely handles the request without executing unexpected instructions or leaking boundary data.
-
-## Actual Result
-{finding.get('actual_result') or 'Application processed the input, demonstrating reproducible vulnerability impact.'}
-
-## Impact Assessment
-- **Confidentiality:** `{c_val}`
-- **Integrity:** `{i_val}`
-- **Availability:** `{a_val}`
-- **Business Impact:** {finding.get('business_impact') or impact_txt}
-
-## Proof of Concept & Evidence
-- **PoC Execution:** `{poc}`
-- **Evidence Verification:** Confirmed via Hunter Aja v5 Autonomous Deep Validation Engine.
-
-## Remediation Guidance
-{remed}
-
-## References
-- OWASP Top 10 Reference Guide
-- MITRE CWE Database: https://cwe.mitre.org/data/definitions/{cwe.replace('CWE-', '') if 'CWE-' in cwe else '200'}.html
-"""
+        return cls.generate_markdown(finding.get("scan_id") or "Not recorded", target, {},
+                                     [finding], [], [], [])
 
     @classmethod
-    def generate_cve_research_markdown(cls, finding: Dict[str, Any], target: str, researcher: Optional[str] = None) -> str:
-        """Generate CVE-Ready Research Disclosure Report for new vulnerabilities (§33)."""
-        code = finding.get("finding_code") or "BH-2026-001"
-        title = finding.get("title", "Security Finding")
-        cve = finding.get("cve_id") or "Not Assigned (Candidate)"
-        cwe = finding.get("cwe_id") or "CWE-200"
-        poc = finding.get("poc") or finding.get("poc_curl") or f"curl -s -k '{finding.get('location') or target}'"
-        now_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-
-        return f"""# Vulnerability Research Report: {title}
-
-**CVE ID:** `{cve}`  
-**Status:** `Candidate / Under Disclosure`  
-**Date:** `{now_date}`  
-**Researcher:** `{researcher or 'Hunter Aja Research Team'}`  
-
----
-
-### 1. Affected Product & Scope
-- **Target System:** `{target}`
-- **Component:** `{finding.get('location') or '/'}`
-- **Vulnerability Code:** `{code}`
-- **CWE Identification:** `{cwe}`
-- **CVSS Base Score:** `{finding.get('cvss_score') or '7.5'}`
-
-### 2. Root Cause Analysis
-{finding.get('root_cause') or finding.get('technical_details') or 'Input validation flaw resulting in unauthorized control transfer.'}
-
-### 3. Attack Vector & Prerequisites
-- **Attack Vector:** Network / Remote
-- **Privileges Required:** None (Unauthenticated) / Low
-- **User Interaction:** None
-
-### 4. Technical Description & Reproducible PoC
-{finding.get('description') or 'The vulnerability allows remote actors to violate application boundaries.'}
-
-```bash
-# Minimal PoC Command
-{poc}
-```
-
-### 5. Demonstrated Security Impact
-{finding.get('impact') or 'Confidentiality and integrity boundaries compromised.'}
-
-### 6. Remediation & Workaround
-{finding.get('remediation') or 'Update to the patched vendor version and implement input filtering.'}
-
-### 7. Responsible Disclosure Timeline
-- `{now_date}`: Vulnerability identified and validated via automated deep validation adapter.
-- `{now_date}`: Evidence package cryptographically sealed (SHA-256).
-- `Pending`: Vendor notification and coordination.
-"""
+    def generate_cve_research_markdown(cls, finding: Dict[str, Any], target: str, researcher=None) -> str:
+        intro = ("# Vulnerability Research Draft\n\n"
+                 "CVE eligibility, affected product/version ranges, vendor acknowledgement and disclosure timeline require manual review. "
+                 "No CVE assignment or validation is implied.\n\n")
+        return intro + cls.generate_bug_bounty_markdown(finding, target)
 
     @classmethod
     def generate_reproduction_md(cls, finding: Dict[str, Any]) -> str:
-        """Generate standalone reproduction.md bundle per finding (§24)."""
-        code = finding.get("finding_code") or "BH-FINDING"
-        title = finding.get("title", "Vulnerability Reproduction")
-        poc = finding.get("poc") or finding.get("poc_curl") or f"curl -s -k '{finding.get('location') or '/'}'"
-
-        return f"""# Reproduction Guide: {code} - {title}
-
-## Target
-`{finding.get('asset_hostname') or 'Target'}` — `{finding.get('location') or '/'}`
-
-## Preconditions
-- Network accessibility to target endpoint.
-- Valid authorized scope permissions.
-
-## Reproduction Steps
-1. Execute the reproduction cURL payload:
-```bash
-{poc}
-```
-2. Observe server response for anomalous reflection, database syntax error, or unauthorized content.
-
-## Expected vs Actual
-- **Expected:** Request blocked or securely sanitized.
-- **Actual:** {finding.get('actual_result') or 'Vulnerable behavior reproduced.'}
-
-## Remediation
-{finding.get('remediation') or 'Sanitize input parameters and enforce strict validation.'}
-"""
+        return cls.generate_bug_bounty_markdown(finding, finding.get("asset_hostname") or "Not recorded")

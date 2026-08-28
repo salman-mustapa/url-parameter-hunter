@@ -1,3 +1,4 @@
+from app.validation.safety.legacy import ValidationHTTPClient
 """IDOR / Broken Access Control Validation Engine — Deep Exploitation Evidence.
 
 Tests for Insecure Direct Object References by comparing responses
@@ -138,7 +139,7 @@ class IDORValidator:
         headers: Optional[dict] = None,
     ) -> Optional[httpx.Response]:
         try:
-            async with httpx.AsyncClient(
+            async with ValidationHTTPClient(
                 timeout=self.timeout, follow_redirects=True, verify=False
             ) as client:
                 if location == "query":
@@ -363,7 +364,7 @@ class IDORValidator:
                 modified_url = url[:match.start(1)] + test_id + url[match.end(1):]
 
                 try:
-                    async with httpx.AsyncClient(
+                    async with ValidationHTTPClient(
                         timeout=self.timeout, follow_redirects=True, verify=False
                     ) as client:
                         baseline = await client.get(url, headers=headers or {})

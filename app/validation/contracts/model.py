@@ -37,6 +37,7 @@ class VulnerabilityContract:
     requires_baseline: bool = True
     requires_control_comparison: bool = True
     allows_status_code_only_confirmation: bool = False  # MUST ALWAYS BE FALSE
+    reproducibility: str = "Repeat the probe with a fresh control and captured request/response evidence"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,4 +56,5 @@ class VulnerabilityContract:
             "requires_baseline": self.requires_baseline,
             "requires_control_comparison": self.requires_control_comparison,
             "allows_status_code_only_confirmation": self.allows_status_code_only_confirmation,
+            "reproducibility": self.reproducibility,
         }

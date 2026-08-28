@@ -6,6 +6,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy import func, select
 
@@ -13,14 +14,14 @@ from app.attacks import get_attack_module
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal, async_session_scope
 from app.core.events import event_bus
+from app.core.engagement import EngagementRules
 from app.core.kill_switch import kill_switch_manager
 from app.core.rate_limit import RateLimiter
 from app.core.scope_engine import ScopeEngine, normalize_target
 from app.core.session_context import SessionContext, SessionIdentity
 from app.discovery.parameter_classifier import parameter_classifier
-from app.intelligence.attack_graph import attack_graph_engine
 from app.models.models import Asset, Certificate, Domain, Finding, Parameter, Port, Scan, Screenshot, Technology, URL
-from app.orchestration.attack_opportunity import AttackOpportunity, OpportunityState, opportunity_bus
+from app.orchestration.attack_opportunity import AttackOpportunity, OpportunityState, OpportunityBus
 from app.scanners import dns, http, port, screenshot, security, subdomain, web
 from app.scanners.base import ScanContext
 from app.services.capability_registry import AssessmentProfile, ValidationLevel
@@ -29,17 +30,36 @@ from app.services.results import result_service
 logger = logging.getLogger("scan_mgr")
 
 
+class ScanQueueFull(ValueError):
+    pass
+
+
 class ScanManager:
     def __init__(self) -> None:
         self._running: Dict[str, asyncio.Task] = {}
         self._pause_events: Dict[str, asyncio.Event] = {}
         self._stop_flags: Dict[str, bool] = {}
+        self._admission = asyncio.Lock()
+        self._scan_slots = asyncio.Semaphore(max(1, settings.max_concurrent_scans))
+        self._target_slots: dict[str, asyncio.Lock] = {}
+        self._scan_roots: dict[str, str] = {}
+        self._active: set[str] = set()
 
     # ---------- public control ----------
-    async def create_scan(
+    async def create_scan(self, *args, **kwargs) -> dict:
+        async with self._admission:
+            async with AsyncSessionLocal() as db:
+                pending = (await db.execute(select(func.count()).select_from(Scan).where(
+                    Scan.status.in_(["queued", "running", "paused", "starting"])
+                ))).scalar() or 0
+            if pending >= max(1, settings.max_pending_scans):
+                raise ScanQueueFull("Antrean scan penuh. Tunggu scan selesai atau hentikan scan yang tidak diperlukan.")
+            return await self._create_scan(*args, **kwargs)
+
+    async def _create_scan(
         self,
         target: str,
-        profile: str = "autonomous",
+        profile: str = "bug_hunt",
         include_subdomains: bool = True,
         validation_level: Optional[str] = None,
         user_id: Optional[str] = None,
@@ -48,10 +68,32 @@ class ScanManager:
         authorization_id: Optional[str] = None,
         authorization_reference: Optional[str] = None,
         campaign_id: Optional[str] = None,
+        engagement: Optional[dict] = None,
     ) -> dict:
         host, root_domain = normalize_target(target)
-        prof = "autonomous"
-        val_level = ValidationLevel.L4_HIGH_RISK
+        prof = profile or AssessmentProfile.BUG_HUNT
+        val_level = validation_level or ValidationLevel.L2_SAFE_ACTIVE
+        if val_level not in ValidationLevel.ALL_LEVELS:
+            raise ValueError("Unknown validation level")
+        if val_level in {ValidationLevel.L0_OBSERVE, ValidationLevel.L1_PASSIVE}:
+            raise ValueError("This pipeline performs active requests; use L2_SAFE_ACTIVE or an explicitly authorized higher level.")
+        high_risk = val_level in {ValidationLevel.L3_CONTROLLED, ValidationLevel.L4_HIGH_RISK}
+        if high_risk and not (authorization_reference and authorization_reference.strip()):
+            raise ValueError("High-risk validation requires an explicit authorization reference")
+        rules = EngagementRules.model_validate(engagement) if engagement else None
+        if rules:
+            rules.assert_active()
+            scope_check = ScopeEngine(root_domain, scope_hosts=rules.scope_hosts, excluded_hosts=rules.excluded_hosts, allowed_ports=rules.allowed_ports)
+            if not scope_check.host_allowed(host):
+                raise ValueError("Target is outside the program scope or explicitly excluded")
+            target_url = target if "://" in target else f"http://{target}"
+            try:
+                explicit_port = urlparse(target_url).port
+            except ValueError as error:
+                raise ValueError("Target port is invalid") from error
+            if ("://" in target or explicit_port is not None) and not scope_check.url_allowed(target_url):
+                raise ValueError("Target URL or port is outside the program scope")
+            authorization_reference = rules.authorization_reference
 
         # Defensive handling if callers swapped include_subdomains and validation_level
         if isinstance(include_subdomains, str):
@@ -59,20 +101,23 @@ class ScanManager:
         elif isinstance(validation_level, bool):
             include_subdomains = validation_level
 
-        # Full Autonomous Security Engine Options (Highest Capability by default)
+        # Active reconnaissance by default; intrusive validators need higher authorization.
         options: Dict[str, Any] = {
             "port_scan": True,
             "web_discovery": True,
             "parameter_discovery": True,
-            "security_checks": True,
+            "security_checks": high_risk,
             "deep_crawl": True,
-            "deep_parameter_fuzzing": True,
+            "deep_parameter_fuzzing": high_risk,
             "js_analysis": True,
-            "nmap_vuln": True,
+            "nmap_vuln": high_risk,
+            "nmap_vuln_scan": high_risk,
+            "credential_audit": False,
+            "service_validation": high_risk,
             "cve_matching": True,
             "nonstandard_ports": True,
-            "auth_testing": True,
-            "artifact_extraction": True,
+            "auth_testing": high_risk,
+            "artifact_extraction": high_risk,
             "include_subdomains": include_subdomains,
             "target_host": host,
             "target_url": target if "://" in target else f"http://{target}",
@@ -80,10 +125,13 @@ class ScanManager:
             "max_urls": settings.max_urls_per_scan,
             "max_runtime_seconds": settings.max_runtime_minutes * 60,
             "validation_level": val_level,
-            "authorization_reference": authorization_reference or "AUTONOMOUS_OPERATOR",
-            "authorized_high_risk": True,
+            "authorization_reference": authorization_reference,
+            "authorized_high_risk": high_risk,
             "performance_mode": settings.performance_mode,
             "strict_scope": True,
+            "engagement": rules.model_dump(mode="json") if rules else {},
+            "report_profile": rules.report.model_dump() if rules else {},
+            "rate_limit_rps": min(settings.rate_limit_rps, rules.max_rps) if rules else settings.rate_limit_rps,
         }
 
         scan_id = f"inv_{int(time.time())}_{uuid.uuid4().hex[:6]}_{host.replace('.', '_')}"
@@ -104,11 +152,11 @@ class ScanManager:
                 domain_id=domain_entity.id,
                 root_domain=root_domain,
                 status="queued",
-                profile="autonomous",
+                profile=prof,
                 validation_level=val_level,
                 options=options,
                 authorization_id=authorization_id,
-                authorization_reference=authorization_reference or "AUTONOMOUS_OPERATOR",
+                authorization_reference=authorization_reference,
                 allowed_modules=allowed_modules or [],
                 allowed_actions=allowed_actions or [],
                 heartbeat_at=datetime.now(timezone.utc),
@@ -118,7 +166,7 @@ class ScanManager:
 
         await event_bus.publish(result_service.make_event(
             scan_id, "investigation.started", f"Autonomous security investigation initiated for {root_domain}",
-            target=root_domain, profile="autonomous", validation_level=val_level, severity="info"))
+            target=root_domain, profile=prof, validation_level=val_level, severity="info"))
         self._run(scan_id, root_domain, prof, options)
         return {
             "scan_id": scan_id,
@@ -126,7 +174,7 @@ class ScanManager:
             "campaign_id": camp_id,
             "status": "queued",
             "target": root_domain,
-            "profile": "autonomous",
+            "profile": prof,
             "validation_level": val_level,
         }
 
@@ -138,6 +186,7 @@ class ScanManager:
         ev.set()
         self._pause_events[scan_id] = ev
         self._stop_flags[scan_id] = False
+        self._scan_roots[scan_id] = root_domain
         task = asyncio.create_task(
             self._run_with_timeout(scan_id, root_domain, profile, options)
         )
@@ -145,6 +194,11 @@ class ScanManager:
 
         def _cleanup(done_task: asyncio.Task) -> None:
             self._running.pop(scan_id, None)
+            self._pause_events.pop(scan_id, None)
+            self._stop_flags.pop(scan_id, None)
+            self._scan_roots.pop(scan_id, None)
+            if root_domain not in self._scan_roots.values():
+                self._target_slots.pop(root_domain, None)
             try:
                 done_task.result()
             except asyncio.CancelledError:
@@ -161,7 +215,30 @@ class ScanManager:
         profile: str,
         options: Dict[str, Any],
     ) -> None:
+        # Same registered domain is serialized, even across users; active pipelines are bounded.
+        target_slot = self._target_slots.setdefault(root_domain, asyncio.Lock())
+        async with target_slot, self._scan_slots:
+            if self._stop_flags.get(scan_id):
+                return
+            rules = options.get("engagement")
+            if rules:
+                try:
+                    EngagementRules.model_validate(rules).assert_active()
+                except ValueError as error:
+                    await self._finish_status(scan_id, "stopped")
+                    await event_bus.publish(result_service.make_event(scan_id, "scan.scope_expired", str(error), severity="warn"))
+                    return
+            self._active.add(scan_id)
+            try:
+                await self._execute_with_timeout(scan_id, root_domain, profile, options)
+            finally:
+                self._active.discard(scan_id)
+
+    async def _execute_with_timeout(self, scan_id, root_domain, profile, options) -> None:
         timeout_seconds = max(30.0, float(options.get("max_runtime_seconds") or settings.max_runtime_minutes * 60))
+        end = (options.get("engagement") or {}).get("ends_at")
+        if end:
+            timeout_seconds = min(timeout_seconds, max(.01, (datetime.fromisoformat(end) - datetime.now(timezone.utc)).total_seconds()))
         try:
             await asyncio.wait_for(
                 self._pipeline(scan_id, root_domain, profile, options),
@@ -225,6 +302,7 @@ class ScanManager:
         task = self._running.get(scan_id)
         if task:
             task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         async with AsyncSessionLocal() as db:
             scan = await db.get(Scan, scan_id)
             if scan and scan.status not in ("completed", "stopped", "cancelled"):
@@ -235,10 +313,19 @@ class ScanManager:
         await event_bus.publish(result_service.make_event(
             scan_id, "scan.stopped", "Scan stopped by operator (kill switch activated)", severity="warn"))
 
+    async def close(self) -> None:
+        """Stop runners before shutting down their event writer and database."""
+        for scan_id in tuple(self._running):
+            await self.stop(scan_id)
+        self._stop_flags.clear()
+        self._target_slots.clear()
+
     # ---------- pipeline ----------
     async def _pipeline(self, scan_id: str, root_domain: str, profile: str, options: Dict[str, Any]) -> None:
         target_host = options.get("target_host") or root_domain
         include_subdomains = options.get("include_subdomains", True)
+        rules = options.get("engagement") or {}
+        program_scope = dict(scope_hosts=rules.get("scope_hosts"), excluded_hosts=rules.get("excluded_hosts"), allowed_ports=rules.get("allowed_ports"), expires_at=rules.get("ends_at"))
 
         if not include_subdomains:
             scope = ScopeEngine(
@@ -246,16 +333,21 @@ class ScanManager:
                 allowed_hosts=[target_host],
                 recursive=False,
                 allow_private_networks=settings.allow_private_networks,
+                **program_scope,
             )
         else:
             scope = ScopeEngine(
                 root_domain,
                 recursive=True,
                 allow_private_networks=settings.allow_private_networks,
+                **program_scope,
             )
 
-        limiter = RateLimiter(settings.rate_limit_rps)
+        limiter = RateLimiter(min(settings.rate_limit_rps, options.get("rate_limit_rps", settings.rate_limit_rps)))
         ctx = ScanContext(scan_id, scope, profile, options, limiter)
+        # The API runner must never consume a different investigation's global/Redis queue.
+        opportunity_bus = OpportunityBus(use_distributed=False, scan_id=scan_id)
+        ctx.opportunity_bus = opportunity_bus
 
         start_time = time.time()
         phase_failures: list[dict[str, str]] = []
@@ -269,16 +361,11 @@ class ScanManager:
                 if scan_rec and scan_rec.checkpoint:
                     cp = scan_rec.checkpoint
                     if "opportunities" in cp:
-                        from app.orchestration.attack_opportunity import AttackOpportunity, opportunity_bus
-                        # Rehydrate seen fingerprints
-                        for fp in cp.get("seen_fingerprints", []):
-                            opportunity_bus._seen_fingerprints.add(fp)
-                        
                         # Rehydrate opportunities
                         count_rehydrated = 0
                         for opp_dict in cp["opportunities"]:
                             opp = AttackOpportunity.from_dict(opp_dict)
-                            if opp.id not in opportunity_bus._opportunities:
+                            if scope.host_allowed(opp.host) and opp.metadata.get("scan_id") == scan_id and opp.id not in opportunity_bus._opportunities:
                                 await opportunity_bus.publish(opp)
                                 count_rehydrated += 1
                         if count_rehydrated > 0:
@@ -287,6 +374,8 @@ class ScanManager:
                                 f"Rehydrated {count_rehydrated} opportunities from checkpoint.",
                                 severity="info"
                             )
+                        # Restore deduplication only after queued items have been republished.
+                        opportunity_bus._seen_fingerprints.update(cp.get("seen_fingerprints", [])[:2000])
 
             from app.core.security_engine import security_engine
             from app.models.application_model import EntityType
@@ -306,9 +395,10 @@ class ScanManager:
             # Initialize stateful session context & continuous validation loop
             session_ctx = SessionContext(base_url=f"http://{root_domain}", rate_limiter=ctx.rate_limiter)
             val_stop_event = asyncio.Event()
-            val_worker_task = asyncio.create_task(
-                self._run_continuous_validation_worker(ctx, scan_id, root_domain, session_ctx, val_stop_event)
-            )
+            if options.get("authorized_high_risk", False):
+                val_worker_task = asyncio.create_task(
+                    self._run_continuous_validation_worker(ctx, scan_id, root_domain, session_ctx, val_stop_event)
+                )
 
             # ---- Phase A: Discovery (subdomains / focused target) ----
             if not kill_switch_manager.is_stopped(scan_id, "discovery"):
@@ -544,6 +634,8 @@ class ScanManager:
                             # Immediately feed parameters into Opportunity Bus for concurrent testing
                             if u.url:
                                 param_opps = parameter_classifier.generate_hypotheses_for_url(u.url, method=u.method or "GET")
+                                for opp in param_opps:
+                                    opp.metadata["scan_id"] = scan_id
                                 await opportunity_bus.publish_batch(param_opps)
 
                         # Re-run reasoning cycle with new endpoint data
@@ -582,7 +674,8 @@ class ScanManager:
             # Drain and stop continuous validation worker
             val_stop_event.set()
             try:
-                await asyncio.wait_for(val_worker_task, timeout=15.0)
+                if val_worker_task:
+                    await asyncio.wait_for(val_worker_task, timeout=15.0)
             except Exception:
                 pass
             await session_ctx.close()
@@ -699,7 +792,7 @@ class ScanManager:
 
         # Persistent Checkpointing: serialize active opportunity bus state to database Scan entity
         try:
-            from app.orchestration.attack_opportunity import opportunity_bus, OpportunityState
+            opportunity_bus = ctx.opportunity_bus
             from app.models.models import Scan
             scan = await db.get(Scan, ctx.scan_id)
             if scan:
@@ -707,7 +800,7 @@ class ScanManager:
                 active_states = {OpportunityState.QUEUED, OpportunityState.SUSPECTED, OpportunityState.VALIDATING}
                 opps_to_save = [
                     opp.to_dict() for opp in opportunity_bus.get_all_opportunities()
-                    if opp.state in active_states
+                    if opp.state in active_states and ctx.scope.host_allowed(opp.host)
                 ]
                 # Cap the checkpoint sizes to prevent SQLite write locking under high load
                 opps_to_save = sorted(opps_to_save, key=lambda x: x.get("priority", 50), reverse=True)[:300]
@@ -807,6 +900,7 @@ class ScanManager:
         stop_event: asyncio.Event,
     ) -> None:
         """Continuously consumes opportunities from OpportunityBus and executes specialist attack modules."""
+        opportunity_bus = ctx.opportunity_bus
         logger.info("Continuous validation worker active for scan %s", scan_id)
         while not stop_event.is_set() or opportunity_bus.get_queue_size() > 0:
             if kill_switch_manager.is_stopped(scan_id):
@@ -819,13 +913,23 @@ class ScanManager:
                 continue
 
             try:
+                # Check every candidate at dispatch, including resumed checkpoints.
+                if not ctx.options.get("authorized_high_risk") or not ctx.scope.url_allowed(opp.endpoint or opp.target):
+                    await opportunity_bus.update_state(opp.id, OpportunityState.BLOCKED, message="Outside approved validation scope")
+                    continue
+                if opp.metadata.get("scan_id") not in {None, scan_id}:
+                    await opportunity_bus.update_state(opp.id, OpportunityState.BLOCKED, message="Investigation mismatch")
+                    continue
                 module = get_attack_module(opp.attack_type)
                 if not module:
-                    opportunity_bus.task_done()
                     continue
 
                 # Execute attack module
                 res = await module.validate(opp, session)
+                from app.validation.context import has_verified_proof
+                if res.is_vulnerable and not has_verified_proof(res.validated_result):
+                    await opportunity_bus.update_state(opp.id, OpportunityState.INCONCLUSIVE, message="Missing collected mechanism proof")
+                    continue
                 if res.is_vulnerable:
                     ev_pkg = await module.collect_evidence(res)
                     risk = await module.score(ev_pkg, res)
@@ -863,6 +967,8 @@ class ScanManager:
                             scan_id=scan_id,
                             asset_id=asset_id,
                             finding_type=finding_type,
+                            validated_result=res.validated_result,
+                            validation_status=res.validated_result.status,
                             title=f"Confirmed {opp.attack_type.upper()} on {opp.endpoint}",
                             severity=res.severity,
                             confidence="CONFIRMED",
@@ -893,18 +999,8 @@ class ScanManager:
                         poc_curl=res.poc_curl,
                     )
 
-                    # Attack Chaining: If credentials discovered in artifact, link and synthesize new attack opportunities
-                    if opp.attack_type == "artifact" and "extracted_secrets" in res.evidence:
-                        for k, v in res.evidence["extracted_secrets"].items():
-                            attack_graph_engine.add_credential_discovery(
-                                source_finding_id=opp.id,
-                                username=k,
-                                password_or_token=v,
-                                secret_type=k,
-                                target_url=opp.endpoint,
-                            )
-                        chained_opps = attack_graph_engine.generate_chained_opportunities()
-                        await opportunity_bus.publish_batch(chained_opps)
+                    # Cross-host credential reuse/lateral movement needs a separately approved plan.
+                    # Never feed discovered secrets into a process-global attack graph.
 
                 else:
                     await opportunity_bus.update_state(

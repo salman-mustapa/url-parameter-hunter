@@ -3,7 +3,8 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#fffdf9" />
   <title>Hunter Aja — Attack Surface & Parameter Intelligence Platform</title>
   <meta name="description"
     content="Platform modern attack surface discovery, dynamic active subdomain graph, parameter hunting, visualisasi scan realtime, dan pengawasan domain terpusat." />
@@ -13,7 +14,8 @@
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600;1,700;1,800&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="vendor/jstree/jstree.min.css" />
-  <link rel="stylesheet" href="css/styles.css?v=9.7.1" />
+  <link rel="stylesheet" href="css/styles.css?v=9.8.0" />
+  <link rel="stylesheet" href="css/responsive.css?v=9.8.0" />
 
 
 </head>
@@ -154,8 +156,7 @@
           <span class="admin-banner-icon">🛡️</span>
           <div>
             <strong>Mode Pengawasan Administrator:</strong> Anda memiliki akses penuh ke <em>Admin Monitor</em> untuk
-            mengaudit pengguna dan pemetaan domain. Untuk melakukan pemindaian aktif, silakan beralih ke akun user
-            biasa.
+            mengaudit pengguna dan pemetaan domain. Akses scan dan konfigurasi tetap mengikuti otorisasi akun.
           </div>
         </div>
       </div>
@@ -202,7 +203,7 @@
               <div class="input-with-icon">
                 <span class="input-icon">🌐</span>
                 <input id="trialTargetInput" type="text"
-                  placeholder="Masukkan target (contoh: example.com atau google.com)" autocomplete="off" />
+                  placeholder="Masukkan target (contoh: app.example.invalid; gunakan target yang berizin)" autocomplete="off" />
               </div>
             </div>
 
@@ -218,7 +219,7 @@
               <label>AI & Security Engine</label>
               <div class="engine-status-pill">
                 <span class="live-dot pulse"></span>
-                <span>Full Power (10+ Tools & AI)</span>
+                <span>Recon Aktif • Level L2</span>
               </div>
             </div>
           </div>
@@ -228,17 +229,17 @@
               <span class="btn-icon">🚀</span> MULAI SCAN SEKARANG
             </button>
             <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
-              <span class="btn-icon">🔑</span> Masuk untuk Scan Tanpa Batas
+              <span class="btn-icon">🔑</span> Masuk untuk Mengatur Scan
             </button>
           </div>
 
           <!-- Quick Suggestion Chips -->
           <div class="quick-samples-row">
-            <span class="quick-sample-label">Contoh Target Cepat:</span>
-            <button type="button" class="sample-chip" data-sample="example.com">⚡ example.com</button>
-            <button type="button" class="sample-chip" data-sample="google.com">🌐 google.com</button>
-            <button type="button" class="sample-chip" data-sample="facebook.com">👥 facebook.com</button>
-            <button type="button" class="sample-chip" data-sample="tesla.com">🎯 tesla.com</button>
+            <span class="quick-sample-label">Contoh format (bukan izin pengujian):</span>
+            <button type="button" class="sample-chip" data-sample="example.invalid">⚡ example.invalid</button>
+            <button type="button" class="sample-chip" data-sample="app.example.invalid">🌐 app.example.invalid</button>
+            <button type="button" class="sample-chip" data-sample="api.example.invalid">👥 api.example.invalid</button>
+            <button type="button" class="sample-chip" data-sample="test.example.invalid">🎯 test.example.invalid</button>
           </div>
         </div>
 
@@ -249,8 +250,8 @@
           <div class="trust-signal-item">
             <span class="trust-icon">🛡️</span>
             <div>
-              <strong>100% Non-Destructive</strong>
-              <p>Pemindaian aman berbasis inspeksi pasif & standard probing.</p>
+              <strong>Scope & Izin Eksplisit</strong>
+              <p>Jalankan pemeriksaan hanya pada target dengan izin pemilik sistem.</p>
             </div>
           </div>
           <div class="trust-signal-item">
@@ -270,8 +271,8 @@
           <div class="trust-signal-item">
             <span class="trust-icon">🔒</span>
             <div>
-              <strong>Zero-Lost Scan Attribution</strong>
-              <p>Hasil scan trial otomatis diklaim ke akun Anda saat mendaftar.</p>
+              <strong>Akses Hasil Terproteksi</strong>
+              <p>Login diperlukan; hasil scan hanya tersedia bagi pemilik dan administrator.</p>
             </div>
           </div>
         </div>
@@ -396,11 +397,10 @@
             <div class="card sketch-card feature-card">
               <div class="feature-icon">🔒</div>
               <h3>Anti-Abuse & RBAC Privacy</h3>
-              <p>Sistem uji coba cerdas dengan proteksi sidik jari perangkat, isolasi riwayat pemindaian antar pengguna,
-                dan audit pengawasan admin.</p>
+              <p>Login diperlukan untuk scan, dengan isolasi data antar pengguna dan pengawasan admin.</p>
               <div class="feature-mini-preview mini-tags-wrap">
-                <span class="mini-chip-auth">🔒 Device Protected</span>
-                <span class="mini-chip-auth">👤 Auto Scan Claim</span>
+                <span class="mini-chip-auth">🔒 Login Diperlukan</span>
+                <span class="mini-chip-auth">👤 Isolasi Data</span>
               </div>
             </div>
           </div>
@@ -421,9 +421,7 @@
                 <span class="faq-toggle-icon">➕</span>
               </div>
               <div class="faq-answer">
-                <p>Ya, 100% aman dan non-destruktif. Hunter Aja hanya melakukan inspeksi pasif OSINT, resolusi DNS
-                  aktif, probing port ringan, dan web crawling standar tanpa mengirimkan payload eksploitasi berbahaya.
-                </p>
+                <p>Scan aktif tetap memiliki risiko. Gunakan hanya pada target yang Anda miliki atau memiliki izin tertulis. Mode standar membatasi pemeriksaan aktif; validasi berisiko tinggi memerlukan admin dan referensi otorisasi.</p>
               </div>
             </div>
 
@@ -433,9 +431,7 @@
                 <span class="faq-toggle-icon">➕</span>
               </div>
               <div class="faq-answer">
-                <p>Setiap perangkat fisik yang belum memiliki akun dapat mencoba pemindaian reconnaissance langsung
-                  secara instan. Sidik jari perangkat akan mencatat sesi uji coba tersebut, dan saat Anda mendaftar akun
-                  baru, seluruh hasil temuan scan tersebut otomatis diklaim ke akun Anda.</p>
+                <p>Masuk atau buat akun sebelum memulai scan. Hasil disimpan pada akun pemilik scan dan tidak diklaim berdasarkan sidik jari perangkat.</p>
               </div>
             </div>
 
@@ -458,8 +454,7 @@
         <div class="card sketch-card cta-banner-card">
           <div class="cta-content">
             <h2>Siap Memburu Attack Surface Hari Ini?</h2>
-            <p>Daftar sekarang secara gratis untuk mendapatkan akses pemindaian penuh, riwayat tersimpan, dan diff
-              analyzer tanpa batas.</p>
+            <p>Daftar sekarang secara gratis untuk mendapatkan akses scan terotorisasi, riwayat tersimpan, dan perbandingan hasil sesuai batas sistem.</p>
             <div class="cta-actions">
               <button id="ctaRegisterBtn" class="btn btn-primary btn-lg">✨ Buat Akun Gratis Sekarang</button>
               <button id="ctaLoginBtn" class="btn btn-secondary btn-lg">🔑 Masuk ke Dashboard</button>
@@ -545,14 +540,35 @@
                 <label>Engine Capabilities</label>
                 <div class="engine-status-pill">
                   <span class="live-dot pulse"></span>
-                  <span>⚡ Autonomous Engine (Full Recon, Active Proofs & Dynamic Governor)</span>
+                  <span>⚡ Recon Aktif L2 • Validasi Lanjutan Memerlukan Izin</span>
                 </div>
               </div>
             </div>
 
-            <div class="control-actions">
+      <details class="engagement-panel" open>
+
+        <summary>1. Izin &amp; batas pengujian</summary>
+        <p class="text-muted">Isi aturan program sebelum scan. Scope pada dokumen contoh bukan izin otomatis. L2 aktif; validasi lanjutan memerlukan izin terpisah.</p>
+        <div class="engagement-grid">
+          <label>Instansi / perusahaan<input id="engOrganization" maxlength="160" placeholder="Nama instansi" /></label>
+          <label>Program / engagement<input id="engProgram" maxlength="160" placeholder="Nama program atau penugasan" /></label>
+          <label>Referensi izin *<input id="engAuthorization" maxlength="300" placeholder="Nomor surat / referensi scope yang disetujui" /></label>
+          <label>Penguji<input id="engAssessor" maxlength="120" placeholder="Nama atau alias penguji" /></label>
+          <label>Mulai (waktu lokal)<input id="engStartsAt" type="datetime-local" /></label>
+          <label>Berakhir (waktu lokal)<input id="engEndsAt" type="datetime-local" /></label>
+          <label>Host dalam scope<textarea id="engScopeHosts" rows="2" placeholder="app.example.com&#10;*.example.com"></textarea></label>
+          <label>Pengecualian host<textarea id="engExcludedHosts" rows="2" placeholder="critical.example.com"></textarea></label>
+          <label>Port yang diizinkan<input id="engAllowedPorts" value="80,443" maxlength="600" inputmode="text" placeholder="80,443" /><small>Tambahkan port lain hanya jika diizinkan program.</small></label>
+          <label>Batas HTTP request/detik<input id="engMaxRps" type="number" value="5" min="1" max="30" /></label>
+          <label>Aturan tambahan<textarea id="engNotes" rows="2" maxlength="3000" placeholder="Larangan program, kontak darurat, batas data bukti"></textarea></label>
+        </div>
+        <p class="text-muted">Larangan standar: DoS, brute force, phishing, serta perubahan akses/data tanpa izin. Catatan bebas tidak otomatis mengatur setiap tool.</p>
+        <label class="engagement-consent"><input id="engAuthorizationAck" type="checkbox" /> Saya memiliki izin pemilik target dan sudah meninjau scope serta periode pengujian.</label>
+      </details>
+      <p class="scan-flow-hint">2. Mulai &amp; pantau scan → 3. Tinjau temuan dan bukti → 4. Lengkapi identitas &amp; unduh laporan</p>
+<div class="control-actions">
               <button id="startBtn" class="btn btn-primary btn-lg">
-                <span class="btn-icon">🚀</span> START AUTONOMOUS INVESTIGATION
+                <span class="btn-icon">🚀</span> MULAI SCAN
               </button>
 
               <button id="pauseBtn" class="btn btn-secondary btn-lg" disabled>
@@ -964,10 +980,9 @@
                 </div>
                 <div class="header-actions">
                   <button id="dashReportBBBtn" class="btn btn-secondary btn-xs" title="Format HackerOne / Bugcrowd">🎯
-                    Bug Bounty (.md)</button>
-                  <button id="dashReportCVEBtn" class="btn btn-secondary btn-xs" title="Format Riset Kerentanan">🛡️ CVE
-                    Report (.md)</button>
-                  <button id="dashReportJSONBtn" class="btn btn-secondary btn-xs" title="Paket Kriptografis SHA-256">📦
+                    Temuan & Bukti (.md)</button>
+                  <button id="dashReportCVEBtn" class="btn btn-secondary btn-xs" title="Format Riset Kerentanan">🛡️ Panduan CVE</button>
+                  <button id="dashReportJSONBtn" class="btn btn-secondary btn-xs" title="Data JSON untuk tinjauan bukti">📦
                     Evidence JSON</button>
                   <button id="dashReportHubBtn" class="btn btn-primary btn-xs" onclick="switchViewTab('reports')"
                     title="Buka di Pusat Laporan Mandiri">📑 Buka Report Hub Penuh ↗</button>
@@ -982,8 +997,8 @@
                       class="info-value mono">-</span></div>
                   <div class="info-item"><span class="info-label">Status Penilaian</span><span id="dashReportStatus"
                       class="info-value" style="font-weight:700; color:var(--text-muted);">IDLE</span></div>
-                  <div class="info-item"><span class="info-label">Skor Risiko (CVSS v4)</span><span id="dashReportRisk"
-                      class="info-value mono" style="font-weight:800; color:var(--text-muted);">0.0 / 10.0</span></div>
+                  <div class="info-item"><span class="info-label">CVSS temuan tertinggi</span><span id="dashReportRisk"
+                      class="info-value mono" style="font-weight:800; color:var(--text-muted);">Belum tercatat</span></div>
                   <div class="info-item"><span class="info-label">Kualitas Bukti</span><span id="dashReportEvidence"
                       class="info-value badge-e0">NO PROOF</span></div>
                 </div>
@@ -1004,7 +1019,7 @@
                     <button class="btn btn-ghost btn-xs" onclick="openUrlsModal()">🔗 Buka Matriks URL ↗</button>
                     <button class="btn btn-ghost btn-xs" onclick="openTechsModal()">⚡ Buka Matriks Teknologi ↗</button>
                   </div>
-                  <span class="pill-muted" style="font-size:10px;">Safe & Non-Destructive Controlled Proof (V9.1)</span>
+                  <span class="pill-muted" style="font-size:10px;">Authorized Security Testing Controlled Proof (V9.1)</span>
                 </div>
               </div>
             </div>
@@ -1129,7 +1144,7 @@
                   <h2 id="wsTargetName">Target: -</h2>
                   <span id="wsStatusBadge" class="status-badge status-active">INITIALIZING</span>
                   <span id="wsEngineBadge" class="pill pill-primary">⚡ Autonomous Adversary Engine</span>
-                  <span id="wsLevelBadge" class="pill pill-danger">L4 HIGH RISK</span>
+                  <span id="wsLevelBadge" class="pill pill-danger">LEVEL BELUM DIMUAT</span>
                 </div>
                 <div class="workspace-meta-row">
                   <span class="meta-item font-mono" id="wsInvestigationId">ID: -</span>
@@ -1161,7 +1176,7 @@
                   <option value="endpoints">🔗 URL & Endpoints Terpetakan</option>
                 </optgroup>
                 <optgroup label="🛡️ Kerentanan & Bukti (Findings & Proofs)">
-                  <option value="findings">🔒 Temuan Keamanan Terkonfirmasi</option>
+                  <option value="findings">🔒 Temuan & Status Validasi</option>
                   <option value="chains">⛓️ Rantai Eksploitasi (Attack Chains)</option>
                   <option value="evidence">📎 Bukti & Payload (Evidence)</option>
                 </optgroup>
@@ -1187,6 +1202,26 @@
 
           <!-- TAB 1: OVERVIEW PANEL (§12) -->
           <div id="wsTabOverview" class="ws-tab-content active">
+
+      <details class="engagement-panel" id="reportProfilePanel">
+        <summary>Identitas &amp; branding laporan</summary>
+        <p class="text-muted">Disimpan per investigasi. Perubahan berlaku untuk export baru; file yang sudah dibuat tetap menjadi snapshot sebelumnya.</p>
+        <div class="engagement-grid">
+          <label>Instansi / perusahaan<input id="reportOrganization" maxlength="160" /></label>
+          <label>Program / engagement<input id="reportProgram" maxlength="160" /></label>
+          <label>Penguji<input id="reportAssessor" maxlength="120" /></label>
+          <label>Nama aset<input id="reportAssetName" maxlength="160" /></label>
+          <label>Jenis aset<select id="reportAssetType"><option>Web / API</option><option>Web</option><option>API</option><option>Server</option><option>Other</option></select></label>
+          <label>Versi aplikasi<input id="reportApplicationVersion" maxlength="100" /></label>
+          <label>Kontak penanggung jawab<input id="reportContact" maxlength="180" /></label>
+          <label>Klasifikasi<select id="reportClassification"><option>CONFIDENTIAL</option><option>INTERNAL</option><option>RESTRICTED</option></select></label>
+          <label>Konteks bisnis<textarea id="reportExecutiveContext" rows="3" maxlength="3000"></textarea></label>
+          <label>Logo instansi (PNG/JPEG, maks. 256 KiB)<input id="reportLogoFile" type="file" accept="image/png,image/jpeg" /><span id="reportLogoStatus" class="text-muted">Logo belum dilampirkan.</span></label>
+        </div>
+        <div class="engagement-actions"><button id="saveReportProfileBtn" type="button" class="btn btn-primary">Simpan identitas laporan</button><button id="clearReportLogoBtn" type="button" class="btn btn-secondary">Hapus logo</button></div>
+        <p id="reportProfileStatus" class="text-muted" role="status"></p>
+      </details>
+
             <div class="ws-stats-grid">
               <div class="ws-stat-card">
                 <span class="ws-stat-val" id="wsStatAssets">0</span>
@@ -1206,7 +1241,7 @@
               </div>
               <div class="ws-stat-card">
                 <span class="ws-stat-val text-danger" id="wsStatFindings">0</span>
-                <span class="ws-stat-lbl">Confirmed Vulnerabilities</span>
+                <span class="ws-stat-lbl">Recorded Findings</span>
               </div>
               <div class="ws-stat-card">
                 <span class="ws-stat-val" id="wsStatArtifacts">0</span>
@@ -1246,7 +1281,7 @@
                 <h3 class="ws-box-title">🔬 Proof Quality & Confidence Matrix</h3>
                 <div class="ws-conf-grid">
                   <div class="ws-conf-item">
-                    <span class="ws-conf-badge bg-confirmed">CONFIRMED (E3/E4)</span>
+                    <span class="ws-conf-badge bg-confirmed">CONFIRMED + BUKTI E3/E4</span>
                     <strong id="wsConfConfirmed">0</strong>
                   </div>
                   <div class="ws-conf-item">
@@ -1627,7 +1662,9 @@
               </div>
             </div>
             <button id="refreshAdminBtn" class="btn btn-secondary btn-sm">🔄 Refresh Admin Data</button>
+            <button id="runSyntheticLabBtn" class="btn btn-secondary btn-sm" onclick="runSyntheticLab()">🧪 Jalankan Lab Lokal</button>
           </div>
+          <p id="syntheticLabStatus" class="text-muted text-sm" role="status">Lab memakai server loopback sementara dan data sintetis; tidak memindai target eksternal.</p>
 
           <!-- Admin Global Metric Cards -->
           <div class="admin-metrics-grid">
@@ -2050,7 +2087,7 @@
             </button>
             <button id="btnDownloadBugBountyReport" class="btn btn-secondary btn-sm"
               title="Unduh Laporan Format HackerOne/Bugcrowd">
-              🎯 Bug Bounty (.md)
+              🎯 Temuan & Bukti (.md)
             </button>
             <button id="btnDownloadCveReport" class="btn btn-secondary btn-sm"
               title="Unduh Laporan Riset Kerentanan Baru">
@@ -2197,6 +2234,7 @@
               <div id="retestStatusText">Hasil Retest Terkini: Menunggu eksekusi.</div>
             </div>
             <div class="finding-actions-row">
+              <select id="findingLifecycleSelect" aria-label="Status lifecycle berikutnya"></select>
               <button id="findingTransitionBtn" class="btn btn-primary btn-sm">Ubah Status Lifecycle</button>
             </div>
             <div id="findingTimeline" class="finding-timeline"></div>
@@ -2209,20 +2247,6 @@
   <!-- ===================================================================== -->
   <!-- GLOBAL SEARCH OVERLAY (§47)                                           -->
   <!-- ===================================================================== -->
-  <div id="globalSearchOverlay" class="search-overlay hidden">
-    <div class="search-overlay-content">
-      <div class="search-overlay-header">
-        <span class="search-icon">🔍</span>
-        <input type="text" id="globalSearchInput" class="search-overlay-input"
-          placeholder="Search domains, IPs, URLs, CVEs, findings..." autocomplete="off" />
-        <button id="closeSearchOverlay" class="btn btn-ghost btn-sm">✕</button>
-      </div>
-      <div id="globalSearchResults" class="search-results-container">
-        <div class="search-hint">Type to search across all assets, domains, IPs, URLs, and findings...</div>
-      </div>
-    </div>
-  </div>
-
   <!-- ===================================================================== -->
   <!-- Contextual Modal 0: Security Assessment Report Hub Modal (§52, §53, §100)-->
   <!-- ===================================================================== -->
@@ -2698,8 +2722,8 @@
             <input type="email" id="regEmail" class="custom-input" placeholder="budi@example.com" required />
           </div>
           <div class="form-group">
-            <label for="regPassword">Password (min. 6 karakter)</label>
-            <input type="password" id="regPassword" class="custom-input" placeholder="Minimal 6 karakter" required />
+            <label for="regPassword">Password (min. 10 karakter)</label>
+            <input type="password" id="regPassword" class="custom-input" placeholder="Minimal 10 karakter" required />
           </div>
           <button type="submit" class="btn btn-primary btn-block">✨ Buat Akun & Masuk</button>
         </form>
@@ -2715,13 +2739,13 @@
         <span class="footer-text">— Attack Surface & Dynamic Parameter Intelligence Platform</span>
       </div>
       <div class="footer-right">
-        <span class="footer-badge">Safe & Non-Destructive</span>
+        <span class="footer-badge">Authorized Security Testing</span>
       </div>
     </div>
   </footer>
 
   <!-- Mobile App Bottom Navigation Bar -->
-  <nav id="bottomNav" class="bottom-navbar">
+  <nav id="bottomNav" class="bottom-navbar" aria-label="Navigasi utama mobile">
     <div class="bottom-navbar-container">
       <!-- Guest Bottom Tabs -->
       <button class="bottom-nav-link active guest-tab" data-tab="home">
@@ -2750,24 +2774,24 @@
         <span class="bnav-icon">📦</span>
         <span class="bnav-label">Laporan</span>
       </button>
-      <button class="bottom-nav-link user-tab hidden" data-tab="diff">
-        <span class="bnav-icon">⚖️</span>
-        <span class="bnav-label">Diff</span>
+      <button id="mobileMoreBtn" class="bottom-nav-link" type="button" aria-haspopup="dialog" aria-controls="mobileMoreMenu" aria-expanded="false">
+        <span class="bnav-icon" aria-hidden="true">☰</span>
+        <span class="bnav-label">Lainnya</span>
       </button>
-
-      <!-- Admin-Only Bottom Tab -->
-      <button id="adminBottomTabBtn" class="bottom-nav-link admin-only-tab hidden" data-tab="admin">
-        <span class="bnav-icon">🛡️</span>
-        <span class="bnav-label">Admin</span>
-      </button>
-
-      <!-- API Docs External Link -->
-      <a class="bottom-nav-link" href="/docs" target="_blank" rel="noopener">
-        <span class="bnav-icon">📖</span>
-        <span class="bnav-label">Docs ↗</span>
-      </a>
     </div>
   </nav>
+  <dialog id="mobileMoreMenu" class="mobile-more-menu" aria-labelledby="mobileMoreTitle">
+    <div class="mobile-more-header">
+      <h2 id="mobileMoreTitle">Menu lainnya</h2>
+      <button id="closeMobileMoreBtn" type="button" class="btn btn-ghost" aria-label="Tutup menu">✕</button>
+    </div>
+    <div class="mobile-more-links">
+      <button class="mobile-menu-link user-tab hidden" data-tab="diff">⚖️ Bandingkan Scan</button>
+      <button id="adminBottomTabBtn" class="mobile-menu-link admin-only-tab hidden" data-tab="admin">🛡️ Admin Monitor</button>
+      <button class="mobile-menu-link" onclick="openToolRegistryModal()">🛠️ Katalog Tools</button>
+      <a class="mobile-menu-link" href="/docs" target="_blank" rel="noopener noreferrer">📖 Dokumentasi API ↗</a>
+    </div>
+  </dialog>
 
   <!-- Trial Limit Exceeded Friendly Modal Dialog -->
   <div id="trialLimitModal" class="modal-backdrop hidden">
@@ -2778,11 +2802,9 @@
       </div>
       <div class="trial-limit-body">
         <div class="trial-limit-avatar">🐙</div>
-        <h3 class="trial-limit-title">Uji Coba Telah Digunakan</h3>
+        <h3 class="trial-limit-title">Masuk untuk Melanjutkan</h3>
         <p class="trial-limit-text">
-          Sesi uji coba pemindaian langsung pada perangkat ini telah selesai. Silakan masuk atau daftar akun Hunter Aja
-          (Gratis & Cepat) untuk melanjutkan pemindaian tanpa batas, mengekspor hasil temuan, dan menyimpan seluruh
-          riwayat aset.
+          Masuk atau daftar akun sebelum mengatur target, izin, dan batas pengujian. Hasil scan, laporan, dan riwayat aset akan tersimpan pada akun Anda.
         </p>
 
         <div class="trial-limit-actions">
@@ -2920,10 +2942,10 @@
               <div class="form-field-group">
                 <label class="form-field-label" for="newPasswordInput">
                   <span>✨ Password Baru</span>
-                  <span class="required-star">* (minimal 6 karakter)</span>
+                  <span class="required-star">* (minimal 10 karakter)</span>
                 </label>
                 <div class="input-with-action">
-                  <input type="password" id="newPasswordInput" class="account-input" placeholder="Masukkan password baru yang kuat..." required minlength="6" autocomplete="new-password" />
+                  <input type="password" id="newPasswordInput" class="account-input" placeholder="Masukkan password baru yang kuat..." required minlength="10" autocomplete="new-password" />
                   <button type="button" class="pwd-toggle-btn" onclick="toggleInputVisibility('newPasswordInput', this)" title="Tampilkan/Sembunyikan Password">👁️</button>
                 </div>
                 
@@ -2939,7 +2961,7 @@
                   <span class="required-star">*</span>
                 </label>
                 <div class="input-with-action">
-                  <input type="password" id="confirmPasswordInput" class="account-input" placeholder="Ulangi kembali password baru..." required minlength="6" autocomplete="new-password" />
+                  <input type="password" id="confirmPasswordInput" class="account-input" placeholder="Ulangi kembali password baru..." required minlength="10" autocomplete="new-password" />
                   <button type="button" class="pwd-toggle-btn" onclick="toggleInputVisibility('confirmPasswordInput', this)" title="Tampilkan/Sembunyikan Password">👁️</button>
                 </div>
               </div>
@@ -2970,7 +2992,7 @@
                     <div class="text-xs text-muted" id="googleLinkedStatus">Belum terhubung</div>
                   </div>
                 </div>
-                <button class="btn btn-secondary btn-xs" id="linkGoogleBtn" onclick="toggleSSOLink('google')">
+                <button class="btn btn-secondary btn-xs" id="linkGoogleBtn" disabled title="SSO belum tersedia" onclick="toggleSSOLink('google')">
                   🔗 Hubungkan Google
                 </button>
               </div>
@@ -2984,7 +3006,7 @@
                     <div class="text-xs text-muted" id="githubLinkedStatus">Belum terhubung</div>
                   </div>
                 </div>
-                <button class="btn btn-secondary btn-xs" id="linkGithubBtn" onclick="toggleSSOLink('github')">
+                <button class="btn btn-secondary btn-xs" id="linkGithubBtn" disabled title="SSO belum tersedia" onclick="toggleSSOLink('github')">
                   🔗 Hubungkan GitHub
                 </button>
               </div>
@@ -3114,6 +3136,7 @@
         </div>
         <div id="wsArtModalContent" class="artifact-preview-body">
           Memuat pratinjau...
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
@@ -3136,7 +3159,7 @@
         <!-- Dynamic PoC Dossier Content -->
       </div>
       <div class="modal-footer flex-between">
-        <span class="text-xs text-muted font-mono">100% Deterministic Reproducible Security Proof</span>
+        <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
         <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
       </div>
     </div>
@@ -3149,22 +3172,24 @@
   <script src="vendor/jstree/jstree.min.js"></script>
 
   <!-- Modular Frontend Architecture -->
-  <script src="js/state.js?v=9.7.1"></script>
-  <script src="js/auth.js?v=9.7.1"></script>
-  <script src="js/navigation.js?v=9.7.1"></script>
-  <script src="js/stream.js?v=9.7.1"></script>
-  <script src="js/scan.js?v=9.7.1"></script>
-  <script src="js/tree.js?v=9.7.1"></script>
-  <script src="js/findings.js?v=9.7.1"></script>
-  <script src="js/modals.js?v=9.7.1"></script>
-  <script src="js/artifacts.js?v=9.7.1"></script>
-  <script src="js/history.js?v=9.7.1"></script>
-  <script src="js/reports.js?v=9.7.1"></script>
-  <script src="js/admin.js?v=9.7.1"></script>
-  <script src="js/search.js?v=9.7.1"></script>
-  <script src="js/mitre.js?v=9.7.1"></script>
-  <script src="js/v4_engine_ui.js?v=9.7.1"></script>
-  <script src="js/app.js?v=9.7.1"></script>
+  <script src="js/state.js?v=9.8.0"></script>
+  <script src="js/auth.js?v=9.8.0"></script>
+  <script src="js/navigation.js?v=9.8.0"></script>
+  <script src="js/stream.js?v=9.8.0"></script>
+  <script src="js/scan.js?v=9.8.0"></script>
+  <script src="js/tree.js?v=9.8.0"></script>
+  <script src="js/findings.js?v=9.8.0"></script>
+  <script src="js/modals.js?v=9.8.0"></script>
+  <script src="js/artifacts.js?v=9.8.0"></script>
+  <script src="js/history.js?v=9.8.0"></script>
+  <script src="js/reports.js?v=9.8.0"></script>
+  <script src="js/admin.js?v=9.8.0"></script>
+  <script src="js/search.js?v=9.8.0"></script>
+  <script src="js/mitre.js?v=9.8.0"></script>
+  <script src="js/v4_engine_ui.js?v=9.8.0"></script>
+  <script src="js/engagement.js?v=1"></script>
+  <script src="js/app.js?v=9.8.0"></script>
+  <script src="js/responsive.js?v=9.8.0"></script>
 </body>
 
 </html>

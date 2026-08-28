@@ -56,8 +56,8 @@
               <div style="font-weight:600; font-size:12px; color:#f8fafc; margin-bottom:4px;">${esc(tech.technique_name)}</div>
               <p style="font-size:11px; color:#94a3b8; margin:0 0 6px 0; line-height:1.3;">${esc(tech.rationale || '')}</p>
               <div style="display:flex; justify-content:space-between; align-items:center;">
-                <a href="${esc(tech.mitre_url)}" target="_blank" style="font-size:10.5px; color:#34d399; text-decoration:none;">Lihat di MITRE ATT&CK ↗</a>
-                ${tech.finding_ids && tech.finding_ids[0] ? `<button class="btn btn-ghost btn-xs" onclick="window.viewFindingDetailById('${esc(tech.finding_ids[0])}')" style="font-size:10px; padding:1px 6px;">Detail PoC ↗</button>` : ''}
+                <a href="${esc(safeLink(tech.mitre_url))}" target="_blank" style="font-size:10.5px; color:#34d399; text-decoration:none;">Lihat di MITRE ATT&CK ↗</a>
+                ${tech.finding_ids && tech.finding_ids[0] ? `<button class="btn btn-ghost btn-xs" onclick="window.viewFindingDetailById(${jsArg(tech.finding_ids[0])})" style="font-size:10px; padding:1px 6px;">Detail PoC ↗</button>` : ''}
               </div>
             </div>
           `;
@@ -112,7 +112,7 @@
 
       container.innerHTML = list.map(s => `
         <div class="screenshot-card sketch-card" style="background:#090f1f; border:1px solid #1e293b; border-radius:8px; overflow:hidden; display:flex; flex-direction:column;">
-          <div style="position:relative; cursor:pointer;" onclick="showScreenshotLightbox('${esc(s.image_url)}', '${esc(s.page_title || 'Visual Evidence')}', 'SHA-256: ${esc(s.content_hash || '')}')">
+          <div style="position:relative; cursor:pointer;" onclick="showScreenshotLightbox(${jsArg(s.image_url)}, ${jsArg(s.page_title || 'Visual Evidence')}, ${jsArg('SHA-256: ' + (s.content_hash || ''))})">
             <img src="${esc(s.thumb_url || s.image_url)}" alt="${esc(s.page_title || 'Screenshot')}" style="width:100%; height:160px; object-fit:cover; display:block; background:#020617;" loading="lazy" />
             <div style="position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.75); padding:2px 8px; border-radius:4px; font-size:10px; font-weight:700; color:#38bdf8; backdrop-filter:blur(4px);">
               HTTP ${s.status_code || 200}
@@ -127,8 +127,8 @@
               <div class="mono" style="font-size:10px; color:#64748b; margin-bottom:8px;">Hash: ${esc((s.content_hash || '').substring(0, 16))}...</div>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-              <button class="btn btn-secondary btn-xs" onclick="showScreenshotLightbox('${esc(s.image_url)}', '${esc(s.page_title || 'Visual Evidence')}', 'SHA-256: ${esc(s.content_hash || '')}')">🔍 Full Lightbox</button>
-              <a href="${esc(s.image_url)}" download="proof_${esc(s.id)}.png" class="btn btn-ghost btn-xs">💾 Download</a>
+              <button class="btn btn-secondary btn-xs" onclick="showScreenshotLightbox(${jsArg(s.image_url)}, ${jsArg(s.page_title || 'Visual Evidence')}, ${jsArg('SHA-256: ' + (s.content_hash || ''))})">🔍 Full Lightbox</button>
+              <a href="${esc(safeLink(s.image_url))}" download="proof_${esc(s.id)}.png" class="btn btn-ghost btn-xs">💾 Download</a>
             </div>
           </div>
         </div>

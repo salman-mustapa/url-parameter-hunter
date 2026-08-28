@@ -143,7 +143,7 @@ async function performGlobalSearch(query) {
     if (r.domains && r.domains.length) {
       html += '<div class="command-group-title">🌐 Domains</div>';
       r.domains.forEach(d => {
-        html += `<div class="search-result-item" onclick="if (typeof openDomainDetail === 'function') openDomainDetail('${esc(d.name || d)}'); closeCommandPalette();">
+        html += `<div class="search-result-item" onclick="if (typeof openDomainDetail === 'function') openDomainDetail(${jsArg(d.name || d)}); closeCommandPalette();">
           <span class="search-result-type type-domain">DOMAIN</span>
           <span class="search-result-value font-mono"><strong>${esc(d.name || d)}</strong></span>
           <span class="search-result-meta">${esc(d.health_status || 'ACTIVE')}</span>
@@ -155,7 +155,7 @@ async function performGlobalSearch(query) {
     if (r.assets && r.assets.length) {
       html += '<div class="command-group-title">🌳 Assets & Subdomains</div>';
       r.assets.forEach(a => {
-        html += `<div class="search-result-item" onclick="if (typeof openAssetDetail === 'function') openAssetDetail('${esc(a.id || a.hostname)}'); closeCommandPalette();">
+        html += `<div class="search-result-item" onclick="if (typeof openAssetDetail === 'function') openAssetDetail(${jsArg(a.id || a.hostname)}); closeCommandPalette();">
           <span class="search-result-type type-asset">ASSET</span>
           <span class="search-result-value font-mono">${esc(a.hostname || a.ip)}</span>
           <span class="search-result-meta">${esc(a.ip || '-')}</span>
@@ -167,7 +167,7 @@ async function performGlobalSearch(query) {
     if (r.urls && r.urls.length) {
       html += '<div class="command-group-title">🔗 Discovered Endpoints</div>';
       r.urls.forEach(u => {
-        html += `<div class="search-result-item" onclick="window.open('${esc(u.url)}', '_blank'); closeCommandPalette();">
+        html += `<div class="search-result-item" onclick="window.open(${jsArg(u.url)}, '_blank'); closeCommandPalette();">
           <span class="search-result-type type-url">${esc(u.method || 'GET')}</span>
           <span class="search-result-value font-mono truncate">${esc(u.url)}</span>
           <span class="search-result-meta">${esc(u.status_code || 200)}</span>
@@ -191,7 +191,7 @@ async function performGlobalSearch(query) {
     if (r.findings && r.findings.length) {
       html += '<div class="command-group-title">🛡️ Security Findings</div>';
       r.findings.forEach(f => {
-        html += `<div class="search-result-item" onclick="if (typeof openFindingDetail === 'function') openFindingDetail('${esc(f.id)}'); closeCommandPalette();">
+        html += `<div class="search-result-item" onclick="if (typeof openFindingDetail === 'function') openFindingDetail(${jsArg(f.id)}); closeCommandPalette();">
           <span class="search-result-type type-finding ${f.severity ? f.severity.toLowerCase() : 'info'}">${esc(f.severity || 'FINDING')}</span>
           <span class="search-result-value"><strong>${esc(f.title || f.id)}</strong></span>
         </div>`;

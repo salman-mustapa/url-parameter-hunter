@@ -472,3 +472,11 @@ class ContractRegistry:
 
 
 contract_registry = ContractRegistry()
+
+# Function-level and tenant authorization share policy evidence, not status heuristics.
+from dataclasses import replace
+
+contract_registry.register(replace(
+    contract_registry.get("idor"), id="authorization", name="Authorization boundary violation",
+    cwe_id="CWE-863", validation_strategy="Compare the explicit actor/role/tenant/resource/action policy with repeated private-resource access",
+))

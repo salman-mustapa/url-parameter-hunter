@@ -26,6 +26,7 @@ class ResultService:
         self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=max(100, settings.result_event_queue_size))
         self._flush_task: Optional[asyncio.Task] = None
         self._dropped_events = 0
+        self._failed_events = 0
 
     def _ensure_worker(self) -> None:
         try:
@@ -40,56 +41,47 @@ class ResultService:
         while True:
             batch = []
             try:
-                # Wait for at least one item
                 item = await self._event_queue.get()
                 batch.append(item)
-                self._event_queue.task_done()
-
-                # Grab any additional items available up to 50
                 while len(batch) < 50:
                     try:
-                        extra = self._event_queue.get_nowait()
-                        batch.append(extra)
-                        self._event_queue.task_done()
-                    except asyncio.QueueEmpty:
-                        break
-
-                if batch:
-                    await self._flush_batch(batch)
-            except asyncio.CancelledError:
-                while not self._event_queue.empty():
-                    try:
                         batch.append(self._event_queue.get_nowait())
-                        self._event_queue.task_done()
                     except asyncio.QueueEmpty:
                         break
-                if batch:
-                    await self._flush_batch(batch)
-                break
-            except Exception as e:
-                logger.debug("Error in event flusher: %s", e)
-                await asyncio.sleep(0.5)
+                for attempt in range(3):
+                    try:
+                        await self._flush_batch(batch)
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            self._failed_events += len(batch)
+                            logger.exception("Event persistence failed after three attempts (%d events)", len(batch))
+                        else:
+                            await asyncio.sleep(0.05 * (attempt + 1))
+            except asyncio.CancelledError:
+                raise
+            finally:
+                for _ in batch:
+                    self._event_queue.task_done()
 
     async def _flush_batch(self, events: list[dict]) -> None:
         if not events:
             return
-        try:
-            async with AsyncSessionLocal() as db:
-                for ev_dict in events:
-                    scan_id = ev_dict.get("scan_id")
-                    if not scan_id:
-                        continue
-                    ev = ScanEvent(
-                        scan_id=scan_id,
-                        event_type=ev_dict.get("event_type", "system.event"),
-                        severity=ev_dict.get("severity", "info"),
-                        message=sanitize_text(ev_dict.get("message", "")),
-                        data=sanitize_text(ev_dict.get("data", {})),
-                    )
-                    db.add(ev)
-                await db.commit()
-        except Exception as err:
-            logger.debug("Batch event flush error: %s", err)
+        from app.reporting.redaction import RedactionEngine
+        async with AsyncSessionLocal() as db:
+            scan_ids = {item.get("scan_id") for item in events} - {None}
+            existing = set((await db.execute(select(Scan.id).where(Scan.id.in_(scan_ids)))).scalars())
+            for ev_dict in events:
+                if ev_dict.get("scan_id") not in existing:
+                    continue  # The scan may have been deleted before its last event drained.
+                db.add(ScanEvent(
+                    scan_id=ev_dict["scan_id"],
+                    event_type=ev_dict.get("event_type", "system.event"),
+                    severity=ev_dict.get("severity", "info"),
+                    message=RedactionEngine.redact_text(sanitize_text(ev_dict.get("message", ""))),
+                    data=RedactionEngine.redact_dict(sanitize_text(ev_dict.get("data", {}))),
+                ))
+            await db.commit()
 
     def make_event(self, scan_id: str, event_type: str, message: str, **data) -> dict:
         cat = event_type.split(".")[0].upper() if "." in event_type else event_type.upper()
@@ -153,12 +145,21 @@ class ResultService:
         """Flush queued events and terminate the background writer cleanly."""
         task = self._flush_task
         if task and not task.done():
+            await self.drain()
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
         self._flush_task = None
+
+    async def drain(self) -> None:
+        """Acknowledge events only after commit, and expose persistence failures."""
+        if not self._event_queue.empty():
+            self._ensure_worker()
+        await asyncio.wait_for(self._event_queue.join(), timeout=15)
+        if self._failed_events:
+            raise RuntimeError(f"{self._failed_events} events could not be persisted")
 
     async def upsert_asset(
         self,
@@ -229,7 +230,7 @@ class ResultService:
         finding_type: str,
         title: str,
         severity: str = "INFO",
-        confidence: str = "CONFIRMED",
+        confidence: str = "OBSERVED",
         cwe_id: Optional[str] = None,
         cve_id: Optional[str] = None,
         cvss_score: Optional[float] = None,
@@ -255,6 +256,14 @@ class ResultService:
         status: str = "OPEN",
         **kwargs: Any,
     ) -> Finding | None:
+        from app.validation.context import has_verified_proof
+        from app.reporting.redaction import RedactionEngine
+        validated_result = kwargs.get("validated_result")
+        if confidence == "CONFIRMED" or validation_status == "CONFIRMED" or exploitability_state in {"CONFIRMED", "EXPLOITABLE"}:
+            if not validated_result or not has_verified_proof(validated_result) or validated_result.status != "CONFIRMED":
+                confidence, validation_status, exploitability_state = "SUSPECTED", "INCONCLUSIVE", "INCONCLUSIVE"
+                evidence_level, evidence_score = "E0", min(evidence_score, 30)
+        evidence = RedactionEngine.redact_dict(evidence or kwargs.get("evidence_data") or {})
         clean_title = sanitize_text(title)
         clean_desc = sanitize_text(description)
         clean_ev = sanitize_text(evidence or {})
@@ -307,6 +316,7 @@ class ResultService:
                 existing.impact_matrix = impact_matrix
             if validation_status:
                 existing.validation_status = validation_status
+                existing.confidence = str(confidence)
             if cvss_score:
                 existing.cvss_score = cvss_score
             if evidence_level and existing.evidence_level in ("E0", "E1") and evidence_level in ("E2", "E3", "E4"):

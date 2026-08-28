@@ -19,7 +19,7 @@
             <h2 id="wsTargetName">Target: -</h2>
             <span id="wsStatusBadge" class="status-badge status-active">INITIALIZING</span>
             <span id="wsEngineBadge" class="pill pill-primary">⚡ Autonomous Adversary Engine</span>
-            <span id="wsLevelBadge" class="pill pill-danger">L4 HIGH RISK</span>
+            <span id="wsLevelBadge" class="pill pill-danger">LEVEL BELUM DIMUAT</span>
           </div>
           <div class="workspace-meta-row">
             <span class="meta-item font-mono" id="wsInvestigationId">ID: -</span>
@@ -51,7 +51,7 @@
             <option value="endpoints">🔗 URL & Endpoints Terpetakan</option>
           </optgroup>
           <optgroup label="🛡️ Kerentanan & Bukti (Findings & Proofs)">
-            <option value="findings">🔒 Temuan Keamanan Terkonfirmasi</option>
+            <option value="findings">🔒 Temuan & Status Validasi</option>
             <option value="chains">⛓️ Rantai Eksploitasi (Attack Chains)</option>
             <option value="evidence">📎 Bukti & Payload (Evidence)</option>
           </optgroup>
@@ -77,6 +77,26 @@
 
     <!-- TAB 1: OVERVIEW PANEL (§12) -->
     <div id="wsTabOverview" class="ws-tab-content active">
+
+      <details class="engagement-panel" id="reportProfilePanel">
+        <summary>Identitas &amp; branding laporan</summary>
+        <p class="text-muted">Disimpan per investigasi. Perubahan berlaku untuk export baru; file yang sudah dibuat tetap menjadi snapshot sebelumnya.</p>
+        <div class="engagement-grid">
+          <label>Instansi / perusahaan<input id="reportOrganization" maxlength="160" /></label>
+          <label>Program / engagement<input id="reportProgram" maxlength="160" /></label>
+          <label>Penguji<input id="reportAssessor" maxlength="120" /></label>
+          <label>Nama aset<input id="reportAssetName" maxlength="160" /></label>
+          <label>Jenis aset<select id="reportAssetType"><option>Web / API</option><option>Web</option><option>API</option><option>Server</option><option>Other</option></select></label>
+          <label>Versi aplikasi<input id="reportApplicationVersion" maxlength="100" /></label>
+          <label>Kontak penanggung jawab<input id="reportContact" maxlength="180" /></label>
+          <label>Klasifikasi<select id="reportClassification"><option>CONFIDENTIAL</option><option>INTERNAL</option><option>RESTRICTED</option></select></label>
+          <label>Konteks bisnis<textarea id="reportExecutiveContext" rows="3" maxlength="3000"></textarea></label>
+          <label>Logo instansi (PNG/JPEG, maks. 256 KiB)<input id="reportLogoFile" type="file" accept="image/png,image/jpeg" /><span id="reportLogoStatus" class="text-muted">Logo belum dilampirkan.</span></label>
+        </div>
+        <div class="engagement-actions"><button id="saveReportProfileBtn" type="button" class="btn btn-primary">Simpan identitas laporan</button><button id="clearReportLogoBtn" type="button" class="btn btn-secondary">Hapus logo</button></div>
+        <p id="reportProfileStatus" class="text-muted" role="status"></p>
+      </details>
+
       <!-- High Level Counter Cards -->
       <div class="ws-stats-grid">
         <div class="ws-stat-card">
@@ -97,7 +117,7 @@
         </div>
         <div class="ws-stat-card">
           <span class="ws-stat-val text-danger" id="wsStatFindings">0</span>
-          <span class="ws-stat-lbl">Confirmed Vulnerabilities</span>
+          <span class="ws-stat-lbl">Recorded Findings</span>
         </div>
         <div class="ws-stat-card">
           <span class="ws-stat-val" id="wsStatArtifacts">0</span>
@@ -139,7 +159,7 @@
           <h3 class="ws-box-title">🔬 Proof Quality & Confidence Matrix</h3>
           <div class="ws-conf-grid">
             <div class="ws-conf-item">
-              <span class="ws-conf-badge bg-confirmed">CONFIRMED (E3/E4)</span>
+              <span class="ws-conf-badge bg-confirmed">CONFIRMED + BUKTI E3/E4</span>
               <strong id="wsConfConfirmed">0</strong>
             </div>
             <div class="ws-conf-item">
@@ -468,9 +488,9 @@
         <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
         <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
       </div>
-      <div id="wsArtModalContent" class="artifact-preview-body">
-        Memuat pratinjau...
-      </div>
+        <div id="wsArtModalContent" class="artifact-preview-body">
+          Memuat pratinjau...
+        </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
@@ -492,7 +512,7 @@
       <!-- Dynamic PoC Dossier Content -->
     </div>
     <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">100% Deterministic Reproducible Security Proof</span>
+      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
       <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
     </div>
   </div>

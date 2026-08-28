@@ -92,7 +92,7 @@ function updateHistoryTelemetry(scans, domains) {
     if (s.root_domain) domainSet.add(s.root_domain);
     const p = s.progress || {};
     totalSubdomains += (p.assets || 0);
-    totalFindings += (p.findings || 0);
+    totalFindings += (s.severity_counts?.CRITICAL || 0) + (s.severity_counts?.HIGH || 0);
   });
 
   domains.forEach(d => {
@@ -149,13 +149,10 @@ function renderFilteredHistory() {
     const hasRunning = scans.some(s => (s.status || "").toUpperCase() === "RUNNING");
     const latestScan = scans[0];
 
-    // Determine Risk Rating
-    let riskLevel = "CLEAN";
-    let riskScore = 0;
-    if (totalFindings >= 10) { riskLevel = "CRITICAL"; riskScore = 4; }
-    else if (totalFindings > 0) { riskLevel = "HIGH"; riskScore = 3; }
-    else if (maxPorts > 20 || maxAssets > 50) { riskLevel = "MEDIUM"; riskScore = 2; }
-    else { riskLevel = "LOW"; riskScore = 1; }
+    // Severity derives from stored findings, never from asset or finding counts.
+    const severityOrder = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"];
+    const riskLevel = severityOrder.find(level => scans.some(s => (s.severity_counts?.[level] || 0) > 0)) || "NOT_RECORDED";
+    const riskScore = riskLevel === "NOT_RECORDED" ? 0 : severityOrder.length - severityOrder.indexOf(riskLevel);
 
     targetDomains.push({
       rootDomain,
@@ -279,13 +276,13 @@ function renderFilteredHistory() {
     block.innerHTML = `
       <!-- 1. Target Workspace Header (§36) -->
       <div class="target-card-header">
-        <div class="target-identity-wrap" onclick="openDomainDetail('${esc(td.rootDomain)}')">
+        <div class="target-identity-wrap" onclick="openDomainDetail(${jsArg(td.rootDomain)})">
           <div class="target-avatar">🌐</div>
           <div class="target-title-block">
             <div class="target-title-row">
               <h3 class="target-domain-name">${esc(td.rootDomain)}</h3>
               <span class="target-health-pill status-active">ACTIVE</span>
-              <span class="target-risk-badge ${riskBadgeClass}">${td.riskLevel} RISK</span>
+              <span class="target-risk-badge ${riskBadgeClass}">${esc(td.riskLevel)} FINDINGS</span>
               <span class="target-scope-pill">IN-SCOPE</span>
             </div>
             <div class="target-sub-meta">
@@ -297,7 +294,7 @@ function renderFilteredHistory() {
 
         <div class="target-header-actions">
           <button class="btn btn-primary btn-sm btn-rescan-target" title="Mulai Scan Baru pada Domain ini">⚡ Scan Ulang</button>
-          <button class="btn btn-secondary btn-sm" onclick="openDomainDetail('${esc(td.rootDomain)}')">🌐 360° Domain Intel ↗</button>
+          <button class="btn btn-secondary btn-sm" onclick="openDomainDetail(${jsArg(td.rootDomain)})">🌐 360° Domain Intel ↗</button>
           ${td.scans.length > 1 ? `<button class="btn btn-secondary btn-sm btn-toggle-diff" data-domain="${esc(td.rootDomain)}">⚖️ Diff Compare</button>` : ''}
           <button class="btn btn-secondary btn-sm btn-open-domain-report" data-domain="${esc(td.rootDomain)}">📑 Pusat Laporan</button>
         </div>
@@ -481,7 +478,7 @@ async function renderInlineDiff(domain, scanCurrent, scanPrevious, containerId) 
     container.innerHTML = `
       <div class="diff-summary-banner">
         <span>Bandingkan: <strong>#${esc(scanCurrent.slice(0, 16))}</strong> (Baru) vs <strong>#${esc(scanPrevious.slice(0, 16))}</strong> (Pembanding)</span>
-        <button class="btn btn-secondary btn-xs" onclick="switchViewTab('diff'); if (el('diffCurrentScanSelect')) el('diffCurrentScanSelect').value = '${esc(scanCurrent)}'; if (el('diffPreviousScanSelect')) el('diffPreviousScanSelect').value = '${esc(scanPrevious)}';">Buka di Diff Analyzer Penuh ↗</button>
+        <button class="btn btn-secondary btn-xs" onclick="switchViewTab('diff'); if (el('diffCurrentScanSelect')) el('diffCurrentScanSelect').value = ${jsArg(scanCurrent)}; if (el('diffPreviousScanSelect')) el('diffPreviousScanSelect').value = ${jsArg(scanPrevious)};">Buka di Diff Analyzer Penuh ↗</button>
       </div>
 
       <div class="diff-columns-grid">
@@ -672,7 +669,6 @@ async function openHistoricalScan(scanId, domain) {
     }
 
     const scanStatus = (scanObj.status || "completed").toUpperCase();
-    if (typeof updateScanStatusUI === "function") updateScanStatusUI(scanStatus);
 
     if (scanObj.profile && el("profileSelect")) {
       el("profileSelect").value = scanObj.profile;
@@ -690,6 +686,7 @@ async function openHistoricalScan(scanId, domain) {
     state.counters.params = prog.parameters ?? prog.total_parameters ?? 0;
     state.counters.techs = prog.technologies ?? prog.total_technologies ?? 0;
     state.counters.findings = prog.findings ?? prog.total_findings ?? 0;
+    if (typeof updateScanStatusUI === "function") updateScanStatusUI(scanStatus);
     if (typeof updateCounterDisplays === "function") updateCounterDisplays();
 
     // 4. If RUNNING or QUEUED, connect to live SSE stream & start timer with accurate elapsed time
@@ -731,10 +728,10 @@ async function openHistoricalScan(scanId, domain) {
         const normalizedStart = (timeStr.endsWith("Z") || timeStr.includes("+")) ? timeStr : timeStr + "Z";
         const start = new Date(normalizedStart).getTime();
         const endStr = scanObj.completed_at;
-        const end = endStr ? new Date((endStr.endsWith("Z") || endStr.includes("+")) ? endStr : endStr + "Z").getTime() : Date.now();
+        const end = endStr ? new Date((endStr.endsWith("Z") || endStr.includes("+")) ? endStr : endStr + "Z").getTime() : NaN;
         const elapsed = Math.max(0, Math.round((end - start) / 1000));
         el("scanTime").classList.remove("hidden");
-        el("scanTime").textContent = `⏱ ${formatTime(elapsed)}`;
+        el("scanTime").textContent = Number.isFinite(elapsed) ? `⏱ ${formatTime(elapsed)}` : "⏱ Durasi tidak tercatat";
       }
     }
 
@@ -930,7 +927,7 @@ async function openDomainDetail(domainName, updateUrl = true) {
     const subList = el('domainSubdomainList');
     if (subList) {
       subList.innerHTML = (d.subdomains || []).map(s =>
-        `<span class="tag-item" onclick="openDomainDetail('${esc(s)}')">${esc(s)}</span>`
+        `<span class="tag-item" onclick="openDomainDetail(${jsArg(s)})">${esc(s)}</span>`
       ).join('') || '<span class="empty-msg">No subdomains found</span>';
     }
 
@@ -956,7 +953,7 @@ async function openDomainDetail(domainName, updateUrl = true) {
     const findList = el('domainFindingsList');
     if (findList) {
       findList.innerHTML = (d.findings || []).map(f => `
-        <div class="finding-card" onclick="openFindingDetail('${esc(f.id)}')">
+        <div class="finding-card" onclick="openFindingDetail(${jsArg(f.id)})">
           <span class="severity-badge severity-${(f.severity||'info').toLowerCase()}">${esc(f.severity||'INFO')}</span>
           <span class="finding-card-title">${esc(f.title || f.id)}</span>
           <span class="status-badge status-${(f.status||'open').toLowerCase()}">${esc(f.status||'OPEN')}</span>
@@ -1023,14 +1020,14 @@ async function openAssetDetail(assetId, updateUrl = true) {
     // URLs
     const uList = el('assetURLList');
     if (uList) {
-      uList.innerHTML = (a.urls || []).slice(0, 50).map(u => `<div class="url-item mono"><span class="badge status-${u.status_code || 200}">${u.status_code || 200}</span> <a href="${esc(u.url)}" target="_blank">${esc(u.url)}</a></div>`).join('') || '<span class="empty-msg">No URLs</span>';
+      uList.innerHTML = (a.urls || []).slice(0, 50).map(u => `<div class="url-item mono"><span class="badge status-${u.status_code || 200}">${u.status_code || 200}</span> <a href="${esc(safeLink(u.url))}" target="_blank">${esc(u.url)}</a></div>`).join('') || '<span class="empty-msg">No URLs</span>';
     }
 
     // Findings
     const fList = el('assetFindingsList');
     if (fList) {
       fList.innerHTML = (a.findings || []).map(f => `
-        <div class="finding-card" onclick="openFindingDetail('${esc(f.id)}')">
+        <div class="finding-card" onclick="openFindingDetail(${jsArg(f.id)})">
           <span class="severity-badge severity-${(f.severity||'info').toLowerCase()}">${esc(f.severity||'INFO')}</span>
           <span class="finding-card-title">${esc(f.title || f.id)}</span>
           <span class="status-badge status-${(f.status||'open').toLowerCase()}">${esc(f.status||'OPEN')}</span>
@@ -1042,7 +1039,9 @@ async function openAssetDetail(assetId, updateUrl = true) {
   }
 }
 
+let findingDetailRequest = 0;
 async function openFindingDetail(findingId, updateUrl = true) {
+  const requestId = ++findingDetailRequest;
   if (updateUrl) {
     switchViewTab('findingDetail', { id: findingId });
   }
@@ -1050,7 +1049,9 @@ async function openFindingDetail(findingId, updateUrl = true) {
 
   try {
     const res = await authFetch(`${API_BASE}/findings/${encodeURIComponent(findingId)}/detail`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const f = await res.json();
+    if (requestId !== findingDetailRequest) return;
 
     if (el('findingDetailTitle')) el('findingDetailTitle').textContent = `🔒 ${esc(f.title || findingId)}`;
     if (el('findingBreadcrumbName')) el('findingBreadcrumbName').textContent = f.title || findingId;
@@ -1065,7 +1066,7 @@ async function openFindingDetail(findingId, updateUrl = true) {
     }
 
     // Evidence Level & Score (V5 §2, §26)
-    const eLevel = f.evidence_level || "E3";
+    const eLevel = f.evidence_level || "E0";
     if (el('findingEvidenceLevelBadge')) {
       el('findingEvidenceLevelBadge').className = `badge-${eLevel.toLowerCase()}`;
       el('findingEvidenceLevelBadge').textContent = `${eLevel} — ${eLevel === 'E3' ? 'IMPACT PROOF' : (eLevel === 'E2' ? 'REPRODUCIBLE' : 'INDICATOR')}`;
@@ -1074,7 +1075,7 @@ async function openFindingDetail(findingId, updateUrl = true) {
       el('findingConfidenceBadge').textContent = `CONFIDENCE: ${formatConfidence(f.confidence)}`;
     }
     if (el('findingScoreBadge')) {
-      el('findingScoreBadge').textContent = `EVIDENCE SCORE: ${f.evidence_score || 85}/100`;
+      el('findingScoreBadge').textContent = `EVIDENCE SCORE: ${f.evidence_score ?? 0}/100`;
     }
 
     // Meta items
@@ -1088,37 +1089,37 @@ async function openFindingDetail(findingId, updateUrl = true) {
     // Impact Matrix (V5 §29)
     const mat = f.impact_matrix || {};
     if (el('imConfidentiality')) {
-      const c = (mat.confidentiality || 'HIGH').toUpperCase();
+      const c = (mat.confidentiality || 'NOT_RECORDED').toUpperCase();
       el('imConfidentiality').textContent = c;
       el('imConfidentiality').className = `im-val ${c.toLowerCase()}`;
     }
     if (el('imIntegrity')) {
-      const i = (mat.integrity || 'MEDIUM').toUpperCase();
+      const i = (mat.integrity || 'NOT_RECORDED').toUpperCase();
       el('imIntegrity').textContent = i;
       el('imIntegrity').className = `im-val ${i.toLowerCase()}`;
     }
     if (el('imAvailability')) {
-      const a = (mat.availability || 'LOW').toUpperCase();
+      const a = (mat.availability || 'NOT_RECORDED').toUpperCase();
       el('imAvailability').textContent = a;
       el('imAvailability').className = `im-val ${a.toLowerCase()}`;
     }
     if (el('imAuthBypass')) {
-      el('imAuthBypass').textContent = mat.auth_bypass || (f.title && f.title.toLowerCase().includes('auth') ? 'POSSIBLE' : 'NO');
+      el('imAuthBypass').textContent = mat.auth_bypass || 'NOT_RECORDED';
     }
     if (el('imDataExposure')) {
-      const de = (mat.data_exposure || (f.severity === 'CRITICAL' ? 'HIGH' : 'MEDIUM')).toUpperCase();
+      const de = (mat.data_exposure || 'NOT_RECORDED').toUpperCase();
       el('imDataExposure').textContent = de;
       el('imDataExposure').className = `im-val ${de.toLowerCase()}`;
     }
 
     // Local AI Intelligence & MITRE ATT&CK Integration (V4 & V5)
     const evData = f.evidence || {};
-    const aiConf = evData.ai_confidence_score || (f.status === 'CONFIRMED' ? 95 : 85);
-    const aiDec = evData.ai_triage_decision || f.status || 'CONFIRMED';
-    const fpRisk = evData.false_positive_probability || (aiDec === 'CONFIRMED' ? 0.02 : 0.12);
+    const aiConf = evData.ai_confidence_score ?? null;
+    const aiDec = evData.ai_triage_decision || 'NOT_RECORDED';
+    const fpRisk = evData.false_positive_probability ?? null;
 
     if (el('aiConfidenceChip')) {
-      el('aiConfidenceChip').textContent = `🤖 AI CONFIDENCE: ${aiConf}%`;
+      el('aiConfidenceChip').textContent = `🤖 AI CONFIDENCE: ${aiConf == null ? "Belum dinilai" : aiConf + "%"}`;
       el('aiConfidenceChip').className = aiConf >= 80 ? 'pill pill-success' : 'pill pill-warn';
     }
     if (el('aiTriageDecision')) {
@@ -1126,24 +1127,17 @@ async function openFindingDetail(findingId, updateUrl = true) {
       el('aiTriageDecision').style.color = aiDec === 'CONFIRMED' ? '#10b981' : (aiDec === 'FALSE_POSITIVE' ? '#ef4444' : '#38bdf8');
     }
     if (el('aiFpRisk')) {
-      el('aiFpRisk').textContent = `${(fpRisk * 100).toFixed(1)}% (${fpRisk < 0.1 ? 'Sangat Rendah / Clean' : 'Terkontrol'})`;
+      el('aiFpRisk').textContent = fpRisk == null ? "Belum diukur" : `${(fpRisk * 100).toFixed(1)}% (estimasi model)`;
     }
     if (el('aiProofMode')) {
-      el('aiProofMode').textContent = 'Controlled Non-Destructive Proof';
+      el('aiProofMode').textContent = f.report_quality?.status || 'NEEDS_REVIEW';
     }
 
     // MITRE ATT&CK Matrix Chips
     if (el('aiMitreContainer')) {
-      const mitreList = evData.mitre_attack || [
-        {
-          technique_id: "T1190",
-          technique_name: "Exploit Public-Facing Application",
-          tactic: "Initial Access",
-          mitre_url: "https://attack.mitre.org/techniques/T1190/",
-        }
-      ];
+      const mitreList = evData.mitre_attack || [];
       el('aiMitreContainer').innerHTML = mitreList.map(m => `
-        <a href="${esc(m.mitre_url || 'https://attack.mitre.org/')}" target="_blank" class="tag-item" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; background:#0f172a; border:1px solid #334155; padding:4px 10px; border-radius:6px; font-size:11px; color:#38bdf8;">
+        <a href="${esc(safeLink(m.mitre_url || 'https://attack.mitre.org/'))}" target="_blank" class="tag-item" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; background:#0f172a; border:1px solid #334155; padding:4px 10px; border-radius:6px; font-size:11px; color:#38bdf8;">
           <span style="font-weight:700; color:#34d399;">${esc(m.technique_id)}</span>
           <span style="color:#f8fafc;">${esc(m.technique_name || m.name || 'Technique')}</span>
           <span style="font-size:10px; color:#94a3b8; background:#1e293b; padding:1px 5px; border-radius:3px;">${esc(m.tactic || 'ATT&CK')}</span>
@@ -1154,10 +1148,10 @@ async function openFindingDetail(findingId, updateUrl = true) {
 
     // Plain English & Root Cause
     if (el('findingExecutiveDesc')) {
-      el('findingExecutiveDesc').textContent = f.executive_explanation || f.description || "Temuan keamanan terverifikasi dalam lingkup pengujian terotorisasi.";
+      el('findingExecutiveDesc').textContent = f.executive_explanation || f.description || "Deskripsi belum dicatat.";
     }
     if (el('findingRootCause')) {
-      el('findingRootCause').textContent = f.root_cause || f.technical_details || "Deviasi kontrol parameter atau input sanitasi tidak memadai.";
+      el('findingRootCause').textContent = f.root_cause || f.technical_details || "Akar masalah belum dibuktikan.";
     }
 
     if (el('findingTechDetails')) el('findingTechDetails').textContent = f.technical_details || f.description || 'Tidak ada analisis teknis tambahan.';
@@ -1165,232 +1159,33 @@ async function openFindingDetail(findingId, updateUrl = true) {
 
     window._currentFindingId = findingId;
 
-    // Evidence List with Deep Proof Hierarchy & Multi-Tab PoC Inspector
+    // The detail page uses the same evidence contract as the report hub.
     if (el('findingEvidence')) {
-      const rawEv = Array.isArray(f.evidence) ? f.evidence : (f.evidence && Object.keys(f.evidence).length ? [f.evidence] : []);
-      let evList = rawEv;
-      if (!evList.length || (!evList[0].url && !evList[0].poc_curl && !evList[0].poc)) {
-        const hostStr = (f.asset && f.asset.hostname) || (f.location && f.location.replace(/^https?:\/\//, '').split('/')[0]) || 'target.local';
-        const fallbackUrl = (f.location && f.location.startsWith('http')) ? f.location : `https://${hostStr}/`;
-        const paramStr = (f.evidence && f.evidence.parameter) ? `?${f.evidence.parameter}=test` : '';
-        const fullUrl = fallbackUrl.includes('?') ? fallbackUrl : (fallbackUrl + paramStr);
-        evList = [{
-          type: f.finding_code || "AUTOMATED_EVIDENCE_RECORD",
-          url: fullUrl,
-          poc_curl: (f.evidence && f.evidence.poc_curl) || (f.evidence && f.evidence.poc) || `curl -i -s -k '${fullUrl}'`,
-          actual: f.actual_result || f.description || "Controlled security boundary validation confirmed deviation from secure baseline.",
-          evidence_level: f.evidence_level || "E2",
-          proof_level: (f.evidence_level === "E4" || (f.evidence_score && f.evidence_score >= 90)) ? "P3" : "P2",
-          checklist: (f.evidence && f.evidence.checklist) || [
-            "Non-destructive parameter probe executed",
-            "Differential response analysis verified",
-            "Automated security quality gate passed"
-          ],
-          reproduction_steps: [
-            `1. Akses target host ${fallbackUrl}`,
-            `2. Kirim permintaan verifikasi non-destruktif dengan cURL atau HTTP client.`,
-            `3. Amati status respon dan pastikan kontrol sanitasi diterapkan.`
-          ]
-        }];
-      }
-      
-      el('findingEvidence').innerHTML = evList.map((e, idx) => {
-        const evLvl = f.evidence_level || e.evidence_level || "E2";
-        let defaultP = "P2";
-        if (evLvl === "E4" || (f.evidence_score && f.evidence_score >= 95) || e.dashboard_verified) defaultP = "P4";
-        else if (evLvl === "E3" || (f.evidence_score && f.evidence_score >= 80) || (f.severity === "CRITICAL")) defaultP = "P3";
-        else if (evLvl === "E2" || (f.evidence_score && f.evidence_score >= 50) || (f.severity === "HIGH")) defaultP = "P2";
-        else defaultP = "P1";
-
-        const pLevel = e.proof_level || (f.status === "CONFIRMED" ? "P3" : defaultP);
-        const pocCurl = e.poc_curl || e.poc || (e.url ? `curl -i -s -k '${e.url}'` : "");
-        const pocRaw = e.poc_raw_http || e.raw_wire || "";
-        const targetUrl = e.url || e.target_url || f.location || "https://example.com";
-        const reproSteps = e.reproduction_steps || [
-          `1. Send request to ${targetUrl}`,
-          `2. Inspect response status and boundary violation evidence.`
-        ];
-
-        // Generate Python httpx reproduction script
-        const pythonScript = `import httpx
-
-url = "${targetUrl}"
-# Non-destructive reproduction protocol
-headers = ${JSON.stringify(e.headers || {"User-Agent": "Antigravity-Proof"}, null, 4)}
-data = ${e.payload_executed ? JSON.stringify(e.payload_executed, null, 4) : "None"}
-
-with httpx.Client(verify=False, timeout=10.0, follow_redirects=False) as client:
-    resp = client.request(method="${e.method || (e.payload_executed ? 'POST' : 'GET')}", url=url, headers=headers, data=data)
-    print(f"Status Code: {resp.status_code}")
-    print(f"Response Length: {len(resp.text)}")
-    print(f"Verified Evidence: ${esc(e.actual || 'Confirmed')}")
-`;
-
-        // Generate HTTPie command
-        const httpieCmd = `http ${e.payload_executed ? 'POST' : 'GET'} '${targetUrl}' ${e.payload_executed ? Object.entries(e.payload_executed).map(([k,v]) => `${k}='${v}'`).join(' ') : ''}`;
-
-        // Proof Ladder Stepper Visuals
-        const ladderStages = [
-          { code: "P0", label: "Reflection", desc: "Input observed in response" },
-          { code: "P1", label: "Indicator", desc: "Database error / syntax anomaly" },
-          { code: "P2", label: "Behavioral Diff", desc: "Input influence proven via mutation" },
-          { code: "P3", label: "Metadata Proof", desc: "Canary / Engine signature demonstrated" },
-          { code: "P4", label: "Boundary Breached", desc: "Authenticated Dashboard / Protected State" },
-        ];
-
-        const activePIdx = parseInt(pLevel.replace("P", "") || "1", 10);
-
-        const ladderHtml = `
-          <div class="proof-ladder-container" style="background:#090f1f; border:1px solid #1e293b; border-radius:8px; padding:14px; margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <span style="font-size:11px; font-weight:700; color:#38bdf8; text-transform:uppercase;">🏆 Proof Quality Ladder:</span>
-              <span class="severity-badge severity-${activePIdx >= 3 ? 'critical' : (activePIdx >= 2 ? 'high' : 'medium')}">STAGE ${pLevel} ACHIEVED</span>
-            </div>
-            <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:6px;">
-              ${ladderStages.map((s, sIdx) => `
-                <div style="text-align:center; padding:8px 4px; border-radius:6px; background:${sIdx <= activePIdx ? 'rgba(16, 185, 129, 0.15)' : 'rgba(30, 41, 59, 0.4)'}; border:1px solid ${sIdx <= activePIdx ? '#10b981' : '#334155'};">
-                  <div style="font-size:11px; font-weight:700; color:${sIdx <= activePIdx ? '#34d399' : '#64748b'};">${s.code}</div>
-                  <div style="font-size:10px; color:${sIdx <= activePIdx ? '#f8fafc' : '#475569'}; font-weight:600;">${s.label}</div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        `;
-
-        // Dashboard Verification Card (if auth finding)
-        let dashboardBox = "";
-        if (e.dashboard_verified || e.dashboard_url) {
-          dashboardBox = `
-            <div class="dashboard-verified-box" style="background:#052e16; border:1px solid #10b981; border-radius:8px; padding:12px; margin-bottom:14px;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <strong style="color:#34d399; font-size:12px;">✅ PROTECTED ADMIN DASHBOARD ENTRY VERIFIED</strong>
-                <span class="pill pill-success" style="font-size:10px;">HTTP ${e.dashboard_status || 200} OK</span>
-              </div>
-              <div style="font-size:11px; color:#e2e8f0; margin-bottom:4px;">
-                <span class="text-muted">Authenticated Target:</span> <code style="color:#38bdf8;">${esc(e.dashboard_url || '-')}</code>
-              </div>
-              <div style="font-size:11px; color:#e2e8f0; margin-bottom:4px;">
-                <span class="text-muted">Dashboard Title:</span> <strong>${esc(e.dashboard_title || 'Admin Panel')}</strong>
-              </div>
-              ${e.successful_username_injection ? `<div style="font-size:11px; color:#e2e8f0;"><span class="text-muted">Successful Injected Credential:</span> <code style="color:#f59e0b;">${esc(e.successful_username_injection)}</code></div>` : ''}
-            </div>
-          `;
-        }
-
-        // Differential Telemetry Table (Baseline vs Injected)
-        let diffTable = "";
-        if (e.baseline_status !== undefined || e.response_status !== undefined) {
-          diffTable = `
-            <div style="background:#090f1f; border:1px solid #1e293b; border-radius:8px; padding:12px; margin-bottom:14px;">
-              <div style="font-size:11px; font-weight:700; color:#38bdf8; margin-bottom:8px; text-transform:uppercase;">⚖️ Differential Response Telemetry (Baseline vs Mutated):</div>
-              <table class="detail-table" style="font-size:11px; margin:0;">
-                <thead>
-                  <tr>
-                    <th>Metrik</th>
-                    <th>Un-mutated Baseline State</th>
-                    <th>Controlled Injected State</th>
-                    <th>Evaluasi Perilaku</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><strong>HTTP Status Code</strong></td>
-                    <td><span class="pill-muted">HTTP ${e.baseline_status || 401}</span></td>
-                    <td><span class="pill pill-success">HTTP ${e.response_status || e.status_code || 200}</span></td>
-                    <td><span style="color:#10b981;">✓ Status Alteration Confirmed</span></td>
-                  </tr>
-                  <tr>
-                    <td><strong>Redirect Target</strong></td>
-                    <td><code>${esc(e.baseline_location || 'N/A')}</code></td>
-                    <td><code>${esc(e.redirect_location || e.dashboard_url || 'N/A')}</code></td>
-                    <td><span style="color:#10b981;">✓ Boundary Redirect Verified</span></td>
-                  </tr>
-                  <tr>
-                    <td><strong>Session Cookie</strong></td>
-                    <td><span class="pill-muted">None / Expired</span></td>
-                    <td><code>${esc(e.cookie_sample || 'Issued')}</code></td>
-                    <td><span style="color:#10b981;">✓ Authorization Token Granted</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          `;
-        }
-
-        // Multi-Tab PoC Reproduction Container
-        const tabIdPrefix = `poc_tab_${idx}_`;
-        const pocMultiTab = `
-          <div class="poc-multitab-box" style="background:#040914; border:1px solid #1e293b; border-radius:8px; padding:14px; margin-bottom:14px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1px solid #1e293b; padding-bottom:8px;">
-              <div style="display:flex; gap:6px;">
-                <button class="btn btn-primary btn-xs active-poc-tab" onclick="document.querySelectorAll('.poc-tab-content-${idx}').forEach(t => t.style.display='none'); document.getElementById('${tabIdPrefix}curl').style.display='block';">cURL</button>
-                <button class="btn btn-secondary btn-xs" onclick="document.querySelectorAll('.poc-tab-content-${idx}').forEach(t => t.style.display='none'); document.getElementById('${tabIdPrefix}python').style.display='block';">Python (httpx)</button>
-                <button class="btn btn-secondary btn-xs" onclick="document.querySelectorAll('.poc-tab-content-${idx}').forEach(t => t.style.display='none'); document.getElementById('${tabIdPrefix}httpie').style.display='block';">HTTPie</button>
-                <button class="btn btn-secondary btn-xs" onclick="document.querySelectorAll('.poc-tab-content-${idx}').forEach(t => t.style.display='none'); document.getElementById('${tabIdPrefix}raw').style.display='block';">Raw Wire HTTP</button>
-                <button class="btn btn-secondary btn-xs" onclick="document.querySelectorAll('.poc-tab-content-${idx}').forEach(t => t.style.display='none'); document.getElementById('${tabIdPrefix}steps').style.display='block';">Protokol Langkah (1-2-3)</button>
-              </div>
-              <button class="btn btn-ghost btn-xs" onclick="const codeEl = document.getElementById('${tabIdPrefix}curl_code'); if (codeEl) { navigator.clipboard.writeText(codeEl.innerText || codeEl.textContent); if (typeof showToast==='function') showToast('cURL PoC disalin ke clipboard!', 'success'); }">📋 Copy cURL</button>
-            </div>
-
-            <!-- Tab 1: cURL -->
-            <div id="${tabIdPrefix}curl" class="poc-tab-content-${idx}">
-              <pre style="margin:0; font-size:11px; color:#34d399; background:#020617; padding:12px; border-radius:6px; overflow-x:auto;"><code id="${tabIdPrefix}curl_code">${esc(pocCurl)}</code></pre>
-            </div>
-
-            <!-- Tab 2: Python -->
-            <div id="${tabIdPrefix}python" class="poc-tab-content-${idx}" style="display:none;">
-              <pre style="margin:0; font-size:11px; color:#38bdf8; background:#020617; padding:12px; border-radius:6px; overflow-x:auto;"><code>${esc(pythonScript)}</code></pre>
-            </div>
-
-            <!-- Tab 3: HTTPie -->
-            <div id="${tabIdPrefix}httpie" class="poc-tab-content-${idx}" style="display:none;">
-              <pre style="margin:0; font-size:11px; color:#a78bfa; background:#020617; padding:12px; border-radius:6px; overflow-x:auto;"><code>${esc(httpieCmd)}</code></pre>
-            </div>
-
-            <!-- Tab 4: Raw Wire HTTP -->
-            <div id="${tabIdPrefix}raw" class="poc-tab-content-${idx}" style="display:none;">
-              <pre style="margin:0; font-size:11px; color:#cbd5e1; background:#020617; padding:12px; border-radius:6px; overflow-x:auto;"><code>${esc(pocRaw || `GET ${new URL(targetUrl).pathname} HTTP/1.1\r\nHost: ${new URL(targetUrl).hostname}\r\nUser-Agent: Antigravity-Proof\r\n\r\n`)}</code></pre>
-            </div>
-
-            <!-- Tab 5: Reproduction Steps -->
-            <div id="${tabIdPrefix}steps" class="poc-tab-content-${idx}" style="display:none;">
-              <div style="background:#020617; padding:12px; border-radius:6px; font-size:12px; color:#e2e8f0;">
-                <ol style="margin:0; padding-left:18px;">
-                  ${reproSteps.map(st => `<li style="margin-bottom:6px;">${esc(st)}</li>`).join('')}
-                </ol>
-              </div>
-            </div>
-          </div>
-        `;
-
-        let screenshotHtml = "";
-        if (e.screenshot_url || e.screenshot_path) {
-          const sUrl = e.screenshot_url || e.screenshot_path;
-          screenshotHtml = `
-            <div style="margin-bottom:12px;">
-              <button class="btn btn-secondary btn-xs" onclick="showScreenshotLightbox('${esc(sUrl)}', '${esc(f.title || 'Visual Evidence')}', 'SHA-256: ${esc(e.sha256 || '')}')">📸 Lihat Visual Browser Proof (Full Lightbox Canvas)</button>
-            </div>
-          `;
-        }
-
-        return `
-          <div class="evidence-dossier-card" style="border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: rgba(15, 23, 42, 0.7);">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-              <span style="font-weight:700; color:#10B981; font-size:13px;">🔒 ${esc(e.type || 'EVIDENCE_TELEMETRY')}</span>
-              <span class="mono" style="font-size:11px; color:#94a3b8;">Cryptographic Hash: ${esc((e.sha256 || 'SHA-256 Verified').substring(0, 24))}...</span>
-            </div>
-            ${ladderHtml}
-            ${dashboardBox}
-            ${diffTable}
-            ${pocMultiTab}
-            ${screenshotHtml}
-            <details style="margin-top:8px;">
-              <summary style="font-size:11px; color:#94a3b8; cursor:pointer; font-weight:600;">🔍 Lihat Detail Raw Payload & Wire Telemetry Data</summary>
-              <pre style="margin-top:8px; font-size:11px; color:#94a3b8; background:#020617; padding:12px; border-radius:6px; overflow-x:auto; max-height:260px;">${esc(JSON.stringify(e, null, 2))}</pre>
-            </details>
-          </div>
-        `;
-      }).join('') || '<span class="empty-msg">Belum ada lampiran evidence terisolasi</span>';
+      const d = f.poc_dossier || {};
+      const quality = f.report_quality || {status:"NEEDS_REVIEW", missing:[]};
+      el('findingEvidence').innerHTML = `<p><strong>${esc(quality.status)}</strong> - Belum lengkap: ${esc(quality.missing.join(', ') || 'Tetap perlu tinjauan manusia')}</p>
+        <p>Template replay bukan bukti keberhasilan. Skor HTTP saja tidak membuktikan celah.</p>
+        <h4>Request tersimpan</h4><pre class="code-box-mini">${esc(d.raw_http_request || 'Belum direkam')}</pre>
+        <h4>Response tersimpan</h4><pre class="code-box-mini">${esc(d.raw_http_response || 'Belum direkam')}</pre>
+        <h4>Langkah reproduksi / daftar pemeriksaan</h4><ol>${(d.reproduction_steps || []).map(step=>`<li>${esc(step)}</li>`).join('')}</ol>
+        <h4>cURL replay</h4><pre class="code-box-mini">${esc(d.curl_command || 'Belum direkam')}</pre>
+        <button class="btn btn-secondary" onclick="openFindingPocDossier(${jsArg(f.id)})">Buka dossier lengkap</button>`;
+    }
+    const lifecycleSelect = el('findingLifecycleSelect');
+    const lifecycleButton = el('findingTransitionBtn');
+    if (lifecycleSelect && lifecycleButton) {
+      lifecycleSelect.innerHTML = (f.allowed_transitions || []).map(status=>`<option value="${esc(status)}">${esc(status)}</option>`).join('');
+      lifecycleButton.disabled = !(f.allowed_transitions || []).length;
+      lifecycleButton.onclick = async () => {
+        lifecycleButton.disabled = true;
+        try {
+          const response = await authFetch(`${API_BASE}/findings/${encodeURIComponent(findingId)}/transition?next_state=${encodeURIComponent(lifecycleSelect.value)}`, {method:'POST'});
+          if (!response.ok) throw new Error(apiError(await response.json(), `HTTP ${response.status}`));
+          workspaceCache.clear();
+          await openFindingDetail(findingId, false);
+          showToast('Status temuan diperbarui.', 'success');
+        } catch(error) { showToast(error.message, 'danger'); lifecycleButton.disabled = false; }
+      };
     }
 
     // Discovered Artifacts & Schema Intelligence (V9.1)
@@ -1405,6 +1200,7 @@ with httpx.Client(verify=False, timeout=10.0, follow_redirects=False) as client:
         if (scanIdToQuery) {
           const artRes = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanIdToQuery)}/artifacts/all`);
           const allArts = await artRes.json();
+          if (requestId !== findingDetailRequest) return;
           if (Array.isArray(allArts) && allArts.length > 0) {
             const targetHost = (f.asset && f.asset.hostname) || f.asset_hostname || '';
             const targetUrl = (f.evidence && f.evidence.url) || f.location || '';
@@ -1453,7 +1249,7 @@ with httpx.Client(verify=False, timeout=10.0, follow_redirects=False) as client:
                         </div>
                       </div>
                       <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                        <button class="btn btn-secondary btn-xs" onclick="openArtifactDetailModal('${esc(art.id)}')">🔍 Inspect Intelligence</button>
+                        <button class="btn btn-secondary btn-xs" onclick="openArtifactDetailModal(${jsArg(art.id)})">🔍 Inspect Intelligence</button>
                         <a href="${API_BASE}/artifacts/${encodeURIComponent(art.id)}/export-sanitized" target="_blank" class="btn btn-primary btn-xs">🛡️ Download Sanitized Export</a>
                         <a href="${API_BASE}/artifacts/${encodeURIComponent(art.id)}/download" target="_blank" class="btn btn-secondary btn-xs">📥 Download Raw Quarantined File</a>
                       </div>
@@ -1521,6 +1317,13 @@ with httpx.Client(verify=False, timeout=10.0, follow_redirects=False) as client:
           try {
             const r = await authFetch(`${API_BASE}/findings/${encodeURIComponent(findingId)}/retest`, { method: "POST" });
             const resRetest = await r.json();
+            if (!r.ok) throw new Error(apiError(resRetest, `HTTP ${r.status}`));
+            if (resRetest.retest_result === "INCONCLUSIVE") {
+              if (el('retestStatusBanner')) el('retestStatusBanner').classList.remove('hidden');
+              if (el('retestStatusText')) el('retestStatusText').textContent = "INCONCLUSIVE: " + resRetest.verdict;
+              showToast("Retest belum dapat menyimpulkan hasil. Status temuan tetap.", "warning");
+              return;
+            }
             if (el('retestStatusBanner')) {
               el('retestStatusBanner').classList.remove('hidden');
               const comp = resRetest.comparison_result || resRetest.comparison || resRetest;

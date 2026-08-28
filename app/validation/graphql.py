@@ -13,6 +13,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -72,7 +74,7 @@ class GraphqlValidator(BaseDeepValidator):
         if not any(target_url.endswith(ep) for ep in GRAPHQL_ENDPOINTS):
             endpoints_to_test.extend([urljoin(base, ep) for ep in GRAPHQL_ENDPOINTS])
 
-        async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
             for ep_url in endpoints_to_test:
                 try:
                     baseline = await self.capture_baseline(ep_url, method="POST", data=json.dumps({"query": "{ __typename }"}))

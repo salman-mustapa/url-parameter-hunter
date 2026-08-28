@@ -15,6 +15,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -75,7 +77,7 @@ class SstiValidator(BaseDeepValidator):
         parsed = urlparse(target_url)
         params = parse_qs(parsed.query)
 
-        async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
             for param_name in params.keys():
                 for probe_name, payload, expected_eval, engine_hint in SSTI_PROBES:
                     # Mutate single parameter

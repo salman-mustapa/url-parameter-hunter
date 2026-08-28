@@ -14,6 +14,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -67,7 +69,7 @@ class CorsValidator(BaseDeepValidator):
             ("subdomain_prefix", f"https://{domain}.evil.com"),
         ]
 
-        async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
             for test_name, test_origin in test_origins:
                 headers = {"Origin": test_origin}
                 try:

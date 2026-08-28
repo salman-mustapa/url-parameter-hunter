@@ -13,6 +13,8 @@ directory listings, and exposed database/codebase backups:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import logging
 import re
 from dataclasses import dataclass, field
@@ -239,7 +241,7 @@ class InfoDisclosureValidator:
 
         visited_urls: Set[str] = set()
 
-        async with httpx.AsyncClient(timeout=_TIMEOUT, verify=False, follow_redirects=True) as client:
+        async with ValidationHTTPClient(timeout=_TIMEOUT, verify=False, follow_redirects=True) as client:
             # 1. Test standard probe definitions
             for probe in self.PROBE_DEFINITIONS:
                 url = origin + probe["path"]

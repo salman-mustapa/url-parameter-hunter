@@ -101,7 +101,7 @@ function renderArtifactsMatrix() {
         </td>
         <td><code class="text-xs">${esc(shortSha)}</code></td>
         <td>
-          <button class="btn btn-secondary btn-xs" onclick="openArtifactDetailModal('${esc(art.id)}')">🔍 Inspect Intelligence</button>
+          <button class="btn btn-secondary btn-xs" onclick="openArtifactDetailModal(${jsArg(art.id)})">🔍 Inspect Intelligence</button>
         </td>
       </tr>
     `;

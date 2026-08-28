@@ -10,21 +10,15 @@ Abstract base class establishing mandatory methods:
 from __future__ import annotations
 
 import abc
-import hashlib
 import logging
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.validation.contracts.model import VulnerabilityContract
 from app.validation.contracts.registry import contract_registry
 from app.validation.evidence.typed_evidence import (
-    DifferentialObservation,
-    EvidenceType,
-    TypedEvidenceItem,
     TypedEvidencePackage,
 )
 from app.validation.result import NormalizedValidationResult
-from app.validation.safety.engine import safety_engine
 from app.validation.state_machine import FindingLifecycleState
 
 logger = logging.getLogger("validation.validators.base")
@@ -35,15 +29,18 @@ class BaseVulnerabilityValidator(abc.ABC):
 
     def __init__(self, vulnerability_type: str) -> None:
         self.vulnerability_type = vulnerability_type
-        self.contract: Optional[VulnerabilityContract] = contract_registry.get(vulnerability_type)
+        self.contract: VulnerabilityContract | None = contract_registry.get(vulnerability_type)
         if not self.contract:
-            logger.warning("No formal contract found in registry for vulnerability type: %s", vulnerability_type)
+            logger.warning(
+                "No formal contract found in registry for vulnerability type: %s",
+                vulnerability_type,
+            )
 
     @abc.abstractmethod
     async def validate(
         self,
         target_url: str,
-        finding_context: Dict[str, Any],
+        finding_context: dict[str, Any],
         session_context: Any,
     ) -> NormalizedValidationResult:
         """Executes vulnerability-specific validation flow."""
@@ -53,7 +50,7 @@ class BaseVulnerabilityValidator(abc.ABC):
     def evaluate_evidence(
         self,
         evidence_pkg: TypedEvidencePackage,
-    ) -> Tuple[bool, str, int]:
+    ) -> tuple[bool, str, int]:
         """Evaluates whether technical evidence fulfills contract rules.
         Returns: (is_confirmed, status_state, confidence_score)
         """
@@ -80,8 +77,15 @@ class BaseVulnerabilityValidator(abc.ABC):
         req_met = True
         for req in self.contract.required_evidence:
             # Check if any item title/description or differential matches requirement
-            if not any(req.lower() in item.title.lower() or req.lower() in item.description.lower() for item in evidence_pkg.items):
-                if not (req.lower().startswith("baseline") and evidence_pkg.differential and evidence_pkg.differential.baseline_response):
+            if not any(
+                req.lower() in item.title.lower() or req.lower() in item.description.lower()
+                for item in evidence_pkg.items
+            ):
+                if not (
+                    req.lower().startswith("baseline")
+                    and evidence_pkg.differential
+                    and evidence_pkg.differential.baseline_response
+                ):
                     req_met = False
 
         if not req_met:
@@ -92,7 +96,7 @@ class BaseVulnerabilityValidator(abc.ABC):
     def create_empty_result(
         self,
         target_url: str,
-        finding_context: Dict[str, Any],
+        finding_context: dict[str, Any],
         status: str = FindingLifecycleState.INCONCLUSIVE.value,
         confidence: str = "SUSPECTED",
         reason: str = "Insufficient evidence",
@@ -112,3 +116,6 @@ class BaseVulnerabilityValidator(abc.ABC):
             actual_result=reason,
             expected_result="Evidence proves vulnerability mechanism according to technical contract.",
         )
+
+
+VulnerabilityValidator = BaseVulnerabilityValidator

@@ -88,6 +88,11 @@ class ReasoningResult:
 
 
 class AIReasoningLayer:
+    async def reason_from_evidence(self, payload, provider=None):
+        """Evidence-only entrypoint alongside the existing application-model analysis."""
+        from app.ai.evidence_reasoning import EvidenceReasoner, ReasoningInput
+        return await EvidenceReasoner().reason(ReasoningInput.model_validate(payload), provider)
+
     """Unified AI reasoning coordinator.
 
     Sits above the deterministic core and drives intelligent

@@ -13,6 +13,8 @@ Implements V9.1 Precondition -> Baseline -> Controlled Test -> Proof pipeline:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import hashlib
 import logging
 import re
@@ -134,7 +136,7 @@ class SSRFValidator(BaseDeepValidator):
             "feed", "api_url", "service_url", "site", "domain", "endpoint", "remote"
         }
 
-        async with httpx.AsyncClient(verify=False, timeout=6.0, follow_redirects=False) as client:
+        async with ValidationHTTPClient(verify=False, timeout=6.0, follow_redirects=False) as client:
             for param_name in params.keys():
                 if param_name.lower() not in candidate_params and not any(p_val.startswith(("http://", "https://", "//")) for p_val in params[param_name]):
                     continue  # Skip non-SSRF routing parameters (e.g. cmd, mod)

@@ -11,6 +11,8 @@ Implements the mandatory 6-stage V9.1 validation flow:
 
 from __future__ import annotations
 
+from app.validation.safety.legacy import ValidationHTTPClient
+
 import abc
 import hashlib
 import logging
@@ -106,7 +108,7 @@ class BaseDeepValidator(abc.ABC):
         clean_headers = headers or {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Antigravity-V9/1.0"}
         start_t = datetime.now(timezone.utc)
         try:
-            async with httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=False) as client:
+            async with ValidationHTTPClient(verify=False, timeout=8.0, follow_redirects=False) as client:
                 resp = await client.request(method=method, url=target_url, headers=clean_headers, data=data)
                 elapsed_ms = (datetime.now(timezone.utc) - start_t).total_seconds() * 1000.0
                 body = resp.text

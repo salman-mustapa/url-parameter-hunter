@@ -1,3 +1,4 @@
+from app.validation.safety.legacy import ValidationHTTPClient
 """Open Redirect Validation Engine (§22).
 
 Detects unvalidated redirects. Non-destructive.
@@ -85,7 +86,7 @@ class OpenRedirectValidator:
             query_params = parse_qs(parsed.query, keep_blank_values=True)
             flat_params = {k: v[0] if isinstance(v, list) and v else "" for k, v in query_params.items()}
 
-            async with httpx.AsyncClient(
+            async with ValidationHTTPClient(
                 timeout=self.timeout,
                 follow_redirects=False,
                 verify=False,

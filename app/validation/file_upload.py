@@ -1,3 +1,4 @@
+from app.validation.safety.legacy import ValidationHTTPClient
 """File Upload Validation Engine (V5 §16, V4 §84).
 
 Tests file upload security via non-malicious controlled test files.
@@ -174,7 +175,7 @@ class FileUploadValidator:
     ) -> Optional[FileUploadCandidate]:
         """Attempt to upload a controlled test file and analyze the response."""
         try:
-            async with httpx.AsyncClient(
+            async with ValidationHTTPClient(
                 timeout=self.timeout, follow_redirects=True, verify=False
             ) as client:
                 files = {field_name: (filename, content, content_type)}

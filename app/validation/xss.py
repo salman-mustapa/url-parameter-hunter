@@ -1,3 +1,4 @@
+from app.validation.safety.legacy import ValidationHTTPClient
 """XSS Validation Engine — Deep Exploitation Evidence Architecture.
 
 Enhanced pipeline:
@@ -211,7 +212,7 @@ class XSSValidator:
             query_params = parse_qs(parsed.query, keep_blank_values=True)
             flat_params = {k: v[0] if isinstance(v, list) and v else "" for k, v in query_params.items()}
 
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
+            async with ValidationHTTPClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
                 if location == "query":
                     flat_params[param_name] = "harmless_test_value_12345"
                     resp = await client.get(base_url, params=flat_params, headers=headers or {})
@@ -248,7 +249,7 @@ class XSSValidator:
             query_params = parse_qs(parsed.query, keep_blank_values=True)
             flat_params = {k: v[0] if isinstance(v, list) and v else "" for k, v in query_params.items()}
 
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
+            async with ValidationHTTPClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
                 if location == "query":
                     flat_params[param_name] = REFLECTION_CANARY
                     resp = await client.get(base_url, params=flat_params, headers=headers or {})
@@ -329,7 +330,7 @@ class XSSValidator:
             query_params = parse_qs(parsed.query, keep_blank_values=True)
             flat_params = {k: v[0] if isinstance(v, list) and v else "" for k, v in query_params.items()}
 
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
+            async with ValidationHTTPClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
                 # Test angle bracket encoding: <bh7x5s>
                 if location == "query":
                     flat_params[param_name] = "<bh7x5s>"
@@ -406,7 +407,7 @@ class XSSValidator:
             tag_match_pattern = re.compile(payload_def["tag_match"], re.I)
 
             try:
-                async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
+                async with ValidationHTTPClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
                     if location == "query":
                         flat_params[param_name] = payload
                         resp = await client.get(base_url, params=flat_params, headers=headers or {})
@@ -520,7 +521,7 @@ class XSSValidator:
             query_params = parse_qs(parsed.query, keep_blank_values=True)
             flat_params = {k: v[0] if isinstance(v, list) and v else "" for k, v in query_params.items()}
 
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
+            async with ValidationHTTPClient(timeout=self.timeout, follow_redirects=True, verify=False) as client:
                 if location == "query":
                     flat_params[param_name] = "test"
                     resp = await client.get(base_url, params=flat_params, headers=headers or {})
