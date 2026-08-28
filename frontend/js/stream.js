@@ -61,6 +61,11 @@ function renderStreamEvents() {
     return normalizedCat.includes(state.currentCategoryFilter);
   });
 
+  if (!state.events.length) {
+    container.innerHTML = `<div class="event-empty-msg"><span class="empty-icon">📋</span><p>Tidak ada live stream log aktif untuk sesi ini.<br><span style="font-size:11px;color:#94a3b8;">Ringkasan telemetri, hierarki aset, dan temuan kerentanan tersedia di tab sebelah kanan.</span></p></div>`;
+    return;
+  }
+
   if (!filtered.length) {
     container.innerHTML = `<div class="event-empty-msg"><p>Tidak ada event untuk filter <strong>${esc(state.currentCategoryFilter)}</strong>.</p></div>`;
     return;

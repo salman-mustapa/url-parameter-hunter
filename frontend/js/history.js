@@ -265,7 +265,8 @@ function renderFilteredHistory() {
           </div>
 
           <div class="session-actions-toolbar">
-            <button class="btn btn-primary btn-xs btn-open-dash" title="Buka Sesi Ini di Dashboard">🎯 Dashboard</button>
+            <button class="btn btn-primary btn-xs btn-rescan-session font-bold" data-target="${esc(scanTarget)}" data-profile="${esc(s.profile || 'deep')}" title="Scan Ulang Target Sesi #${esc(s.id.slice(0, 16))} (${esc(scanTarget)})">⚡ Scan Ulang</button>
+            <button class="btn btn-secondary btn-xs btn-open-dash" title="Buka Sesi Ini di Dashboard">🎯 Dashboard</button>
             <button class="btn btn-secondary btn-xs btn-open-report" title="Buka di Pusat Laporan">📑 Laporan</button>
             ${priorScanId ? `<button class="btn btn-secondary btn-xs btn-quick-diff" data-scan-a="${esc(s.id)}" data-scan-b="${esc(priorScanId)}" title="Bandingkan dengan Scan Sebelumnya">⚖️ Diff vs Prior</button>` : ''}
             <button class="btn btn-secondary btn-xs btn-export-json" title="Unduh Evidence Bundle JSON">📦 JSON</button>
@@ -357,9 +358,7 @@ function renderFilteredHistory() {
     // Bind Domain-level event handlers
     block.querySelector(".btn-rescan-target")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (el("targetInput")) el("targetInput").value = td.rootDomain;
-      switchViewTab("dashboard");
-      if (typeof startScan === "function") startScan();
+      triggerRescan(td.rootDomain, "deep");
     });
 
     block.querySelector(".btn-open-domain-report")?.addEventListener("click", (e) => {
@@ -398,6 +397,13 @@ function renderFilteredHistory() {
     block.querySelectorAll(".scan-session-row").forEach(row => {
       const sid = row.dataset.id;
       const dom = row.dataset.domain;
+
+      row.querySelector(".btn-rescan-session")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const target = e.currentTarget.dataset.target || dom;
+        const profile = e.currentTarget.dataset.profile || "deep";
+        triggerRescan(target, profile);
+      });
 
       row.querySelector(".btn-open-dash")?.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -591,6 +597,23 @@ async function deleteHistoricalScan(scanId, domain) {
   }
 }
 
+function triggerRescan(target, profile) {
+  if (!target) return;
+  state.activeScanId = null;
+  state.events = [];
+  state.activeTarget = target;
+  state.currentTarget = target;
+  
+  if (el("targetInput")) el("targetInput").value = target;
+  if (profile && el("profileSelect")) el("profileSelect").value = profile;
+  
+  switchViewTab("dashboard", { newScanTarget: target, profile: profile || "deep", skipAutoLoad: true });
+  
+  if (typeof startScan === "function") {
+    startScan();
+  }
+}
+
 async function openHistoricalScan(scanId, domain) {
   const isSameScan = state.activeScanId === scanId;
   state.activeScanId = scanId;
@@ -607,10 +630,10 @@ async function openHistoricalScan(scanId, domain) {
   }
 
   // Switch tab view to Dashboard
-  switchViewTab("dashboard", { noReload: true });
+  switchViewTab("dashboard", { scan_id: scanId, target: domain, noReload: true, skipAutoLoad: true });
 
   if (typeof updateBreadcrumbUI === "function") {
-    updateBreadcrumbUI("dashboard", { scan_id: scanId });
+    updateBreadcrumbUI("dashboard", { scan_id: scanId, target: domain });
   }
 
   // If different scan or no cached events, display smooth loader
@@ -635,7 +658,9 @@ async function openHistoricalScan(scanId, domain) {
     const scanData = await scanRes.json();
     const eventsData = await eventsRes.json();
 
-    const exactTarget = (scanData.options && (scanData.options.target_url || scanData.options.target_host)) || scanData.target_url || scanData.target_host || scanData.root_domain;
+    const scanObj = scanData.scan || scanData;
+    const exactTarget = (scanObj.options && (scanObj.options.target_url || scanObj.options.target_host)) 
+      || scanObj.target_url || scanObj.target_host || scanObj.root_domain || domain || "";
     if (exactTarget) {
       state.activeTarget = exactTarget;
       state.currentTarget = exactTarget;
@@ -643,34 +668,34 @@ async function openHistoricalScan(scanId, domain) {
       if (el("dashReportTarget")) el("dashReportTarget").textContent = exactTarget;
     }
     if (typeof updateBreadcrumbUI === "function") {
-      updateBreadcrumbUI("dashboard", { scan_id: scanId });
+      updateBreadcrumbUI("dashboard", { scan_id: scanId, target: exactTarget });
     }
 
-    const scanStatus = (scanData.status || "completed").toUpperCase();
+    const scanStatus = (scanObj.status || "completed").toUpperCase();
     if (typeof updateScanStatusUI === "function") updateScanStatusUI(scanStatus);
 
-    if (scanData.profile && el("profileSelect")) {
-      el("profileSelect").value = scanData.profile;
+    if (scanObj.profile && el("profileSelect")) {
+      el("profileSelect").value = scanObj.profile;
     }
 
     // 2. Render events
-    state.events = Array.isArray(eventsData) ? eventsData : [];
+    state.events = Array.isArray(eventsData) ? eventsData : (eventsData?.events || []);
     if (typeof renderStreamEvents === "function") renderStreamEvents();
 
     // 3. Update telemetry counters from progress
-    const prog = scanData.progress || {};
-    state.counters.assets = prog.assets || 0;
-    state.counters.ports = prog.ports || 0;
-    state.counters.urls = prog.urls || 0;
-    state.counters.params = prog.parameters || 0;
-    state.counters.techs = prog.technologies || 0;
-    state.counters.findings = prog.findings || 0;
+    const prog = scanObj.progress || scanData.progress || scanData.statistics || {};
+    state.counters.assets = prog.assets ?? prog.total_assets ?? 0;
+    state.counters.ports = prog.ports ?? prog.total_ports ?? 0;
+    state.counters.urls = prog.urls ?? prog.total_urls ?? 0;
+    state.counters.params = prog.parameters ?? prog.total_parameters ?? 0;
+    state.counters.techs = prog.technologies ?? prog.total_technologies ?? 0;
+    state.counters.findings = prog.findings ?? prog.total_findings ?? 0;
     if (typeof updateCounterDisplays === "function") updateCounterDisplays();
 
     // 4. If RUNNING or QUEUED, connect to live SSE stream & start timer with accurate elapsed time
     if (scanStatus === "RUNNING" || scanStatus === "QUEUED") {
       let initialSecs = 0;
-      const timeStr = scanData.started_at || scanData.created_at;
+      const timeStr = scanObj.started_at || scanObj.created_at;
       if (timeStr) {
         const normalizedTimeStr = (timeStr.endsWith("Z") || timeStr.includes("+")) ? timeStr : timeStr + "Z";
         const start = new Date(normalizedTimeStr).getTime();
@@ -701,11 +726,11 @@ async function openHistoricalScan(scanId, domain) {
       if (state.es) { state.es.close(); state.es = null; }
       clearInterval(state.treePollInterval);
       clearInterval(state.statusPollInterval);
-      const timeStr = scanData.started_at || scanData.created_at;
+      const timeStr = scanObj.started_at || scanObj.created_at;
       if (timeStr && el("scanTime")) {
         const normalizedStart = (timeStr.endsWith("Z") || timeStr.includes("+")) ? timeStr : timeStr + "Z";
         const start = new Date(normalizedStart).getTime();
-        const endStr = scanData.completed_at;
+        const endStr = scanObj.completed_at;
         const end = endStr ? new Date((endStr.endsWith("Z") || endStr.includes("+")) ? endStr : endStr + "Z").getTime() : Date.now();
         const elapsed = Math.max(0, Math.round((end - start) / 1000));
         el("scanTime").classList.remove("hidden");

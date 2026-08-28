@@ -2035,9 +2035,8 @@ async def admin_system_health(
     }
 
 
-@router.get("/scans/{scan_id}")
 @router.get("/investigations/{scan_id}")
-async def get_scan(
+async def get_investigation_bundle(
     scan_id: str,
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),

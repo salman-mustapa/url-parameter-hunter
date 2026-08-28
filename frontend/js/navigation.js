@@ -144,6 +144,22 @@ function switchViewTab(tabName, params = {}, pushState = true) {
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (typeof syncActiveScansBar === "function") syncActiveScansBar();
 
+    if (params.newScanTarget) {
+      state.activeScanId = null;
+      state.activeTarget = params.newScanTarget;
+      state.currentTarget = params.newScanTarget;
+      if (el("targetInput")) el("targetInput").value = params.newScanTarget;
+      if (params.profile && el("profileSelect")) el("profileSelect").value = params.profile;
+      if (typeof updateBreadcrumbUI === "function") {
+        updateBreadcrumbUI("dashboard", { target: params.newScanTarget });
+      }
+      return;
+    }
+
+    if (params.skipAutoLoad) {
+      return;
+    }
+
     const targetScanId = params.scan_id || state.activeScanId;
 
     if (targetScanId) {
