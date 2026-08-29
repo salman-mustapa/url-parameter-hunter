@@ -87,6 +87,9 @@ function esc(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+window.esc = esc;
+window.escapeHtml = esc;
+window.el = el;
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60).toString().padStart(2, "0");

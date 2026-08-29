@@ -6,6 +6,17 @@
 let copilotHistory = [];
 let isCopilotSending = false;
 
+function _safeEsc(text) {
+  if (typeof window.esc === "function") return window.esc(text);
+  if (typeof esc === "function") return esc(text);
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function initCopilot() {
   const toggleBtn = el("openCopilotBtn");
   const closeBtn = el("closeCopilotBtn");
@@ -14,43 +25,44 @@ function initCopilot() {
   const inputEl = el("copilotInput");
 
   if (toggleBtn && drawer) {
-    toggleBtn.addEventListener("click", () => {
+    toggleBtn.onclick = () => {
       drawer.classList.toggle("hidden");
       if (!drawer.classList.contains("hidden")) {
         inputEl?.focus();
         scrollCopilotBottom();
       }
-    });
+    };
   }
 
   if (closeBtn && drawer) {
-    closeBtn.addEventListener("click", () => {
+    closeBtn.onclick = () => {
       drawer.classList.add("hidden");
-    });
+    };
   }
 
   if (sendBtn && inputEl) {
-    sendBtn.addEventListener("click", () => {
+    sendBtn.onclick = () => {
       sendCopilotMessage();
-    });
+    };
 
-    inputEl.addEventListener("keydown", (e) => {
+    inputEl.onkeydown = (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         sendCopilotMessage();
       }
-    });
+    };
   }
 
   // Quick Action Chips in Copilot Drawer
   document.querySelectorAll(".copilot-prompt-chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
+    chip.onclick = () => {
       const prompt = chip.dataset.prompt || chip.textContent.trim();
-      if (inputEl) {
-        inputEl.value = prompt;
+      const inEl = el("copilotInput");
+      if (inEl) {
+        inEl.value = prompt;
         sendCopilotMessage();
       }
-    });
+    };
   });
 }
 
@@ -69,13 +81,14 @@ async function sendCopilotMessage() {
   scrollCopilotBottom();
 
   // Show typing indicator
-  const typingId = "copilotTypingIndicator";
+  const typingId = "copilotTypingIndicator_" + Date.now();
   appendCopilotTyping(typingId);
   scrollCopilotBottom();
 
   try {
     const activeScanId = state?.activeScanId || null;
-    const res = await authFetch(`${API_BASE}/ai/copilot/chat`, {
+    const fetchFn = typeof authFetch === "function" ? authFetch : fetch;
+    const res = await fetchFn(`${API_BASE}/ai/copilot/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -88,7 +101,8 @@ async function sendCopilotMessage() {
     removeCopilotEl(typingId);
 
     if (!res.ok) {
-      appendCopilotBubble("assistant", "⚠️ Maaf, terjadi kendala saat memproses permintaan AI Copilot. Silakan coba lagi.");
+      const errData = await res.json().catch(() => ({ detail: "Gagal memproses pesan." }));
+      appendCopilotBubble("assistant", `⚠️ ${errData.detail || "Terjadi kendala saat memproses permintaan AI Copilot. Silakan coba lagi."}`);
       return;
     }
 
@@ -120,7 +134,7 @@ function appendCopilotBubble(role, text, source, model) {
   header.className = "copilot-bubble-header";
   header.innerHTML = isUser
     ? `<span class="bubble-sender">👤 Anda</span>`
-    : `<span class="bubble-sender">🤖 Hunter Aja Copilot</span> ${model ? `<span class="bubble-model-tag">[${escapeHtml(model)}]</span>` : ''}`;
+    : `<span class="bubble-sender">🤖 Hunter Aja Copilot</span> ${model ? `<span class="bubble-model-tag">[${_safeEsc(model)}]</span>` : ''}`;
 
   const content = document.createElement("div");
   content.className = "copilot-bubble-content markdown-rendered";
@@ -162,7 +176,7 @@ function scrollCopilotBottom() {
 
 function renderMarkdownSimple(md) {
   if (!md) return "";
-  let html = escapeHtml(md);
+  let html = _safeEsc(md);
 
   // Code blocks ```lang ... ```
   html = html.replace(/```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
@@ -218,7 +232,9 @@ window.sendCopilotMessage = sendCopilotMessage;
 window.copyCopilotCode = copyCopilotCode;
 
 if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initCopilot);
+  } else {
     initCopilot();
-  });
+  }
 }

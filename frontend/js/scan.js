@@ -162,9 +162,9 @@ async function syncActiveScansBar() {
       return `
         <button type="button" class="active-scan-chip ${isCurrent ? 'active' : ''}" 
                 onclick="switchActiveScan('${s.id}')"
-                title="Beralih ke pemantauan scan: ${escapeHtml(targetLabel)} (${st})">
+                title="Beralih ke pemantauan scan: ${esc(targetLabel)} (${st})">
           <span class="chip-status-dot" style="background:${dotColor}"></span>
-          <span>📍 ${escapeHtml(targetLabel)}</span>
+          <span>📍 ${esc(targetLabel)}</span>
           <span style="font-size: 0.72rem; opacity: 0.85;">[${st}]</span>
         </button>
       `;
