@@ -213,11 +213,15 @@ function switchAccountTab(tabName) {
     linked: "accTabLinked",
     tokens: "accTabTokens",
     preferences: "accTabPreferences",
+    notifications: "accTabNotifications",
   };
 
   document.querySelectorAll(".acc-pane").forEach((pane) => pane.classList.add("hidden"));
   const targetPane = el(paneMap[tabName]);
   if (targetPane) targetPane.classList.remove("hidden");
+  if (tabName === "notifications" && typeof loadUserNotificationsConfig === "function") {
+    loadUserNotificationsConfig();
+  }
 }
 
 function showAccountAlert(msg, isSuccess = false) {

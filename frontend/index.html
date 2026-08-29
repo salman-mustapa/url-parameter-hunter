@@ -164,385 +164,66 @@
       <!-- ================================================================= -->
       <!-- VIEW 1: HOME / LANDING PAGE (Modern, Clean, Captivating & Engaging) -->
       <!-- ================================================================= -->
-      <section id="viewHome" class="tab-view active">
-        <!-- Hero Header Section -->
-        <div class="hero-section">
-          <div class="hero-badge">
+      <!-- VIEW 1: HOME / LANDING PAGE (Modern Cyber Luxury, Dual-Pane Hero & Level L4 Focused) -->
+<section id="viewHome" class="tab-view active">
+  <!-- Hero Header Section -->
+  <div class="hero-section">
+    <div class="hero-badge">
+      <span class="live-dot pulse"></span>
+      <span>⚡ LEVEL L4 ULTIMATE AUTONOMOUS RECON ENGINE</span>
+    </div>
+    <h1 class="hero-title">
+      Autonomous Attack Surface & Parameter Intelligence <span class="highlight">Level L4 Ultimate</span>
+    </h1>
+    <p class="hero-desc">
+      Platform reconnaissance cerdas dan pentest otonom berkekuatan penuh untuk Bug Hunter & Security Analyst. Pemetaan subdomain aktif, deep Katana crawling, dynamic parameter mining, secret leak detection (.env, .sql, cloud keys), active canary fuzzing, dan AI threat reasoning dalam satu pipeline terpadu.
+    </p>
+  </div>
+
+  <!-- Dual-Pane Interactive Hero Section -->
+  <div class="hero-dual-grid">
+    <!-- Left Column: Quick Recon Launcher -->
+    <div id="homeTrialSection" class="card sketch-card control-card home-trial-card">
+      <div class="control-header">
+        <div class="control-title-wrap">
+          <span class="section-icon">⚡</span>
+          <div>
+            <h2>Reconnaissance Sandbox</h2>
+            <div class="pill-muted" style="font-size: 12.5px; margin-top: 2px;">
+              ⚡ Jalankan pemindaian otonom Level L4 secara instan pada target domain Anda.
+            </div>
+          </div>
+        </div>
+        <div class="status-wrap">
+          <span id="trialScanStatus" class="pill pill-running">L4 ACTIVE</span>
+        </div>
+      </div>
+
+      <div class="control-form">
+        <div class="input-group-target">
+          <label for="trialTargetInput">Target Domain / Host URL</label>
+          <div class="input-with-icon">
+            <span class="input-icon">🌐</span>
+            <input id="trialTargetInput" type="text"
+              placeholder="Masukkan target (contoh: example.com atau https://app.target.com)" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="input-group-option">
+          <label for="trialScopeModeSelect">Target Scope & Mode</label>
+          <select id="trialScopeModeSelect" class="custom-select">
+            <option value="recursive" selected>🌐 Full Domain Recon (Buru Semua Subdomain, Ports, Endpoints & Leaks)</option>
+            <option value="targeted">🎯 Focused Single Endpoint (Audit Khusus URL / Host Ini)</option>
+          </select>
+        </div>
+
+                <div class="input-group-option engine-status-group">
+          <label>Engine Capabilities & Mode</label>
+          <div class="engine-status-pill l4-badge-glow">
             <span class="live-dot pulse"></span>
-            <span>NEXT-GEN ATTACK SURFACE INTELLIGENCE</span>
-          </div>
-          <h1 class="hero-title">
-            Temukan Attack Surface & Parameter Tersembunyi <span class="highlight">dalam Hitungan Detik</span>
-          </h1>
-          <p class="hero-desc">
-            Platform otomatisasi reconnaissance cerdas untuk Bug Hunter & Security Analyst. Validasi subdomain aktif,
-            crawling endpoint, ekstraksi parameter dinamis, dan deteksi risiko dalam satu antarmuka terpadu.
-          </p>
-        </div>
-
-        <!-- Quick Scan Sandbox Box -->
-        <div id="homeTrialSection" class="card sketch-card control-card home-trial-card">
-          <div class="control-header">
-            <div class="control-title-wrap">
-              <span class="section-icon">⚡</span>
-              <div>
-                <h2>Reconnaissance Sandbox</h2>
-                <div class="pill-muted" style="font-size: 12.5px; margin-top: 2px;">
-                  ⚡ Uji coba reconnaissance langsung pada target domain Anda secara instan.
-                </div>
-              </div>
-            </div>
-            <div class="status-wrap">
-              <span id="trialScanStatus" class="pill pill-running">READY</span>
-            </div>
-          </div>
-
-          <div class="control-form">
-            <div class="input-group-target">
-              <label for="trialTargetInput">Target Domain / Host URL</label>
-              <div class="input-with-icon">
-                <span class="input-icon">🌐</span>
-                <input id="trialTargetInput" type="text"
-                  placeholder="Masukkan target (contoh: app.example.invalid; gunakan target yang berizin)" autocomplete="off" />
-              </div>
-            </div>
-
-            <div class="input-group-option">
-              <label for="trialScopeModeSelect">Target Scope & Mode</label>
-              <select id="trialScopeModeSelect" class="custom-select">
-                <option value="recursive" selected>🌐 Full Domain Recon (Buru Semua Subdomain, Ports, Endpoints & Leaks)</option>
-                <option value="targeted">🎯 Focused Single Endpoint (Audit Khusus URL / Host Ini)</option>
-              </select>
-            </div>
-
-            <div class="input-group-option engine-status-group">
-              <label>AI & Security Engine</label>
-              <div class="engine-status-pill">
-                <span class="live-dot pulse"></span>
-                <span>Recon Aktif • Level L2</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="control-actions">
-            <button id="startTrialBtn" class="btn btn-primary btn-lg">
-              <span class="btn-icon">🚀</span> MULAI SCAN SEKARANG
-            </button>
-            <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
-              <span class="btn-icon">🔑</span> Masuk untuk Mengatur Scan
-            </button>
-          </div>
-
-          <!-- Quick Suggestion Chips -->
-          <div class="quick-samples-row">
-            <span class="quick-sample-label">Contoh format (bukan izin pengujian):</span>
-            <button type="button" class="sample-chip" data-sample="example.invalid">⚡ example.invalid</button>
-            <button type="button" class="sample-chip" data-sample="app.example.invalid">🌐 app.example.invalid</button>
-            <button type="button" class="sample-chip" data-sample="api.example.invalid">👥 api.example.invalid</button>
-            <button type="button" class="sample-chip" data-sample="test.example.invalid">🎯 test.example.invalid</button>
+            <span>⚡ Level L4 Ultimate • Autonomous Pentest & Deep Recon Engine (Full Power)</span>
           </div>
         </div>
-
-
-
-        <!-- Trust Signals & Architecture Highlights -->
-        <div class="trust-signals-bar">
-          <div class="trust-signal-item">
-            <span class="trust-icon">🛡️</span>
-            <div>
-              <strong>Scope & Izin Eksplisit</strong>
-              <p>Jalankan pemeriksaan hanya pada target dengan izin pemilik sistem.</p>
-            </div>
-          </div>
-          <div class="trust-signal-item">
-            <span class="trust-icon">🌳</span>
-            <div>
-              <strong>Active DNS Validation</strong>
-              <p>Hanya subdomain aktif & tervalidasi yang ditampilkan di pohon aset.</p>
-            </div>
-          </div>
-          <div class="trust-signal-item">
-            <span class="trust-icon">🧩</span>
-            <div>
-              <strong>Dynamic Parameter Mining</strong>
-              <p>Ekstraksi otomatis form action, query string, dan hidden inputs.</p>
-            </div>
-          </div>
-          <div class="trust-signal-item">
-            <span class="trust-icon">🔒</span>
-            <div>
-              <strong>Akses Hasil Terproteksi</strong>
-              <p>Login diperlukan; hasil scan hanya tersedia bagi pemilik dan administrator.</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Interactive 3-Step "How It Works" Flow -->
-        <div class="how-it-works-section">
-          <div class="section-heading-center">
-            <span class="badge-pill">Cara Kerja Engine</span>
-            <h2>Alur Reconnaissance 3 Langkah</h2>
-            <p>Bagaimana Hunter Aja memetakan attack surface target Anda secara menyeluruh dalam hitungan menit.</p>
-          </div>
-
-          <div class="workflow-steps-grid">
-            <div class="card sketch-card workflow-step-card">
-              <div class="step-badge">Langkah 1</div>
-              <div class="step-icon">🎯</div>
-              <h3>Input Scope Target</h3>
-              <p>Masukkan root domain (misal <code>example.com</code>) atau host spesifik (misal
-                <code>api.example.com</code>) dengan opsi recursive subdomain.</p>
-
-            </div>
-
-            <div class="card sketch-card workflow-step-card">
-              <div class="step-badge">Langkah 2</div>
-              <div class="step-icon">⚡</div>
-              <h3>Parallel Discovery Engine</h3>
-              <p>Engine menjalankan DNS active validation, TCP port scanning, TLS cert audit, web endpoint crawling, dan
-                parameter mining secara paralel.</p>
-            </div>
-
-            <div class="card sketch-card workflow-step-card">
-              <div class="step-badge">Langkah 3</div>
-              <div class="step-icon">📊</div>
-              <h3>Visual Graph & Triaging</h3>
-              <p>Hasil pemindaian tersusun rapi dalam pohon aset hierarkis, live event stream, matriks port global,
-                serta klasifikasi tingkat keparahan risiko.</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Visual Feature Showcase Grid -->
-        <div id="homeFeaturesSection" class="features-showcase-section">
-          <div class="section-heading-center">
-            <span class="badge-pill">Fitur Unggulan</span>
-            <h2>Platform Intelijen Penetrasi Modern</h2>
-            <p>Dirancang dengan visual yang clean, intuitif, dan responsif untuk bug hunter dan penetration tester
-              profesional.</p>
-          </div>
-
-          <div class="features-grid">
-            <!-- Feature 1 -->
-            <div class="card sketch-card feature-card">
-              <div class="feature-icon">🌳</div>
-              <h3>Dynamic Subdomain Tree</h3>
-              <p>Mengumpulkan subdomain dari Certificate Transparency (crt.sh), AlienVault OTX, HackerTarget, dan
-                brute-force wordlists dengan validasi DNS dinamis.</p>
-              <div class="feature-mini-preview">
-                <div class="mini-node-item root"><span class="dot-active"></span> target.com <span
-                    class="mini-tag">ROOT</span></div>
-                <div class="mini-node-item sub"><span class="dot-active"></span> api.target.com <span
-                    class="mini-tag">104.21.4.1</span></div>
-                <div class="mini-node-item sub"><span class="dot-active"></span> app.target.com <span
-                    class="mini-tag">103.111.20.5</span></div>
-              </div>
-
-            </div>
-
-            <!-- Feature 2 -->
-            <div class="card sketch-card feature-card">
-              <div class="feature-icon">🧩</div>
-              <h3>Deep Parameter Hunter</h3>
-              <p>Menemukan parameter URL dari tautan aktif, form action, input query string, dan payload endpoint
-                tersembunyi secara otomatis.</p>
-              <div class="feature-mini-preview mini-tags-wrap">
-                <span class="mini-chip-param">?redirect_url=</span>
-                <span class="mini-chip-param">?token=</span>
-                <span class="mini-chip-param">?query=</span>
-                <span class="mini-chip-param">?id=</span>
-              </div>
-            </div>
-
-            <!-- Feature 3 -->
-            <div class="card sketch-card feature-card">
-              <div class="feature-icon">📡</div>
-              <h3>Port & Service Matrix</h3>
-              <p>Inspeksi port jaringan non-destruktif, identifikasi service banner, serta analisis sertifikat TLS/SSL
-                untuk mendeteksi celah eksposur.</p>
-              <div class="feature-mini-preview mini-tags-wrap">
-                <span class="mini-chip-port http">80 HTTP</span>
-                <span class="mini-chip-port https">443 HTTPS</span>
-                <span class="mini-chip-port alt">8080 ALT</span>
-                <span class="mini-chip-port db">3306 DB</span>
-              </div>
-            </div>
-
-            <!-- Feature 4 -->
-            <div class="card sketch-card feature-card">
-              <div class="feature-icon">🛡️</div>
-              <h3>Instant Security Triaging</h3>
-              <p>Klasifikasi otomatis temuan keamanan berbasis heuristik: CORS misconfiguration, sensitive header leaks,
-                dan open directory status.</p>
-              <div class="feature-mini-preview mini-tags-wrap">
-                <span class="mini-chip-sev crit">🔴 CORS Wildcard</span>
-                <span class="mini-chip-sev high">🟠 Directory Listing</span>
-                <span class="mini-chip-sev med">🟡 Missing CSP</span>
-              </div>
-            </div>
-
-            <!-- Feature 5 -->
-            <div class="card sketch-card feature-card">
-              <div class="feature-icon">⚖️</div>
-              <h3>Differential Scan (Diff)</h3>
-              <p>Bandingkan dua pemindaian berbeda untuk mengidentifikasi aset baru yang terbuka, subdomain baru, dan
-                perubahan attack surface.</p>
-              <div class="feature-mini-preview mini-tags-wrap">
-                <span class="mini-chip-diff add">+3 Subdomain Baru</span>
-                <span class="mini-chip-diff rem">-1 Port Ditutup</span>
-              </div>
-            </div>
-
-            <!-- Feature 6 -->
-            <div class="card sketch-card feature-card">
-              <div class="feature-icon">🔒</div>
-              <h3>Anti-Abuse & RBAC Privacy</h3>
-              <p>Login diperlukan untuk scan, dengan isolasi data antar pengguna dan pengawasan admin.</p>
-              <div class="feature-mini-preview mini-tags-wrap">
-                <span class="mini-chip-auth">🔒 Login Diperlukan</span>
-                <span class="mini-chip-auth">👤 Isolasi Data</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- FAQ Section -->
-        <div class="faq-section">
-          <div class="section-heading-center">
-            <span class="badge-pill">FAQ</span>
-            <h2>Pertanyaan yang Sering Diajukan</h2>
-            <p>Jawaban atas pertanyaan seputar cara kerja, keamanan, dan batasan penggunaan platform.</p>
-          </div>
-
-          <div class="faq-accordion-list">
-            <div class="card sketch-card faq-item">
-              <div class="faq-question">
-                <h4>Apakah proses scanning aman dan tidak merusak server target?</h4>
-                <span class="faq-toggle-icon">➕</span>
-              </div>
-              <div class="faq-answer">
-                <p>Scan aktif tetap memiliki risiko. Gunakan hanya pada target yang Anda miliki atau memiliki izin tertulis. Mode standar membatasi pemeriksaan aktif; validasi berisiko tinggi memerlukan admin dan referensi otorisasi.</p>
-              </div>
-            </div>
-
-            <div class="card sketch-card faq-item">
-              <div class="faq-question">
-                <h4>Bagaimana cara kerja uji coba reconnaissance untuk pengguna baru?</h4>
-                <span class="faq-toggle-icon">➕</span>
-              </div>
-              <div class="faq-answer">
-                <p>Masuk atau buat akun sebelum memulai scan. Hasil disimpan pada akun pemilik scan dan tidak diklaim berdasarkan sidik jari perangkat.</p>
-              </div>
-            </div>
-
-
-            <div class="card sketch-card faq-item">
-              <div class="faq-question">
-                <h4>Apa perbedaan opsi Recursive Subdomains vs Target-Only?</h4>
-                <span class="faq-toggle-icon">➕</span>
-              </div>
-              <div class="faq-answer">
-                <p>Jika opsi <strong>Recursive Subdomains</strong> dicentang, engine akan memburu seluruh subdomain yang
-                  berinduk pada domain tersebut. Jika tidak dicentang, engine akan memindai secara spesifik hanya pada
-                  host/subdomain yang Anda masukkan.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Call to Action Banner on Landing Page -->
-        <div class="card sketch-card cta-banner-card">
-          <div class="cta-content">
-            <h2>Siap Memburu Attack Surface Hari Ini?</h2>
-            <p>Daftar sekarang secara gratis untuk mendapatkan akses scan terotorisasi, riwayat tersimpan, dan perbandingan hasil sesuai batas sistem.</p>
-            <div class="cta-actions">
-              <button id="ctaRegisterBtn" class="btn btn-primary btn-lg">✨ Buat Akun Gratis Sekarang</button>
-              <button id="ctaLoginBtn" class="btn btn-secondary btn-lg">🔑 Masuk ke Dashboard</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-
-      <!-- ================================================================= -->
-      <!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS)   -->
-      <!-- ================================================================= -->
-      <section id="viewDashboard" class="tab-view hidden">
-        <!-- Scan Completion & Report Action Banner (§52, §54) -->
-        <div id="scanCompletedBanner" class="scan-completed-banner hidden">
-          <div class="banner-content-flex">
-            <div class="banner-text">
-              <span class="banner-icon">🎉</span>
-              <div>
-                <strong id="scanCompletedTitle">Pemindaian Selesai!</strong>
-                <p id="scanCompletedSummary">Attack surface & temuan risiko berhasil dipetakan secara lengkap.</p>
-              </div>
-            </div>
-            <div class="banner-actions">
-              <button id="bannerDownloadReportBtn" class="btn btn-primary btn-sm">📦 Buka Pusat Laporan</button>
-              <button id="bannerDismissBtn" class="btn btn-ghost btn-sm" title="Tutup">✕</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Dashboard Level Breadcrumb Navigation -->
-        <nav id="dashboardBreadcrumb" class="breadcrumb-nav">
-          <a href="#" class="breadcrumb-link" data-action="goHome">🏠 Home</a>
-          <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-link">🎯 Recon Dashboard</span>
-          <span class="breadcrumb-sep">›</span>
-          <span id="dashboardBreadcrumbName" class="breadcrumb-current">Live Workspace</span>
-        </nav>
-
-        <!-- Active Multi-Scan Background Switcher Bar -->
-        <div id="activeScansBar" class="active-scans-switcher-bar hidden">
-          <span class="active-scans-title">
-            <span class="live-dot pulse"></span>
-            <span>Sesi Scan Berjalan (Background):</span>
-          </span>
-          <div id="activeScansChipsList" class="active-scans-chips-list"></div>
-        </div>
-
-        <!-- Target & Scan Control Center -->
-        <div id="scanControlSection" class="control-section">
-          <div class="card sketch-card control-card">
-            <div class="control-header">
-              <div class="control-title-wrap">
-                <span class="section-icon">🎯</span>
-                <h2>Target & Konfigurasi Scan</h2>
-              </div>
-              <div class="status-wrap">
-                <span id="scanStatus" class="pill pill-neutral">IDLE</span>
-                <span id="scanTime" class="pill pill-muted hidden">⏱ 00:00</span>
-                <span id="scanIdDisplay" class="pill pill-muted hidden">ID: -</span>
-              </div>
-            </div>
-
-            <div class="control-form">
-              <div class="input-group-target">
-                <label for="targetInput">Root Domain / URL Target</label>
-                <div class="input-with-icon">
-                  <span class="input-icon">🌐</span>
-                  <input id="targetInput" type="text" placeholder="example.com atau https://sub.example.com"
-                    autocomplete="off" />
-                </div>
-              </div>
-
-              <div class="input-group-option">
-                <label for="scopeModeSelect">Target Scope & Mode</label>
-                <select id="scopeModeSelect" class="custom-select">
-                  <option value="recursive" selected>🌐 Full Domain Recon (Buru semua Subdomain, Ports, Endpoints & Leaks)</option>
-                  <option value="targeted">🎯 Focused Single Host / Endpoint (Audit mendalam khusus URL/Endpoint ini)</option>
-                </select>
-              </div>
-
-              <div class="input-group-option engine-status-group">
-                <label>Engine Capabilities</label>
-                <div class="engine-status-pill">
-                  <span class="live-dot pulse"></span>
-                  <span>⚡ Recon Aktif L2 • Validasi Lanjutan Memerlukan Izin</span>
-                </div>
-              </div>
             </div>
 
       <!-- Hidden default engagement settings for automated compliance & authorization -->
@@ -2902,6 +2583,10 @@
             <span class="acc-tab-icon">⚡</span>
             <span>API Token & Key</span>
           </button>
+          <button class="acc-tab-btn" data-acc-tab="notifications" onclick="switchAccountTab('notifications')">
+            <span class="acc-tab-icon">🔔</span>
+            <span>Integrasi Alert & Notifikasi</span>
+          </button>
           <button class="acc-tab-btn" data-acc-tab="preferences" onclick="switchAccountTab('preferences')">
             <span class="acc-tab-icon">🎛️</span>
             <span>Preferensi Workspace</span>
@@ -3058,6 +2743,121 @@
             </div>
           </div>
 
+          
+          <!-- TAB 5: Notifications Integration -->
+          <div id="accTabNotifications" class="acc-pane hidden">
+            <div class="acc-pane-header">
+              <div class="acc-pane-badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.4);">🔔 Multi-Channel Webhooks & Alert Dispatcher</div>
+              <h4 class="acc-pane-title">Integrasi Notifikasi (Telegram, Discord, Slack)</h4>
+              <p class="acc-pane-desc">Dapatkan alert instan saat pemindaian selesai, saat celah Critical/High ditemukan, atau saat muncul aset baru.</p>
+            </div>
+
+            <div class="alert-info-box mb-3" style="background: rgba(6, 182, 212, 0.1); border: 1px solid #06b6d4; padding: 10px 14px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">
+              🛡️ <strong>Privasi & Isolasi 100% Terjamin:</strong> Pengaturan bot Telegram, Discord webhook, atau Slack webhook yang Anda masukkan di bawah ini disimpan khusus untuk akun Anda. Notifikasi hasil scan Anda tidak akan pernah dikirimkan ke pengguna lain.
+            </div>
+
+            <!-- Telegram Card -->
+            <div class="card sketch-card mb-3 p-3" style="background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 12px; border-radius: 6px;">
+              <div class="flex-between align-center mb-2" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 20px;">✈️</span>
+                  <div>
+                    <strong>Telegram Bot Alert</strong>
+                    <div class="text-xs text-muted" style="font-size: 11px; color: #94a3b8;">Kirim notifikasi langsung ke Chat ID Telegram pribadi / grup Anda</div>
+                  </div>
+                </div>
+                <label class="switch-toggle" style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+                  <input type="checkbox" id="notifTelegramEnabled" /> Aktifkan
+                </label>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+                <div class="form-group">
+                  <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Telegram Bot Token</label>
+                  <input type="password" id="notifTelegramToken" class="custom-input" placeholder="123456:ABC-DEF..." style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+                </div>
+                <div class="form-group">
+                  <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Telegram Chat ID</label>
+                  <input type="text" id="notifTelegramChatId" class="custom-input" placeholder="contoh: 987654321" style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+                </div>
+              </div>
+              <div style="margin-top: 10px; text-align: right;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testNotificationChannel('telegram')">⚡ Uji Coba Kirim Pesan Telegram</button>
+              </div>
+            </div>
+
+            <!-- Discord Webhook Card -->
+            <div class="card sketch-card mb-3 p-3" style="background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 12px; border-radius: 6px;">
+              <div class="flex-between align-center mb-2" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 20px;">🎮</span>
+                  <div>
+                    <strong>Discord Webhook Alert</strong>
+                    <div class="text-xs text-muted" style="font-size: 11px; color: #94a3b8;">Kirim formatted embed kartu risiko langsung ke channel Discord Anda</div>
+                  </div>
+                </div>
+                <label class="switch-toggle" style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+                  <input type="checkbox" id="notifDiscordEnabled" /> Aktifkan
+                </label>
+              </div>
+              <div class="form-group" style="margin-top: 8px;">
+                <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Discord Webhook URL</label>
+                <input type="password" id="notifDiscordWebhook" class="custom-input" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+              </div>
+              <div style="margin-top: 10px; text-align: right;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testNotificationChannel('discord')">⚡ Uji Coba Kirim Webhook Discord</button>
+              </div>
+            </div>
+
+            <!-- Slack Webhook Card -->
+            <div class="card sketch-card mb-3 p-3" style="background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 12px; border-radius: 6px;">
+              <div class="flex-between align-center mb-2" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 20px;">💬</span>
+                  <div>
+                    <strong>Slack Webhook Alert</strong>
+                    <div class="text-xs text-muted" style="font-size: 11px; color: #94a3b8;">Kirim ringkasan Block Kit ke workspace / channel Slack</div>
+                  </div>
+                </div>
+                <label class="switch-toggle" style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+                  <input type="checkbox" id="notifSlackEnabled" /> Aktifkan
+                </label>
+              </div>
+              <div class="form-group" style="margin-top: 8px;">
+                <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Slack Webhook URL</label>
+                <input type="password" id="notifSlackWebhook" class="custom-input" placeholder="https://hooks.slack.com/services/..." style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+              </div>
+              <div style="margin-top: 10px; text-align: right;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testNotificationChannel('slack')">⚡ Uji Coba Kirim Webhook Slack</button>
+              </div>
+            </div>
+
+            <!-- Alert Preferences Filters & Smart Diff -->
+            <div class="card sketch-card p-3 mb-3" style="background: #0b1120; border: 1px solid #1e293b; padding: 12px; margin-bottom: 14px; border-radius: 6px;">
+              <div class="flex-between align-center" style="display: flex; justify-content: space-between; align-items: center;">
+                <strong style="font-size: 12px; color: #e2e8f0;">Kondisi Pemicu Notifikasi:</strong>
+                <button type="button" class="btn btn-ghost btn-xs" style="font-size: 11px; color: #38bdf8; cursor: pointer; padding: 2px 6px;" onclick="testSmartDiffNotification()">⚡ Test Format Smart Diff</button>
+              </div>
+              <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #fca5a5;">
+                  <input type="checkbox" id="notifCritToggle" checked /> 🔴 Temuan Kritis (Critical)
+                </label>
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #fdba74;">
+                  <input type="checkbox" id="notifHighToggle" checked /> 🟠 Temuan Tinggi (High)
+                </label>
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #86efac;">
+                  <input type="checkbox" id="notifScanCompleteToggle" checked /> 🎉 Pemindaian Selesai
+                </label>
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #facc15;">
+                  <input type="checkbox" id="notifNewAssetsToggle" checked /> 🚨 Perubahan Aset Baru (Smart Diff)
+                </label>
+              </div>
+            </div>
+
+            <div style="text-align: right; margin-top: 14px;">
+              <button type="button" id="saveNotifConfigBtn" class="btn btn-primary btn-sm btn-glow" onclick="saveUserNotificationsConfig()">💾 Simpan Pengaturan Notifikasi</button>
+            </div>
+          </div>
+
           <!-- TAB 4: Workspace Preferences -->
           <div id="accTabPreferences" class="acc-pane hidden">
             <h4 class="acc-pane-title">🎛️ Preferensi Workspace & Notifikasi</h4>
@@ -3160,6 +2960,58 @@
   </div>
 
 
+  
+  <!-- Floating AI Copilot Trigger Button -->
+  <button id="openCopilotBtn" class="floating-copilot-btn" type="button" title="Buka Hunter Aja Pentest AI Copilot">
+    <span class="copilot-btn-icon">🤖</span>
+    <span class="copilot-btn-label">AI Copilot</span>
+    <span class="copilot-pulse-dot"></span>
+  </button>
+
+  <!-- Slide-Over AI Copilot Drawer -->
+  <div id="aiCopilotDrawer" class="copilot-drawer hidden">
+    <div class="copilot-drawer-header">
+      <div class="copilot-title-wrap">
+        <span class="copilot-header-icon">🤖</span>
+        <div>
+          <h4>Hunter Aja Pentest AI Copilot</h4>
+          <span class="copilot-status-sub">Context-Aware Autonomous Assistant</span>
+        </div>
+      </div>
+      <button id="closeCopilotBtn" class="btn-close" title="Tutup Copilot">✕</button>
+    </div>
+
+    <!-- Quick Prompt Action Chips -->
+    <div class="copilot-quick-chips-bar">
+      <button type="button" class="copilot-prompt-chip" data-prompt="Generate Python Exploit PoC untuk verifikasi temuan aktif">🧪 PoC Exploit</button>
+      <button type="button" class="copilot-prompt-chip" data-prompt="Tampilkan rekomendasi patch remediasi kode untuk developer">🛡️ Patch Fix</button>
+      <button type="button" class="copilot-prompt-chip" data-prompt="Analisis vektor serang parameter paling rawan pada target ini">🎯 Attack Vector</button>
+      <button type="button" class="copilot-prompt-chip" data-prompt="Buatkan ringkasan risiko eksekutif dari seluruh temuan scan">📊 Risk Summary</button>
+    </div>
+
+    <!-- Message Thread -->
+    <div id="copilotMessagesList" class="copilot-messages-list">
+      <div class="copilot-bubble copilot-bubble-ai">
+        <div class="copilot-bubble-header">
+          <span class="bubble-sender">🤖 Hunter Aja Copilot</span>
+          <span class="bubble-model-tag">[Level L4 Intelligence]</span>
+        </div>
+        <div class="copilot-bubble-content">
+          Halo! Saya siap membantu investigasi keamanan, pembuatan PoC verifikasi, pembuatan patch remediasi kode, serta analisis mendalam pada target Anda.
+        </div>
+      </div>
+    </div>
+
+    <!-- Input Footer -->
+    <div class="copilot-drawer-footer">
+      <div class="copilot-input-wrap">
+        <textarea id="copilotInput" rows="2" placeholder="Tanyakan seputar celah keamanan, minta script PoC, atau analisis..."></textarea>
+        <button id="copilotSendBtn" class="btn btn-primary btn-sm btn-glow" type="button" title="Kirim Pesan">🚀</button>
+      </div>
+    </div>
+  </div>
+
+
   <!-- Vendor Plugins (100% Local & Safe) -->
   <script src="vendor/jquery.min.js"></script>
 
@@ -3184,6 +3036,9 @@
   <script src="js/engagement.js?v=1"></script>
   <script src="js/app.js?v=9.8.0"></script>
   <script src="js/responsive.js?v=9.8.0"></script>
+  <script src="js/notifications_settings.js?v=9.8.0"></script>
+  <script src="js/graph.js?v=9.8.0"></script>
+  <script src="js/copilot.js?v=9.8.0"></script>
 </body>
 
 </html>

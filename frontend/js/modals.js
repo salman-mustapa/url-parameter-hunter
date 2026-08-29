@@ -766,6 +766,14 @@ function setupReportModal() {
     });
   }
 
+  // 5. OpenAPI 3.0 Spec Export
+  const openApiBtn = el("downloadOpenApiReportBtn");
+  if (openApiBtn) {
+    openApiBtn.addEventListener("click", () => {
+      downloadOpenApiSpec();
+    });
+  }
+
   // Scan Completed Banner Actions
   const bannerReportBtn = el("bannerDownloadReportBtn");
   if (bannerReportBtn) bannerReportBtn.addEventListener("click", openReportModal);
@@ -925,6 +933,27 @@ window.openFindingsModal = openFindingsModal;
 window.showScreenshotLightbox = showScreenshotLightbox;
 window.showSystemConfirm = showSystemConfirm;
 window.showSystemAlert = showSystemAlert;
+
+function downloadOpenApiSpec() {
+  const sid = state.activeScanId;
+  if (!sid) {
+    if (typeof showToast === "function") showToast("Pilih scan aktif terlebih dahulu.", "warning");
+    return;
+  }
+  window.open(`${API_BASE}/scans/${encodeURIComponent(sid)}/export/openapi.json`, "_blank");
+}
+
+function openAccountSettingsModal(tab = "notifications") {
+  const modal = el("accountSettingsModal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  if (typeof loadUserNotificationsConfig === "function") {
+    loadUserNotificationsConfig();
+  }
+}
+
+window.downloadOpenApiSpec = downloadOpenApiSpec;
+window.openAccountSettingsModal = openAccountSettingsModal;
 window.openReportModal = openReportModal;
 
 

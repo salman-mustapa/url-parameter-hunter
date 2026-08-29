@@ -380,8 +380,74 @@ function setupNavigation() {
     });
   });
 
+  // Initialize Landing Page Cyber Terminal Simulator
+  initLandingTerminalSimulator();
+
   // Initial Route Resolution on Page Load
   setTimeout(handleRouteFromURL, 50);
+}
+
+function initLandingTerminalSimulator() {
+  const tickerEl = el("termLiveTicker");
+  if (!tickerEl) return;
+  const phrases = [
+    "Autonomous Level L4 pipeline executing at maximum power...",
+    "Validating DNS records & active CNAME resolution...",
+    "Katana spider active: extracting query parameters & forms...",
+    "Probing sensitive paths: /.env, /.git, /backup.sql...",
+    "Executing safe canary injection payloads for SQLi & XSS...",
+    "AI reasoning loop active: generating attack graph proofs...",
+    "All telemetry streaming in real-time with sub-second latency."
+  ];
+  let pIdx = 0;
+  let charIdx = 0;
+  let isDeleting = false;
+
+  function tick() {
+    const currentPhrase = phrases[pIdx];
+    if (!tickerEl) return;
+    if (isDeleting) {
+      tickerEl.textContent = currentPhrase.substring(0, charIdx - 1);
+      charIdx--;
+      if (charIdx <= 0) {
+        isDeleting = false;
+        pIdx = (pIdx + 1) % phrases.length;
+        setTimeout(tick, 400);
+        return;
+      }
+      setTimeout(tick, 25);
+    } else {
+      tickerEl.textContent = currentPhrase.substring(0, charIdx + 1);
+      charIdx++;
+      if (charIdx >= currentPhrase.length) {
+        isDeleting = true;
+        setTimeout(tick, 2400);
+        return;
+      }
+      setTimeout(tick, 40);
+    }
+  }
+
+  // Small live metric increments for interactive visual sensation
+  setInterval(() => {
+    const assetEl = el("heroAssetTicker");
+    const urlEl = el("heroUrlTicker");
+    const paramEl = el("heroParamTicker");
+    if (assetEl && Math.random() > 0.6) {
+      const val = parseInt(assetEl.textContent, 10) || 42;
+      assetEl.textContent = val < 52 ? val + 1 : 42;
+    }
+    if (urlEl && Math.random() > 0.5) {
+      const val = parseInt(urlEl.textContent, 10) || 184;
+      urlEl.textContent = val < 218 ? val + 3 : 184;
+    }
+    if (paramEl && Math.random() > 0.7) {
+      const val = parseInt(paramEl.textContent, 10) || 37;
+      paramEl.textContent = val < 46 ? val + 1 : 37;
+    }
+  }, 4000);
+
+  tick();
 }
 
 function resetCleanDashboard() {

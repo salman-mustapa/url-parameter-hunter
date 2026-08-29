@@ -1,80 +1,134 @@
-<!-- VIEW 1: HOME / LANDING PAGE (Modern, Clean, Captivating & Engaging) -->
+<!-- VIEW 1: HOME / LANDING PAGE (Modern Cyber Luxury, Dual-Pane Hero & Level L4 Focused) -->
 <section id="viewHome" class="tab-view active">
   <!-- Hero Header Section -->
   <div class="hero-section">
     <div class="hero-badge">
       <span class="live-dot pulse"></span>
-      <span>NEXT-GEN ATTACK SURFACE INTELLIGENCE</span>
+      <span>⚡ LEVEL L4 ULTIMATE AUTONOMOUS RECON ENGINE</span>
     </div>
     <h1 class="hero-title">
-      Temukan Attack Surface & Parameter Tersembunyi <span class="highlight">dalam Hitungan Detik</span>
+      Autonomous Attack Surface & Parameter Intelligence <span class="highlight">Level L4 Ultimate</span>
     </h1>
     <p class="hero-desc">
-      Platform otomatisasi reconnaissance cerdas untuk Bug Hunter & Security Analyst. Validasi subdomain aktif,
-      crawling endpoint, ekstraksi parameter dinamis, dan deteksi risiko dalam satu antarmuka terpadu.
+      Platform reconnaissance cerdas dan pentest otonom berkekuatan penuh untuk Bug Hunter & Security Analyst. Pemetaan subdomain aktif, deep Katana crawling, dynamic parameter mining, secret leak detection (.env, .sql, cloud keys), active canary fuzzing, dan AI threat reasoning dalam satu pipeline terpadu.
     </p>
   </div>
 
-  <!-- Quick Scan Sandbox Box -->
-  <div id="homeTrialSection" class="card sketch-card control-card home-trial-card">
-    <div class="control-header">
-      <div class="control-title-wrap">
-        <span class="section-icon">⚡</span>
-        <div>
-          <h2>Reconnaissance Sandbox</h2>
-          <div class="pill-muted" style="font-size: 12.5px; margin-top: 2px;">
-            ⚡ Uji coba reconnaissance langsung pada target domain Anda secara instan.
+  <!-- Dual-Pane Interactive Hero Section -->
+  <div class="hero-dual-grid">
+    <!-- Left Column: Quick Recon Launcher -->
+    <div id="homeTrialSection" class="card sketch-card control-card home-trial-card">
+      <div class="control-header">
+        <div class="control-title-wrap">
+          <span class="section-icon">⚡</span>
+          <div>
+            <h2>Reconnaissance Sandbox</h2>
+            <div class="pill-muted" style="font-size: 12.5px; margin-top: 2px;">
+              ⚡ Jalankan pemindaian otonom Level L4 secara instan pada target domain Anda.
+            </div>
+          </div>
+        </div>
+        <div class="status-wrap">
+          <span id="trialScanStatus" class="pill pill-running">L4 ACTIVE</span>
+        </div>
+      </div>
+
+      <div class="control-form">
+        <div class="input-group-target">
+          <label for="trialTargetInput">Target Domain / Host URL</label>
+          <div class="input-with-icon">
+            <span class="input-icon">🌐</span>
+            <input id="trialTargetInput" type="text"
+              placeholder="Masukkan target (contoh: example.com atau https://app.target.com)" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="input-group-option">
+          <label for="trialScopeModeSelect">Target Scope & Mode</label>
+          <select id="trialScopeModeSelect" class="custom-select">
+            <option value="recursive" selected>🌐 Full Domain Recon (Buru Semua Subdomain, Ports, Endpoints & Leaks)</option>
+            <option value="targeted">🎯 Focused Single Endpoint (Audit Khusus URL / Host Ini)</option>
+          </select>
+        </div>
+
+        <div class="input-group-option engine-status-group">
+          <label>Engine Capabilities & Mode</label>
+          <div class="engine-status-pill l4-badge-glow">
+            <span class="live-dot pulse"></span>
+            <span>⚡ Level L4 Ultimate • Full Autonomous Pentest & Deep Recon</span>
           </div>
         </div>
       </div>
-      <div class="status-wrap">
-        <span id="trialScanStatus" class="pill pill-running">READY</span>
+
+      <div class="control-actions">
+        <button id="startTrialBtn" class="btn btn-primary btn-lg btn-glow">
+          <span class="btn-icon">🚀</span> MULAI SCAN L4 SEKARANG
+        </button>
+        <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
+          <span class="btn-icon">🔑</span> Masuk ke Dashboard
+        </button>
+      </div>
+
+      <!-- Quick Suggestion Chips -->
+      <div class="quick-samples-row">
+        <span class="quick-sample-label">Contoh format:</span>
+        <button type="button" class="sample-chip" data-sample="example.invalid">⚡ example.invalid</button>
+        <button type="button" class="sample-chip" data-sample="app.example.invalid">🌐 app.example.invalid</button>
+        <button type="button" class="sample-chip" data-sample="api.example.invalid">👥 api.example.invalid</button>
+        <button type="button" class="sample-chip" data-sample="test.example.invalid">🎯 test.example.invalid</button>
       </div>
     </div>
 
-    <div class="control-form">
-      <div class="input-group-target">
-        <label for="trialTargetInput">Target Domain / Host URL</label>
-        <div class="input-with-icon">
-          <span class="input-icon">🌐</span>
-          <input id="trialTargetInput" type="text"
-            placeholder="Masukkan target (contoh: app.example.invalid; gunakan target yang berizin)" autocomplete="off" />
+    <!-- Right Column: Live Cyber Recon Terminal Simulator -->
+    <div class="cyber-terminal-card sketch-card">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span class="dot-close"></span>
+          <span class="dot-min"></span>
+          <span class="dot-max"></span>
+        </div>
+        <div class="terminal-title">
+          <span class="terminal-icon">⚡</span>
+          <span>hunter-aja@l4-engine:~# autonomous-recon</span>
+        </div>
+        <span class="terminal-badge">LIVE STREAM</span>
+      </div>
+
+      <div id="heroTerminalBody" class="terminal-body">
+        <div class="term-line info"><span class="term-ts">[SYSTEM]</span> Level L4 Ultimate Autonomous Pentest Engine initialized.</div>
+        <div class="term-line success"><span class="term-ts">[RECON]</span> Harvesting subdomains via crt.sh, alienvault, amass, subfinder...</div>
+        <div class="term-line info"><span class="term-ts">[DNS]</span> 42 active host records verified (A/CNAME/TXT) with zero wildcards.</div>
+        <div class="term-line info"><span class="term-ts">[NETWORK]</span> Probing ports 80, 443, 8080, 8443, 3000... 6 open services found.</div>
+        <div class="term-line warn"><span class="term-ts">[KATANA]</span> Spidering routes: 184 endpoints discovered from dynamic JS bundles.</div>
+        <div class="term-line info"><span class="term-ts">[PARAMS]</span> Mined 37 injection vectors: ?redirect_url=, ?token=, ?id=</div>
+        <div class="term-line danger"><span class="term-ts">[LEAKS]</span> Sensitive file exposed: /.env.prod & /database/dump.sql (CWE-200)</div>
+        <div class="term-line success"><span class="term-ts">[AI_AGENT]</span> Synthesizing attack graph hypotheses & assembling E4 cryptographic proofs.</div>
+        <div class="term-line term-active-prompt"><span class="term-prompt">hunter-l4></span> <span id="termLiveTicker">Autonomous pipeline executing at maximum power...</span> <span class="term-cursor">█</span></div>
+      </div>
+
+      <!-- Live Terminal Metric Strip -->
+      <div class="terminal-metrics-bar">
+        <div class="term-metric-item">
+          <span class="term-metric-val" id="heroAssetTicker">42</span>
+          <span class="term-metric-lbl">Subdomains</span>
+        </div>
+        <div class="term-metric-item">
+          <span class="term-metric-val" id="heroPortTicker">6</span>
+          <span class="term-metric-lbl">Open Ports</span>
+        </div>
+        <div class="term-metric-item">
+          <span class="term-metric-val" id="heroUrlTicker">184</span>
+          <span class="term-metric-lbl">Endpoints</span>
+        </div>
+        <div class="term-metric-item">
+          <span class="term-metric-val" id="heroParamTicker">37</span>
+          <span class="term-metric-lbl">Parameters</span>
+        </div>
+        <div class="term-metric-item">
+          <span class="term-metric-val term-val-danger" id="heroLeakTicker">3</span>
+          <span class="term-metric-lbl">Risk Findings</span>
         </div>
       </div>
-
-      <div class="input-group-option">
-        <label for="trialScopeModeSelect">Target Scope & Mode</label>
-        <select id="trialScopeModeSelect" class="custom-select">
-          <option value="recursive" selected>🌐 Full Domain Recon (Buru Semua Subdomain, Ports, Endpoints & Leaks)</option>
-          <option value="targeted">🎯 Focused Single Endpoint (Audit Khusus URL / Host Ini)</option>
-        </select>
-      </div>
-
-      <div class="input-group-option engine-status-group">
-        <label>AI & Security Engine</label>
-        <div class="engine-status-pill">
-          <span class="live-dot pulse"></span>
-          <span>Recon Aktif • Level L2</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="control-actions">
-      <button id="startTrialBtn" class="btn btn-primary btn-lg">
-        <span class="btn-icon">🚀</span> MULAI SCAN SEKARANG
-      </button>
-      <button id="openAuthFromHeroBtn" class="btn btn-secondary btn-lg" onclick="openAuthModal('login')">
-        <span class="btn-icon">🔑</span> Masuk untuk Mengatur Scan
-      </button>
-    </div>
-
-    <!-- Quick Suggestion Chips -->
-    <div class="quick-samples-row">
-      <span class="quick-sample-label">Contoh format (bukan izin pengujian):</span>
-      <button type="button" class="sample-chip" data-sample="example.invalid">⚡ example.invalid</button>
-      <button type="button" class="sample-chip" data-sample="app.example.invalid">🌐 app.example.invalid</button>
-      <button type="button" class="sample-chip" data-sample="api.example.invalid">👥 api.example.invalid</button>
-      <button type="button" class="sample-chip" data-sample="test.example.invalid">🎯 test.example.invalid</button>
     </div>
   </div>
 
@@ -83,8 +137,8 @@
     <div class="trust-signal-item">
       <span class="trust-icon">🛡️</span>
       <div>
-        <strong>Scope & Izin Eksplisit</strong>
-        <p>Jalankan pemeriksaan hanya pada target dengan izin pemilik sistem.</p>
+        <strong>Scope & Otorisasi Eksplisit</strong>
+        <p>Pengujian terisolasi dengan otorisasi otomatis dan kepatuhan penuh.</p>
       </div>
     </div>
     <div class="trust-signal-item">
@@ -98,49 +152,60 @@
       <span class="trust-icon">🧩</span>
       <div>
         <strong>Dynamic Parameter Mining</strong>
-        <p>Ekstraksi otomatis form action, query string, dan hidden inputs.</p>
+        <p>Ekstraksi otomatis form action, query string, dan hidden inputs via Katana.</p>
       </div>
     </div>
     <div class="trust-signal-item">
-      <span class="trust-icon">🔒</span>
+      <span class="trust-icon">⚡</span>
       <div>
-        <strong>Akses Hasil Terproteksi</strong>
-        <p>Login diperlukan; hasil scan hanya tersedia bagi pemilik dan administrator.</p>
+        <strong>Level L4 Autonomous Fuzzing</strong>
+        <p>Pengujian canary SQLi/XSS/SSRF/Auth, secret scanner (.env, .sql), dan AI analysis.</p>
       </div>
     </div>
   </div>
 
-  <!-- Interactive 3-Step "How It Works" Flow -->
+  <!-- Interactive 5-Step Pipeline Flow -->
   <div class="how-it-works-section">
     <div class="section-heading-center">
-      <span class="badge-pill">Cara Kerja Engine</span>
-      <h2>Alur Reconnaissance 3 Langkah</h2>
-      <p>Bagaimana Hunter Aja memetakan attack surface target Anda secara menyeluruh dalam hitungan menit.</p>
+      <span class="badge-pill">Alur Kerja Level L4</span>
+      <h2>Pipeline Reconnaissance & Pentest Otonom</h2>
+      <p>Bagaimana engine Hunter Aja memetakan attack surface dan menguji kerentanan secara komprehensif.</p>
     </div>
 
-    <div class="workflow-steps-grid">
+    <div class="workflow-steps-grid workflow-5-grid">
       <div class="card sketch-card workflow-step-card">
-        <div class="step-badge">Langkah 1</div>
+        <div class="step-badge">Tahap 1</div>
         <div class="step-icon">🎯</div>
-        <h3>Input Scope Target</h3>
-        <p>Masukkan root domain (misal <code>example.com</code>) atau host spesifik (misal
-          <code>api.example.com</code>) dengan opsi recursive subdomain.</p>
+        <h3>[1] RECON</h3>
+        <p>Multi-source passive harvesting (crt.sh, AlienVault, Anubis, Amass) & DNS active resolution.</p>
       </div>
 
       <div class="card sketch-card workflow-step-card">
-        <div class="step-badge">Langkah 2</div>
+        <div class="step-badge">Tahap 2</div>
+        <div class="step-icon">📡</div>
+        <h3>[2] NETWORK</h3>
+        <p>Fast port scanning, service banner grabber, TLS certificate inspection, dan live web probing.</p>
+      </div>
+
+      <div class="card sketch-card workflow-step-card">
+        <div class="step-badge">Tahap 3</div>
+        <div class="step-icon">🕷️</div>
+        <h3>[3] ENUM & CRAWL</h3>
+        <p>Katana spidering, JS route scraping, dirsearch sensitive paths, dan dynamic parameter mining.</p>
+      </div>
+
+      <div class="card sketch-card workflow-step-card">
+        <div class="step-badge">Tahap 4</div>
         <div class="step-icon">⚡</div>
-        <h3>Parallel Discovery Engine</h3>
-        <p>Engine menjalankan DNS active validation, TCP port scanning, TLS cert audit, web endpoint crawling, dan
-          parameter mining secara paralel.</p>
+        <h3>[4] EXPLOIT & AI</h3>
+        <p>Canary fuzzing (SQLi, XSS, SSRF, IDOR, 403 Bypass, Auth) & AI attack reasoning.</p>
       </div>
 
       <div class="card sketch-card workflow-step-card">
-        <div class="step-badge">Langkah 3</div>
-        <div class="step-icon">📊</div>
-        <h3>Visual Graph & Triaging</h3>
-        <p>Hasil pemindaian tersusun rapi dalam pohon aset hierarkis, live event stream, matriks port global,
-          serta klasifikasi tingkat keparahan risiko.</p>
+        <div class="step-badge">Tahap 5</div>
+        <div class="step-icon">📦</div>
+        <h3>[5] VERIFY & REPORT</h3>
+        <p>Penyusunan bukti kriptografis SHA-256 (E0-E4), screenshot visual, dan dossier report.</p>
       </div>
     </div>
   </div>
@@ -150,7 +215,7 @@
     <div class="section-heading-center">
       <span class="badge-pill">Fitur Unggulan</span>
       <h2>Platform Intelijen Penetrasi Modern</h2>
-      <p>Dirancang dengan visual yang clean, intuitif, dan responsif untuk bug hunter dan penetration tester profesional.</p>
+      <p>Dirancang dengan visual yang clean, intuitif, dan responsif untuk bug hunter dan security researcher profesional.</p>
     </div>
 
     <div class="features-grid">
@@ -158,7 +223,7 @@
       <div class="card sketch-card feature-card">
         <div class="feature-icon">🌳</div>
         <h3>Dynamic Subdomain Tree</h3>
-        <p>Mengumpulkan subdomain dari Certificate Transparency (crt.sh), AlienVault OTX, HackerTarget, dan brute-force wordlists dengan validasi DNS dinamis.</p>
+        <p>Mengumpulkan subdomain dari Certificate Transparency (crt.sh), AlienVault OTX, HackerTarget, dan wordlists dengan validasi DNS dinamis.</p>
         <div class="feature-mini-preview">
           <div class="mini-node-item root"><span class="dot-active"></span> target.com <span class="mini-tag">ROOT</span></div>
           <div class="mini-node-item sub"><span class="dot-active"></span> api.target.com <span class="mini-tag">104.21.4.1</span></div>
@@ -195,12 +260,12 @@
       <!-- Feature 4 -->
       <div class="card sketch-card feature-card">
         <div class="feature-icon">🛡️</div>
-        <h3>Instant Security Triaging</h3>
-        <p>Klasifikasi otomatis temuan keamanan berbasis heuristik: CORS misconfiguration, sensitive header leaks, dan open directory status.</p>
+        <h3>Security Triaging & Secret Leaks</h3>
+        <p>Deteksi otomatis file sensitif (.env, .sql, .git, cloud credentials) dan canary injection (SQLi, XSS, SSRF, IDOR).</p>
         <div class="feature-mini-preview mini-tags-wrap">
-          <span class="mini-chip-sev crit">🔴 CORS Wildcard</span>
-          <span class="mini-chip-sev high">🟠 Directory Listing</span>
-          <span class="mini-chip-sev med">🟡 Missing CSP</span>
+          <span class="mini-chip-sev crit">🔴 .env / DB Leak</span>
+          <span class="mini-chip-sev high">🟠 CORS Wildcard</span>
+          <span class="mini-chip-sev med">🟡 403 Bypassable</span>
         </div>
       </div>
 
@@ -217,12 +282,12 @@
 
       <!-- Feature 6 -->
       <div class="card sketch-card feature-card">
-        <div class="feature-icon">🔒</div>
-        <h3>Anti-Abuse & RBAC Privacy</h3>
-        <p>Autentikasi, pemeriksaan kepemilikan scan, pembatasan percobaan login, dan pengawasan administrator.</p>
+        <div class="feature-icon">🧠</div>
+        <h3>AI Threat Reasoning & Evidence</h3>
+        <p>Perumusan hipotesis serangan otomatis berbasis AI lokal/LLM dan kompilasi bukti paket kriptografis SHA-256 (E0–E4).</p>
         <div class="feature-mini-preview mini-tags-wrap">
-          <span class="mini-chip-auth">🔒 Login Diperlukan</span>
-          <span class="mini-chip-auth">👤 Isolasi Data</span>
+          <span class="mini-chip-auth">🧠 AI Hypotheses</span>
+          <span class="mini-chip-auth">📦 E4 Proof Package</span>
         </div>
       </div>
     </div>
@@ -239,33 +304,31 @@
     <div class="faq-accordion-list">
       <div class="card sketch-card faq-item">
         <div class="faq-question">
-          <h4>Apakah proses scanning aman dan tidak merusak server target?</h4>
+          <h4>Apa yang dilakukan oleh Level L4 Ultimate Autonomous Engine?</h4>
           <span class="faq-toggle-icon">➕</span>
         </div>
         <div class="faq-answer">
-          <p>Scan aktif tetap memiliki risiko. Gunakan hanya pada target yang Anda miliki atau memiliki izin tertulis. Mode standar membatasi pemeriksaan aktif; validasi berisiko tinggi memerlukan admin dan referensi otorisasi.</p>
+          <p>Level L4 menjalankan seluruh kapabilitas reconnaissance dan validasi secara penuh: perburuan subdomain multi-sumber, port scanning, deep Katana crawling, penambangan parameter, deteksi kebocoran file rahasia (.env, .sql, .git), canary injection fuzzing (SQLi, XSS, SSRF), perumusan hipotesis serangan AI, dan pengambilan bukti screenshot visual.</p>
         </div>
       </div>
 
       <div class="card sketch-card faq-item">
         <div class="faq-question">
-          <h4>Bagaimana cara kerja uji coba reconnaissance untuk pengguna baru?</h4>
+          <h4>Apakah proses scanning aman bagi target?</h4>
           <span class="faq-toggle-icon">➕</span>
         </div>
         <div class="faq-answer">
-          <p>Masuk atau buat akun sebelum memulai scan. Hasil disimpan pada akun pemilik scan dan tidak diklaim berdasarkan sidik jari perangkat.</p>
+          <p>Seluruh pengujian injeksi menggunakan canary payloads non-destruktif yang aman bagi integritas server target, dilengkapi rate limiting dan kill switch untuk menjaga stabilitas sistem target.</p>
         </div>
       </div>
 
       <div class="card sketch-card faq-item">
         <div class="faq-question">
-          <h4>Apa perbedaan opsi Recursive Subdomains vs Target-Only?</h4>
+          <h4>Bagaimana cara kerja opsi Full Domain Recon vs Single Endpoint?</h4>
           <span class="faq-toggle-icon">➕</span>
         </div>
         <div class="faq-answer">
-          <p>Jika opsi <strong>Recursive Subdomains</strong> dicentang, engine akan memburu seluruh subdomain yang
-            berinduk pada domain tersebut. Jika tidak dicentang, engine akan memindai secara spesifik hanya pada
-            host/subdomain yang Anda masukkan.</p>
+          <p>Jika opsi <strong>Full Domain Recon</strong> dipilih, engine akan memburu seluruh subdomain, port, dan endpoint yang berinduk pada domain tersebut. Jika <strong>Single Endpoint</strong> dipilih, audit difokuskan khusus pada host atau URL yang Anda masukkan.</p>
         </div>
       </div>
     </div>
@@ -275,7 +338,7 @@
   <div class="card sketch-card cta-banner-card">
     <div class="cta-content">
       <h2>Siap Memburu Attack Surface Hari Ini?</h2>
-      <p>Daftar sekarang secara gratis untuk mendapatkan akses scan terotorisasi, riwayat tersimpan, dan perbandingan hasil sesuai batas sistem.</p>
+      <p>Mulai pemindaian instan dengan Level L4 Ultimate Autonomous Engine dan petakan seluruh attack surface target Anda.</p>
       <div class="cta-actions">
         <button id="ctaRegisterBtn" class="btn btn-primary btn-lg">✨ Buat Akun Gratis Sekarang</button>
         <button id="ctaLoginBtn" class="btn btn-secondary btn-lg">🔑 Masuk ke Dashboard</button>

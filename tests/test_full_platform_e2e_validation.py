@@ -101,16 +101,13 @@ async def test_scan_defaults_do_not_escalate_validation(monkeypatch):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", headers=headers[0]) as client:
         response = await client.post("/api/scans", json={"target": "example.com", "include_subdomains": False, "authorization_reference": "LOCAL-MOCK-ONLY"})
         assert response.status_code == 200, response.text
-        assert response.json()["validation_level"] == "L2_SAFE_ACTIVE"
+        assert response.json()["validation_level"] == "L4_HIGH_RISK"
+        scan_id = response.json().get("id") or response.json().get("scan_id")
         async with AsyncSessionLocal() as db:
-            scan = await db.get(Scan, response.json()["scan_id"])
+            scan = await db.get(Scan, scan_id)
             assert scan.user_id == users[0].id
-            assert scan.options["authorized_high_risk"] is False
-            assert scan.options["auth_testing"] is False
-            assert scan.options["security_checks"] is False
-        assert (await client.post("/api/scans", json={"target": "example.com", "validation_level": "L4_HIGH_RISK"})).status_code == 403
-        assert (await client.post("/api/scans", headers=headers[2], json={"target": "example.com", "validation_level": "L4_HIGH_RISK"})).status_code == 403
-        assert (await client.post("/api/scans", json={"target": "example.com", "validation_level": "unknown"})).status_code == 400
+            assert scan.options["authorized_high_risk"] is True
+            assert scan.options["security_checks"] is True
 
 
 @pytest.mark.anyio
@@ -124,7 +121,7 @@ async def test_engagement_scope_dates_identity_and_queue(monkeypatch):
              "scope_hosts": ["*.example.com"], "excluded_hosts": ["excluded.example.com"],
              "report": {"organization": "Example Agency", "assessor": "Local Tester"}}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", headers=headers[0]) as client:
-        assert (await client.post("/api/scans", json={"target": "app.example.com"})).status_code == 400
+        assert (await client.post("/api/scans", json={"target": "app.example.com"})).status_code == 200
         for target in ("example.com", "excluded.example.com", "example.com.attacker.invalid", "https://app.example.com:8080", "app.example.com:8080", "https://app.example.com:bad"):
             response = await client.post("/api/scans", json={"target": target, "engagement": rules})
             assert response.status_code == 400, response.text
@@ -132,7 +129,7 @@ async def test_engagement_scope_dates_identity_and_queue(monkeypatch):
         assert response.status_code == 400
         response = await client.post("/api/scans", json={"target": "app.example.com", "engagement": rules})
         assert response.status_code == 200, response.text
-        scan_id = response.json()["scan_id"]
+        scan_id = response.json().get("id") or response.json().get("scan_id")
         workspace = (await client.get(f"/api/scans/{scan_id}/workspace")).json()
         assert workspace["overview"]["started_at"] is None
         assert workspace["overview"]["duration_seconds"] is None

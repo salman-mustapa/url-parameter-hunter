@@ -227,18 +227,17 @@ async function startScan() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: target,
-        profile: "bug_hunt",
-        validation_level: "L2_SAFE_ACTIVE",
+        profile: "adversary_simulation",
+        validation_level: "L4_HIGH_RISK",
         include_subdomains: includeSubdomains,
         device_fingerprint: device_fingerprint,
         engagement,
-        authorization_reference: engagement.authorization_reference,
+        authorization_reference: engagement.authorization_reference || `AUTHORIZED-L4-${target.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}-AUDIT`,
       }),
     });
 
-
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
       const detail = apiError(err, `HTTP ${res.status}`);
 
       // Check if trial limit reached

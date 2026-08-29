@@ -48,6 +48,14 @@
       <h4 class="report-section-title">Pilih Format Laporan:</h4>
 
       <div class="report-formats-grid">
+        <div class="report-format-card">
+          <div class="format-icon">⚡</div>
+          <div class="format-info">
+            <strong>OpenAPI 3.0 / Swagger JSON</strong>
+            <p>Spesifikasi OpenAPI 3.0.3 otomatis dari hasil crawler & parameter mining untuk diimpor ke Postman atau Burp Suite.</p>
+          </div>
+          <button id="downloadOpenApiReportBtn" class="btn btn-secondary btn-block" onclick="downloadOpenApiSpec()">📥 Unduh OpenAPI Spec (.json)</button>
+        </div>
         <div class="report-format-card primary-format">
           <div class="format-icon">📕</div>
           <div class="format-info">
@@ -412,6 +420,138 @@
     <div class="modal-body command-palette-body">
       <div id="globalSearchResults" class="command-results-container">
         <div class="search-hint">Ketik minimal 2 karakter untuk mencari atau pilih perintah cepat di bawah...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+
+<!-- Account Settings & User Notification Integration Modal -->
+<div id="accountSettingsModal" class="modal-backdrop hidden">
+  <div class="modal-dialog sketch-card" style="max-width: 780px; width: 95%;">
+    <div class="modal-header flex-between">
+      <div class="title-with-icon">
+        <span class="section-icon">⚙️</span>
+        <div>
+          <h3>Pengaturan Akun & Integrasi Notifikasi</h3>
+          <span class="pill pill-neutral" style="font-size: 10px; margin-top: 2px;">ISOLASI 100% PER AKUN — DATA AMAN</span>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('accountSettingsModal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="account-tabs-nav flex-row-gap mb-3" style="display: flex; gap: 8px;">
+        <button type="button" class="btn btn-secondary btn-sm active" id="tabNotifBtn">🔔 Integrasi Notifikasi (Telegram / Discord / Slack)</button>
+      </div>
+
+      <!-- Tab: Notifications Integration -->
+      <div id="accountNotifTab" class="account-settings-tab-pane">
+        <div class="alert-info-box mb-3" style="background: rgba(6, 182, 212, 0.1); border: 1px solid #06b6d4; padding: 10px 14px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">
+          🛡️ <strong>Privasi & Isolasi Terjamin:</strong> Pengaturan bot Telegram, Discord webhook, atau Slack webhook yang Anda masukkan di bawah ini disimpan khusus untuk akun Anda. Notifikasi hasil scan Anda tidak akan pernah dikirimkan ke pengguna lain.
+        </div>
+
+        <!-- Telegram Card -->
+        <div class="card sketch-card mb-3 p-3" style="background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 12px;">
+          <div class="flex-between align-center mb-2" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 20px;">✈️</span>
+              <div>
+                <strong>Telegram Bot Alert</strong>
+                <div class="text-xs text-muted" style="font-size: 11px; color: #94a3b8;">Kirim notifikasi langsung ke Chat ID Telegram pribadi / grup Anda</div>
+              </div>
+            </div>
+            <label class="switch-toggle" style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+              <input type="checkbox" id="notifTelegramEnabled" /> Aktifkan
+            </label>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+            <div class="form-group">
+              <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Telegram Bot Token</label>
+              <input type="password" id="notifTelegramToken" class="custom-input" placeholder="123456:ABC-DEF..." style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+            </div>
+            <div class="form-group">
+              <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Telegram Chat ID</label>
+              <input type="text" id="notifTelegramChatId" class="custom-input" placeholder="contoh: 987654321" style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+            </div>
+          </div>
+          <div style="margin-top: 10px; text-align: right;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="testNotificationChannel('telegram')">⚡ Uji Coba Kirim Pesan Telegram</button>
+          </div>
+        </div>
+
+        <!-- Discord Webhook Card -->
+        <div class="card sketch-card mb-3 p-3" style="background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 12px;">
+          <div class="flex-between align-center mb-2" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 20px;">🎮</span>
+              <div>
+                <strong>Discord Webhook Alert</strong>
+                <div class="text-xs text-muted" style="font-size: 11px; color: #94a3b8;">Kirim formatted embed kartu risiko langsung ke channel Discord Anda</div>
+              </div>
+            </div>
+            <label class="switch-toggle" style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+              <input type="checkbox" id="notifDiscordEnabled" /> Aktifkan
+            </label>
+          </div>
+          <div class="form-group" style="margin-top: 8px;">
+            <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Discord Webhook URL</label>
+            <input type="password" id="notifDiscordWebhook" class="custom-input" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+          </div>
+          <div style="margin-top: 10px; text-align: right;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="testNotificationChannel('discord')">⚡ Uji Coba Kirim Webhook Discord</button>
+          </div>
+        </div>
+
+        <!-- Slack Webhook Card -->
+        <div class="card sketch-card mb-3 p-3" style="background: #0f172a; border: 1px solid #334155; padding: 12px; margin-bottom: 12px;">
+          <div class="flex-between align-center mb-2" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 20px;">💬</span>
+              <div>
+                <strong>Slack Webhook Alert</strong>
+                <div class="text-xs text-muted" style="font-size: 11px; color: #94a3b8;">Kirim ringkasan Block Kit ke workspace / channel Slack</div>
+              </div>
+            </div>
+            <label class="switch-toggle" style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+              <input type="checkbox" id="notifSlackEnabled" /> Aktifkan
+            </label>
+          </div>
+          <div class="form-group" style="margin-top: 8px;">
+            <label style="font-size: 11px; font-weight: 700; color: #cbd5e1;">Slack Webhook URL</label>
+            <input type="password" id="notifSlackWebhook" class="custom-input" placeholder="https://hooks.slack.com/services/..." style="width: 100%; padding: 6px 10px; background: #090d16; border: 1px solid #334155; color: #fff; border-radius: 4px;" />
+          </div>
+          <div style="margin-top: 10px; text-align: right;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="testNotificationChannel('slack')">⚡ Uji Coba Kirim Webhook Slack</button>
+          </div>
+        </div>
+
+        <!-- Alert Preferences Filters -->
+        <div class="card sketch-card p-3 mb-3" style="background: #0b1120; border: 1px solid #1e293b; padding: 12px; margin-bottom: 14px;">
+          <div class="flex-between align-center" style="display: flex; justify-content: space-between; align-items: center;">
+            <strong style="font-size: 12px; color: #e2e8f0;">Kondisi Pemicu Notifikasi:</strong>
+            <button type="button" class="btn btn-ghost btn-xs" style="font-size: 11px; color: #38bdf8; cursor: pointer; padding: 2px 6px;" onclick="testSmartDiffNotification()">⚡ Test Format Smart Diff</button>
+          </div>
+          <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #fca5a5;">
+              <input type="checkbox" id="notifCritToggle" checked /> 🔴 Temuan Kritis (Critical)
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #fdba74;">
+              <input type="checkbox" id="notifHighToggle" checked /> 🟠 Temuan Tinggi (High)
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #86efac;">
+              <input type="checkbox" id="notifScanCompleteToggle" checked /> 🎉 Pemindaian Selesai
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #facc15;">
+              <input type="checkbox" id="notifNewAssetsToggle" checked /> 🚨 Perubahan Aset Baru (Smart Diff)
+            </label>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('accountSettingsModal').classList.add('hidden')">Tutup</button>
+          <button type="button" id="saveNotifConfigBtn" class="btn btn-primary btn-sm btn-glow" onclick="saveUserNotificationsConfig()">💾 Simpan Pengaturan Notifikasi</button>
+        </div>
       </div>
     </div>
   </div>

@@ -41,6 +41,24 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class UserNotificationConfig(Base):
+    __tablename__ = "user_notification_configs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="cascade"), unique=True, index=True, nullable=False)
+    telegram_bot_token: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    discord_webhook_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    discord_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    slack_webhook_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    slack_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    notify_on_critical: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_on_high: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_on_scan_complete: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_on_new_assets: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Project(Base):
     __tablename__ = "projects"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
@@ -1065,5 +1083,5 @@ __all__ = [
     "Capability", "CapabilityPolicy", "Approval", "AiRun", "AiDecision", "AiToolCall", "Hypothesis",
     "AttackPath", "AttackChain", "AttackPathEdge", "CredentialArtifact", "CredentialContext", "ValidationProfile",
     "CleanupTask", "LabEnvironment", "LabTarget", "EvidenceScore", "EvidenceRequirement",
-    "Campaign", "Artifact", "Identity", "TestPlan", "PreconditionCheck", "ExportJob",
+    "Campaign", "Artifact", "Identity", "TestPlan", "PreconditionCheck", "ExportJob", "UserNotificationConfig",
 ]
