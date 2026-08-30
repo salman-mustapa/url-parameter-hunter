@@ -24,6 +24,12 @@ function openPortsModal() {
   const modal = el("portsModal");
   if (modal) {
     modal.classList.remove("hidden");
+    state.currentPortFilter = "ALL";
+    if (el("portSearchInput")) el("portSearchInput").value = "";
+    document.querySelectorAll(".port-filter-pill").forEach(p => {
+      p.classList.toggle("active", p.dataset.portFilter === "ALL");
+    });
+    currentPortsPage = 1;
     loadAllPorts();
   }
 }
@@ -266,6 +272,11 @@ function openUrlsModal() {
   const modal = el("urlsModal");
   if (modal) {
     modal.classList.remove("hidden");
+    state.currentUrlFilter = "ALL";
+    if (el("urlSearchInput")) el("urlSearchInput").value = "";
+    document.querySelectorAll(".url-filter-pill").forEach(p => {
+      p.classList.toggle("active", p.dataset.urlFilter === "ALL");
+    });
     currentUrlsPage = 1;
     loadAllUrls();
   }
@@ -375,6 +386,11 @@ function openTechsModal() {
   const modal = el("techsModal");
   if (modal) {
     modal.classList.remove("hidden");
+    state.currentTechFilter = "ALL";
+    if (el("techSearchInput")) el("techSearchInput").value = "";
+    document.querySelectorAll(".tech-filter-pill").forEach(p => {
+      p.classList.toggle("active", p.dataset.techFilter === "ALL");
+    });
     loadAllTechnologies();
   }
 }

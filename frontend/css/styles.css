@@ -2197,35 +2197,36 @@ html, body {
 
 .modal-dialog {
   background: #0c0e17;
-  border: 2px solid #23283e;
+  border: 1px solid #28304c;
   border-radius: 12px;
-  box-shadow: 6px 6px 0 #23283e;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
   width: 100%;
-  max-height: 88vh;
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: modalScaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-  color: #23283e;
+  color: #ffffff;
 }
 
 .modal-dialog .modal-header {
-  background: #171b2e;
-  border-bottom: 2px solid #23283e;
-  padding: 14px 18px;
+  background: #121524;
+  border-bottom: 1px solid #1e243a;
+  padding: 14px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #23283e;
+  color: #ffffff;
+  flex-shrink: 0;
 }
 
 .modal-dialog .modal-header h3 {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
-  color: #23283e !important;
+  color: #ffffff !important;
   margin: 0;
-  letter-spacing: -0.01em;
-  font-family: var(--font-display) !important;
+  letter-spacing: 0.02em;
+  font-family: var(--font-mono) !important;
 }
 
 .modal-dialog .modal-header .btn-ghost,
@@ -2233,9 +2234,9 @@ html, body {
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  border: 1.5px solid #23283e;
-  background: #121524;
-  color: #23283e;
+  border: 1px solid #28304c;
+  background: #171b2e;
+  color: #c0caf5;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2243,22 +2244,20 @@ html, body {
   transition: all 0.12s ease;
   font-size: 13px;
   font-weight: 800;
-  box-shadow: 1.5px 1.5px 0 #23283e;
   padding: 0;
   outline: none;
 }
 
 .modal-dialog .modal-header .btn-ghost:hover,
 .modal-close-btn:hover {
-  background: rgba(247, 118, 142, 0.15);
+  background: rgba(247, 118, 142, 0.2);
   color: #f7768e;
   border-color: #f7768e;
   transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 #f7768e;
 }
 
 .matrix-modal-card {
-  max-width: 1080px;
+  max-width: 1100px;
 }
 
 .auth-dialog-card {
@@ -10198,25 +10197,22 @@ tbody td, td {
   color: #bb9af7 !important;
 }
 
-/* 7. Modal Dialogs with Broken Top Line Notch */
+/* 7. Clean Cyberpunk Bento Modal Dialogs */
 .modal-dialog {
-  padding: 26px 20px 20px !important;
+  padding: 0 !important;
   position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
 }
 
 .modal-dialog .modal-header h3 {
-  position: absolute !important;
-  top: -11px !important;
-  left: 18px !important;
-  background: #121524 !important;
-  padding: 0 10px !important;
+  position: static !important;
   font-family: var(--font-mono) !important;
-  font-size: 13px !important;
-  font-weight: 700 !important;
-  color: #bb9af7 !important;
-  letter-spacing: 0.04em !important;
+  font-size: 14px !important;
+  font-weight: 800 !important;
+  color: #ffffff !important;
+  letter-spacing: 0.02em !important;
   margin: 0 !important;
-  z-index: 10 !important;
 }
 
 
