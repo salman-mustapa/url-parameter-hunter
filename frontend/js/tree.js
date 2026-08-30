@@ -314,7 +314,7 @@ function renderDrawerAssetData(a) {
     if (!a.ports || !a.ports.length) {
       portsBox.innerHTML = `<span class="empty-msg">Tidak ada port terbuka terdeteksi</span>`;
     } else {
-      portsBox.innerHTML = `<table class="admin-table">
+      portsBox.innerHTML = `<table class="tui-ports-table">
         <thead><tr><th>Port</th><th>Proto</th><th>Service</th></tr></thead>
         <tbody>
           ${a.ports.map(p => `<tr><td><strong>${p.port_number || p.port}</strong></td><td>${esc(p.protocol || 'tcp')}</td><td>${esc(p.service_name || '-')}</td></tr>`).join('')}
@@ -827,19 +827,19 @@ function drawAttackGraph() {
     let icon = "🌐";
 
     if (isRoot) {
-      fillColor = "#FEF08A";
+      fillColor = "#ff9e64";
       icon = "🎯";
     } else if (node.type === "SUBDOMAIN") {
-      fillColor = "#D1FAE5";
+      fillColor = "#73daca";
       icon = "🌱";
     } else if (node.type === "IP") {
-      fillColor = "#E0E7FF";
+      fillColor = "#7dcfff";
       icon = "💻";
     }
 
     if (node.findingsCount > 0) {
-      fillColor = "#FEE2E2";
-      borderColor = "#DC2626";
+      fillColor = "#f7768e";
+      borderColor = "#f7768e";
     }
 
     // Outer Shadow & Hover Ring

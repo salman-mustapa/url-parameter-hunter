@@ -787,11 +787,17 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             if kill_switch_manager.is_stopped(ctx.scan_id):
                 break
             batch = assets[idx : idx + batch_size]
-            results = await asyncio.gather(
-                *[_audit_single_asset_sensitive_files(a) for a in batch],
-                return_exceptions=True
-            )
-            asset_batch_results.extend(results)
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_audit_single_asset_sensitive_files(a) for a in batch],
+                        return_exceptions=True
+                    ),
+                    timeout=45.0
+                )
+                asset_batch_results.extend(results)
+            except asyncio.TimeoutError:
+                logger.warning("Sensitive file audit batch reached timeout budget, gracefully advancing...")
 
         for res_list in asset_batch_results:
             if isinstance(res_list, list):

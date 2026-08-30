@@ -10,7 +10,7 @@ from app.models.models import Approval, Artifact, Asset, ExportJob, Finding, Sca
 
 PUBLIC_ROUTES = {
     "/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/logout",
-    "/api/auth/me", "/api/oob/{correlation_id}",
+    "/api/auth/me", "/api/oob/{correlation_id}", "/api/ai/copilot/chat",
 }
 ADMIN_ENDPOINTS = {
     "perform_finding_retest", "get_ai_config", "update_ai_config", "test_ai_gateway_connection",

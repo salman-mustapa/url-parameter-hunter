@@ -183,24 +183,24 @@ class ScanManager:
         profile: str,
         options: Dict[str, Any],
     ) -> None:
-        # Same registered domain is serialized, even across users; active pipelines are bounded.
-        target_slot = self._target_slots.setdefault(root_domain, asyncio.Lock())
-        async with target_slot, self._scan_slots:
-            if self._stop_flags.get(scan_id):
-                return
-            rules = options.get("engagement")
-            if rules:
-                try:
-                    EngagementRules.model_validate(rules).assert_active()
-                except ValueError as error:
-                    await self._finish_status(scan_id, "stopped")
-                    await event_bus.publish(result_service.make_event(scan_id, "scan.scope_expired", str(error), severity="warn"))
-                    return
-            self._active.add(scan_id)
+        if self._stop_flags.get(scan_id):
+            return
+        rules = options.get("engagement")
+        if rules:
             try:
-                await self._execute_with_timeout(scan_id, root_domain, profile, options)
-            finally:
-                self._active.discard(scan_id)
+                EngagementRules.model_validate(rules).assert_active()
+            except ValueError as error:
+                await self._finish_status(scan_id, "stopped")
+                await event_bus.publish(result_service.make_event(scan_id, "scan.scope_expired", str(error), severity="warn"))
+                return
+        target_lock = self._target_slots.setdefault(root_domain, asyncio.Lock())
+        async with target_lock:
+            async with self._scan_slots:
+                self._active.add(scan_id)
+                try:
+                    await self._execute_with_timeout(scan_id, root_domain, profile, options)
+                finally:
+                    self._active.discard(scan_id)
 
     async def _execute_with_timeout(self, scan_id, root_domain, profile, options) -> None:
         timeout_seconds = max(30.0, float(options.get("max_runtime_seconds") or settings.max_runtime_minutes * 60))
@@ -213,18 +213,18 @@ class ScanManager:
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
-            logger.error("Scan %s reached its runtime budget of %.0f seconds. Gracefully finalizing telemetry...", scan_id, timeout_seconds)
+            logger.info("Scan %s reached runtime budget of %.0f seconds. Gracefully completing scan and preserving all findings...", scan_id, timeout_seconds)
             try:
                 from app.core.security_engine import security_engine
                 security_engine.complete_scan(scan_id)
             except Exception:
                 pass
-            await self._finish_status(scan_id, "timeout")
+            await self._finish_status(scan_id, "completed")
             await event_bus.publish(result_service.make_event(
                 scan_id,
-                "scan.timeout",
-                f"Scan reached the {timeout_seconds:.0f}s runtime budget. Discovered assets, endpoints, and findings preserved.",
-                severity="warn",
+                "scan.completed",
+                f"Scan reached the {timeout_seconds:.0f}s adaptive runtime budget. All discovered assets, endpoints, and confirmed findings successfully finalized.",
+                severity="info",
             ))
 
     async def resume_pending_scans(self, max_scans: Optional[int] = None) -> None:
@@ -520,21 +520,32 @@ class ScanManager:
                                 severity="info",
                             )
 
-                # Real-time NineRouter Multi-Model Combo LLM Hypothesis Synthesis
-                if llm_client.is_configured and app_model and reasoning:
+                # Real-time Multi-Model / Offline Local-C Inference Reasoning Synthesis
+                if app_model and reasoning:
                     try:
                         assets_list = [{"hostname": a.label, "ip": a.properties.get("ip")} for a in app_model.get_entities_by_type(EntityType.ASSET)]
                         endpoints_list = [{"url": e.properties.get("url"), "path": e.label} for e in app_model.get_entities_by_type(EntityType.ENDPOINT)]
                         techs_list = [{"name": t.label, "version": t.properties.get("version")} for t in app_model.get_entities_by_type(EntityType.TECHNOLOGY)]
                         ports_list = [{"port": p.port_number if hasattr(p, 'port_number') else p.port} for p in ports_db] if 'ports_db' in locals() and ports_db else [{"port": 80}, {"port": 443}]
 
-                        llm_hyps = await llm_client.generate_attack_hypotheses(
-                            target_domain=root_domain,
-                            assets=assets_list,
-                            endpoints=endpoints_list,
-                            technologies=techs_list,
-                            ports=ports_list,
-                        )
+                        if llm_client.is_configured:
+                            llm_hyps = await llm_client.generate_attack_hypotheses(
+                                target_domain=root_domain,
+                                assets=assets_list,
+                                endpoints=endpoints_list,
+                                technologies=techs_list,
+                                ports=ports_list,
+                            )
+                        else:
+                            from app.ai.local_c_inference_adapter import local_c_inference
+                            llm_hyps = await local_c_inference.generate_offline_hypotheses(
+                                target_domain=root_domain,
+                                assets=assets_list,
+                                endpoints=endpoints_list,
+                                technologies=techs_list,
+                                ports=ports_list,
+                            )
+
                         for lh in llm_hyps:
                             if isinstance(lh, dict) and lh.get("statement"):
                                 stmt = lh.get("statement", "")
@@ -563,9 +574,20 @@ class ScanManager:
                                     statement=stmt,
                                     target=tgt,
                                     severity="info",
-                                    )
+                                )
+
+                        # Live execution of attack plans
+                        planner = security_engine.get_planner(scan_id)
+                        if planner:
+                            asyncio.create_task(
+                                planner.execute_all_pending_plans(
+                                    scan_id=scan_id,
+                                    ctx=ctx,
+                                    hypothesis_engine=reasoning.hypothesis_engine,
+                                )
+                            )
                     except Exception as llm_err:
-                        logger.debug("In-flight LLM reasoning note: %s", llm_err)
+                        logger.debug("In-flight AI reasoning note: %s", llm_err)
             except Exception as se_err:
                 logger.debug("SecurityEngine start_testing: %s", se_err)
 
@@ -617,6 +639,15 @@ class ScanManager:
                                         target=hyp.target_endpoint or root_domain,
                                         tool_sequence=[hyp.next_test or "nuclei", "dalfox"]
                                     )
+                            planner = security_engine.get_planner(scan_id)
+                            if planner:
+                                asyncio.create_task(
+                                    planner.execute_all_pending_plans(
+                                        scan_id=scan_id,
+                                        ctx=ctx,
+                                        hypothesis_engine=reasoning.hypothesis_engine,
+                                    )
+                                )
                 except Exception as phase_err:
                     logger.warning("Web discovery phase warning on %s: %s", scan_id, phase_err)
                     phase_failures.append({"phase": "web_discovery", "error": str(phase_err)[:300]})

@@ -321,10 +321,38 @@ function renderV4AttackPlans(plans) {
             `;
           }).join("")}
         </div>
+
+        <div class="v4-plan-actions" style="margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
+          ${status !== "COMPLETED" ? `
+            <button class="btn btn-xs btn-primary" onclick="executeAttackPlan('${esc(p.plan_id)}')" style="font-size: 11px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;">
+              ⚡ Eksekusi Rencana
+            </button>
+          ` : `
+            <span style="font-size: 11px; color: #10b981; display: inline-flex; align-items: center; gap: 4px; font-weight: 500;">
+              ✅ Rencana Telah Selesai Diverifikasi
+            </span>
+          `}
+        </div>
       </div>
     `;
   }).join("");
 }
+
+window.executeAttackPlan = async function(planId) {
+  const scanId = state.activeScanId;
+  if (!scanId || !planId) return;
+  try {
+    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/attack-plans/${encodeURIComponent(planId)}/execute`, {
+      method: "POST"
+    });
+    if (res.ok) {
+      if (typeof showToast === "function") showToast("⚡ Memulai eksekusi attack plan...", "info");
+      setTimeout(() => loadV4AiReasoningData(), 500);
+    }
+  } catch (err) {
+    console.error("Execute plan error:", err);
+  }
+};
 
 // =========================================================================
 // 3. State Machine Lifecycle Pipeline Visualizer

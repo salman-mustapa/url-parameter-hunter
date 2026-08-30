@@ -391,7 +391,7 @@ function initLandingTerminalSimulator() {
   const tickerEl = el("termLiveTicker");
   if (!tickerEl) return;
   const phrases = [
-    "Autonomous Level L4 pipeline executing at maximum power...",
+    "Autonomous pipeline executing at maximum power...",
     "Validating DNS records & active CNAME resolution...",
     "Katana spider active: extracting query parameters & forms...",
     "Probing sensitive paths: /.env, /.git, /backup.sql...",

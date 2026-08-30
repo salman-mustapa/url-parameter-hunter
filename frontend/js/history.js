@@ -200,7 +200,7 @@ function renderFilteredHistory() {
     return;
   }
 
-  // 5. Render Target Workspaces
+  // 5. Render Target Workspaces with Clean TUI Session Tables
   container.innerHTML = "";
   targetDomains.forEach(td => {
     const block = document.createElement("div");
@@ -211,8 +211,8 @@ function renderFilteredHistory() {
     const riskBadgeClass = td.riskLevel === 'CRITICAL' ? 'risk-badge-critical' : (td.riskLevel === 'HIGH' ? 'risk-badge-high' : (td.riskLevel === 'MEDIUM' ? 'risk-badge-medium' : 'risk-badge-clean'));
     const latestDateStr = td.latestScanDate.getTime() > 0 ? td.latestScanDate.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : "-";
 
-    // Scan sessions rows
-    let scanRowsHtml = "";
+    // Build Clean TUI Table Rows
+    let tableRowsHtml = "";
     td.scans.forEach((s, idx) => {
       const p = s.progress || {};
       const st = (s.status || "completed").toUpperCase();
@@ -222,68 +222,63 @@ function renderFilteredHistory() {
 
       let statusBadgeHtml = "";
       if (st === "COMPLETED") {
-        statusBadgeHtml = `<span class="pill pill-completed">🟢 COMPLETED</span>`;
+        statusBadgeHtml = `<span class="pill pill-completed font-mono">🟢 COMPLETED</span>`;
       } else if (st === "RUNNING") {
-        statusBadgeHtml = `<span class="pill pill-running pulse">⚡ RUNNING</span>`;
+        statusBadgeHtml = `<span class="pill pill-running pulse font-mono">⚡ RUNNING</span>`;
       } else if (st === "PAUSED") {
-        statusBadgeHtml = `<span class="pill pill-paused">⏸ PAUSED</span>`;
+        statusBadgeHtml = `<span class="pill pill-paused font-mono">⏸ PAUSED</span>`;
       } else {
-        statusBadgeHtml = `<span class="pill pill-danger">⚠️ ${esc(st)}</span>`;
+        statusBadgeHtml = `<span class="pill pill-danger font-mono">⚠️ ${esc(st)}</span>`;
       }
 
-      const scanDate = s.created_at ? new Date(s.created_at).toLocaleString("id-ID", { dateStyle: "short", timeStyle: "medium" }) : "-";
-      const isTreeEnd = idx === td.scans.length - 1;
-      const branchChar = isTreeEnd ? "└──" : "├──";
-      const shortScanId = s.id && s.id.length > 22 ? (s.id.slice(0, 20) + '…') : s.id;
+      const scanDate = s.created_at ? new Date(s.created_at).toLocaleString("id-ID", { dateStyle: "short", timeStyle: "short" }) : "-";
+      const shortScanId = s.id && s.id.length > 20 ? (s.id.slice(0, 18) + '…') : s.id;
       const scanTarget = (s.options && (s.options.target_url || s.options.target_host)) || s.target_url || s.target_host || s.root_domain || td.rootDomain;
 
-      scanRowsHtml += `
-        <div class="scan-session-row ${isLatest ? 'is-latest-scan' : ''}" data-id="${esc(s.id)}" data-domain="${esc(scanTarget)}">
-          <div class="session-branch-prefix font-mono">${branchChar}</div>
-          
-          <div class="session-main-content">
-            <div class="session-header-line">
-              <span class="session-id-tag font-mono" title="${esc(s.id)}">#${esc(shortScanId)}</span>
-              ${statusBadgeHtml}
-              <span class="pill-profile">Target: <strong>${esc(scanTarget)}</strong></span>
-              <span class="pill-muted">Profile: <strong>${esc(s.profile || 'standard')}</strong></span>
-              <span class="pill-muted">📅 ${scanDate}</span>
-              ${isLatest ? '<span class="pill-latest-tag">LATEST</span>' : ''}
+      tableRowsHtml += `
+        <tr class="tui-session-row ${isLatest ? 'is-latest-session' : ''}" data-id="${esc(s.id)}" data-domain="${esc(scanTarget)}">
+          <td>
+            <div class="session-cell-id">
+              <span class="session-id-link font-mono" title="${esc(s.id)}" onclick="openScanFromHistory(${jsArg(s.id)})">#${esc(shortScanId)}</span>
+              ${isLatest ? '<span class="pill-latest-badge font-mono">LATEST</span>' : ''}
             </div>
-
-            <div class="session-telemetry-chips">
-              <span class="session-chip">🌳 <strong>${p.assets || 0}</strong> Subdomains</span>
-              <span class="session-chip">📡 <strong>${p.ports || 0}</strong> Open Ports</span>
-              <span class="session-chip">🔗 <strong>${p.urls || 0}</strong> URLs</span>
-              <span class="session-chip ${p.findings > 0 ? 'chip-findings-alert' : ''}">
-                🛡️ <strong>${p.findings || 0}</strong> Findings
-              </span>
+          </td>
+          <td>${statusBadgeHtml}</td>
+          <td>
+            <span class="session-cell-url font-mono" title="${esc(scanTarget)}">${esc(scanTarget)}</span>
+          </td>
+          <td><span class="font-mono text-bright"><strong>${p.assets || 0}</strong></span></td>
+          <td><span class="font-mono text-bright"><strong>${p.ports || 0}</strong></span></td>
+          <td>
+            <span class="font-mono ${p.findings > 0 ? 'text-danger font-bold' : 'text-muted'}">
+              ${p.findings > 0 ? `🛡️ ${p.findings}` : '0'}
+            </span>
+          </td>
+          <td><span class="font-mono text-muted text-xs">${scanDate}</span></td>
+          <td style="text-align: right;">
+            <div class="session-action-group">
+              <button class="btn btn-primary btn-xs btn-open-dash font-mono" title="Buka di Dashboard">🎯 Dashboard</button>
+              <button class="btn btn-secondary btn-xs btn-open-report font-mono" title="Buka Laporan">📑 Laporan</button>
+              ${priorScanId ? `<button class="btn btn-secondary btn-xs btn-quick-diff font-mono" data-scan-a="${esc(s.id)}" data-scan-b="${esc(priorScanId)}" title="Bandingkan dengan scan sebelumnya">⚖️ Diff</button>` : ''}
+              <button class="btn btn-secondary btn-xs btn-export-json font-mono" title="Unduh JSON">💾</button>
+              <button class="btn btn-ghost btn-xs btn-delete-scan text-danger font-mono" title="Hapus Scan">🗑️</button>
             </div>
-          </div>
-
-          <div class="session-actions-toolbar">
-            <button class="btn btn-primary btn-xs btn-rescan-session font-bold" data-target="${esc(scanTarget)}" data-profile="${esc(s.profile || 'deep')}" title="Scan Ulang Target Sesi #${esc(s.id.slice(0, 16))} (${esc(scanTarget)})">⚡ Scan Ulang</button>
-            <button class="btn btn-secondary btn-xs btn-open-dash" title="Buka Sesi Ini di Dashboard">🎯 Dashboard</button>
-            <button class="btn btn-secondary btn-xs btn-open-report" title="Buka di Pusat Laporan">📑 Laporan</button>
-            ${priorScanId ? `<button class="btn btn-secondary btn-xs btn-quick-diff" data-scan-a="${esc(s.id)}" data-scan-b="${esc(priorScanId)}" title="Bandingkan dengan Scan Sebelumnya">⚖️ Diff vs Prior</button>` : ''}
-            <button class="btn btn-secondary btn-xs btn-export-json" title="Unduh Evidence Bundle JSON">📦 JSON</button>
-            <button class="btn btn-ghost btn-xs btn-delete-scan text-danger" title="Hapus Sesi Scan">🗑️</button>
-          </div>
-        </div>
+          </td>
+        </tr>
       `;
     });
 
     block.innerHTML = `
-      <!-- 1. Target Workspace Header (§36) -->
+      <!-- 1. Domain Header Block -->
       <div class="target-card-header">
         <div class="target-identity-wrap" onclick="openDomainDetail(${jsArg(td.rootDomain)})">
           <div class="target-avatar">🌐</div>
           <div class="target-title-block">
             <div class="target-title-row">
-              <h3 class="target-domain-name">${esc(td.rootDomain)}</h3>
+              <h3 class="target-domain-name font-mono">${esc(td.rootDomain)}</h3>
               <span class="target-health-pill status-active">ACTIVE</span>
-              <span class="target-risk-badge ${riskBadgeClass}">${esc(td.riskLevel)} FINDINGS</span>
-              <span class="target-scope-pill">IN-SCOPE</span>
+              <span class="target-risk-badge ${riskBadgeClass}">${esc(td.riskLevel)}</span>
+              <span class="target-scope-pill font-mono">IN-SCOPE</span>
             </div>
             <div class="target-sub-meta">
               <span>🎯 <strong>${td.scans.length}</strong> Sesi Scan</span> · 
@@ -293,46 +288,38 @@ function renderFilteredHistory() {
         </div>
 
         <div class="target-header-actions">
-          <button class="btn btn-primary btn-sm btn-rescan-target" title="Mulai Scan Baru pada Domain ini">⚡ Scan Ulang</button>
-          <button class="btn btn-secondary btn-sm" onclick="openDomainDetail(${jsArg(td.rootDomain)})">🌐 360° Domain Intel ↗</button>
-          ${td.scans.length > 1 ? `<button class="btn btn-secondary btn-sm btn-toggle-diff" data-domain="${esc(td.rootDomain)}">⚖️ Diff Compare</button>` : ''}
-          <button class="btn btn-secondary btn-sm btn-open-domain-report" data-domain="${esc(td.rootDomain)}">📑 Pusat Laporan</button>
+          <button class="btn btn-primary btn-sm btn-rescan-target font-mono" title="Mulai Scan Baru pada Domain ini">🚀 Scan Baru</button>
+          <button class="btn btn-secondary btn-sm font-mono" onclick="openDomainDetail(${jsArg(td.rootDomain)})">🌐 360° Intel ↗</button>
+          ${td.scans.length > 1 ? `<button class="btn btn-secondary btn-sm btn-toggle-diff font-mono" data-domain="${esc(td.rootDomain)}">⚖️ Diff Compare</button>` : ''}
+          <button class="btn btn-secondary btn-sm btn-open-domain-report font-mono" data-domain="${esc(td.rootDomain)}">📑 Laporan</button>
         </div>
       </div>
 
-      <!-- 2. Aggregated Attack Surface Strip -->
+      <!-- 2. Surface Summary Strip -->
       <div class="target-surface-strip">
         <div class="surface-stat-item">
-          <span class="surface-icon">🌳</span>
-          <div>
-            <span class="surface-val">${td.maxAssets}</span>
-            <span class="surface-lbl">Active Subdomains</span>
-          </div>
+          <span class="dot-chip dot-green"></span>
+          <span class="surface-lbl font-mono">Subdomains</span>
+          <strong class="surface-val font-mono">${td.maxAssets}</strong>
         </div>
         <div class="surface-stat-item">
-          <span class="surface-icon">📡</span>
-          <div>
-            <span class="surface-val">${td.maxPorts}</span>
-            <span class="surface-lbl">Open Services / Ports</span>
-          </div>
+          <span class="dot-chip dot-cyan"></span>
+          <span class="surface-lbl font-mono">Open Ports</span>
+          <strong class="surface-val font-mono">${td.maxPorts}</strong>
         </div>
         <div class="surface-stat-item">
-          <span class="surface-icon">🔗</span>
-          <div>
-            <span class="surface-val">${td.maxUrls}</span>
-            <span class="surface-lbl">Discovered Endpoints</span>
-          </div>
+          <span class="dot-chip dot-purple"></span>
+          <span class="surface-lbl font-mono">Endpoints</span>
+          <strong class="surface-val font-mono">${td.maxUrls}</strong>
         </div>
         <div class="surface-stat-item ${td.totalFindings > 0 ? 'surface-danger' : ''}">
-          <span class="surface-icon">🛡️</span>
-          <div>
-            <span class="surface-val text-danger">${td.totalFindings}</span>
-            <span class="surface-lbl">Security Findings</span>
-          </div>
+          <span class="dot-chip dot-red"></span>
+          <span class="surface-lbl font-mono">Findings</span>
+          <strong class="surface-val font-mono ${td.totalFindings > 0 ? 'text-danger' : ''}">${td.totalFindings}</strong>
         </div>
       </div>
 
-      <!-- 3. Inline Differential Comparison Drawer (§35) -->
+      <!-- 3. Inline Diff Drawer -->
       <div class="target-inline-diff-drawer hidden" id="diffDrawer_${safeDomain}">
         <div class="inline-diff-header">
           <h4>⚖️ Perbandingan Diferensial (Diff) Sesi Scan — ${esc(td.rootDomain)}</h4>
@@ -343,11 +330,26 @@ function renderFilteredHistory() {
         </div>
       </div>
 
-      <!-- 4. Chronological Scan Sessions Timeline Tree -->
+      <!-- 4. Clean TUI Session History Table (Matching Image 2 Reference) -->
       <div class="target-scan-tree-wrapper">
-        <div class="tree-header-label font-mono">SCAN_TIMELINE_TREE (${td.scans.length} SESI):</div>
-        <div class="scan-sessions-list">
-          ${scanRowsHtml}
+        <div class="tui-table-wrap">
+          <table class="tui-sessions-table">
+            <thead>
+              <tr>
+                <th>SESI / SCAN ID</th>
+                <th>STATUS</th>
+                <th>TARGET URL</th>
+                <th>SUBS</th>
+                <th>PORTS</th>
+                <th>FINDINGS</th>
+                <th>WAKTU</th>
+                <th style="text-align: right;">AKSI CEPAT</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRowsHtml}
+            </tbody>
+          </table>
         </div>
       </div>
     `;
@@ -391,7 +393,7 @@ function renderFilteredHistory() {
     });
 
     // Bind Session-level event handlers
-    block.querySelectorAll(".scan-session-row").forEach(row => {
+    block.querySelectorAll(".scan-session-row, .tui-session-row").forEach(row => {
       const sid = row.dataset.id;
       const dom = row.dataset.domain;
 
@@ -923,12 +925,40 @@ async function openDomainDetail(domainName, updateUrl = true) {
     if (el('domainFindingCount')) el('domainFindingCount').textContent = findCount;
     if (el('domainScanCount')) el('domainScanCount').textContent = scanCount;
 
-    // Subdomains
-    const subList = el('domainSubdomainList');
-    if (subList) {
-      subList.innerHTML = (d.subdomains || []).map(s =>
-        `<span class="tag-item" onclick="openDomainDetail(${jsArg(s)})">${esc(s)}</span>`
-      ).join('') || '<span class="empty-msg">No subdomains found</span>';
+    // Subdomains with Realtime Search & Copy All
+    const subdomainsList = d.subdomains || [];
+    if (el('domainSubdomainCountHeader')) el('domainSubdomainCountHeader').textContent = subdomainsList.length;
+
+    const renderSubdomains = (filterQuery = "") => {
+      const subList = el('domainSubdomainList');
+      if (!subList) return;
+      const q = filterQuery.toLowerCase().trim();
+      const filtered = q ? subdomainsList.filter(s => s.toLowerCase().includes(q)) : subdomainsList;
+      if (!filtered.length) {
+        subList.innerHTML = '<span class="empty-msg font-mono" style="padding:10px;">Tidak ada subdomain yang cocok</span>';
+        return;
+      }
+      subList.innerHTML = filtered.map(s =>
+        `<span class="tag-item font-mono" onclick="openDomainDetail(${jsArg(s)})" title="Buka detail ${esc(s)}">${esc(s)}</span>`
+      ).join('');
+    };
+
+    renderSubdomains();
+
+    const searchInput = el('domainSubSearchInput');
+    if (searchInput) {
+      searchInput.value = "";
+      searchInput.oninput = (e) => renderSubdomains(e.target.value);
+    }
+
+    const copyBtn = el('copyAllSubdomainsBtn');
+    if (copyBtn) {
+      copyBtn.onclick = () => {
+        if (!subdomainsList.length) return;
+        navigator.clipboard?.writeText(subdomainsList.join('\n'));
+        copyBtn.textContent = "✅ Tersalin!";
+        setTimeout(() => { copyBtn.textContent = "📋 Salin Semua"; }, 1800);
+      };
     }
 
     // IPs
@@ -1005,7 +1035,7 @@ async function openAssetDetail(assetId, updateUrl = true) {
       if ((a.ports || []).length === 0) {
         pList.innerHTML = '<span class="empty-msg">No open ports recorded</span>';
       } else {
-        pList.innerHTML = `<table class="admin-table"><thead><tr><th>Port</th><th>Protocol</th><th>Service</th><th>Banner</th></tr></thead><tbody>${
+        pList.innerHTML = `<table class="tui-ports-table"><thead><tr><th>Port</th><th>Protocol</th><th>Service</th><th>Banner</th></tr></thead><tbody>${
           a.ports.map(p => `<tr><td><strong>${p.port_number || p.port}</strong></td><td>${esc(p.protocol||'tcp')}</td><td>${esc(p.service_name||p.service||'-')}</td><td class="mono">${esc(p.banner||'-')}</td></tr>`).join('')
         }</tbody></table>`;
       }

@@ -273,84 +273,343 @@ function renderWorkspaceOverview(ws) {
   }
 }
 
+
+// Universal Paginated Table Controller for Reports Workspace with Filter Pills
+const wsPaginationState = {
+  assets: { page: 1, pageSize: 25, query: "", filter: "ALL", data: [] },
+  services: { page: 1, pageSize: 25, query: "", filter: "ALL", data: [] },
+  endpoints: { page: 1, pageSize: 25, query: "", filter: "ALL", data: [] },
+  artifacts: { page: 1, pageSize: 25, query: "", filter: "ALL", data: [] },
+  timeline: { page: 1, pageSize: 25, query: "", filter: "ALL", data: [] },
+};
+
+function setupFilterPills(containerId, stateKey, updateFn, attrName) {
+  const container = el(containerId);
+  if (!container || container.dataset.bound) return;
+  container.dataset.bound = "true";
+
+  container.querySelectorAll(".filter-pill").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      container.querySelectorAll(".filter-pill").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      wsPaginationState[stateKey].filter = btn.getAttribute(attrName) || "ALL";
+      wsPaginationState[stateKey].page = 1;
+      updateFn();
+    });
+  });
+}
+
+function renderWsPaginationControls(key, totalItems, onPageChange) {
+  const pEl = el(`ws${key.charAt(0).toUpperCase() + key.slice(1)}Pagination`);
+  if (!pEl) return;
+  const state = wsPaginationState[key];
+  const totalPages = Math.max(1, Math.ceil(totalItems / state.pageSize));
+  if (state.page > totalPages) state.page = totalPages;
+
+  const startIdx = totalItems === 0 ? 0 : (state.page - 1) * state.pageSize + 1;
+  const endIdx = Math.min(state.page * state.pageSize, totalItems);
+
+  pEl.innerHTML = `
+    <div class="ws-pagination-info font-mono">
+      Menampilkan <strong>${startIdx}-${endIdx}</strong> dari <strong>${totalItems}</strong> data
+    </div>
+    <div class="ws-pagination-controls">
+      <button class="btn btn-secondary btn-xs font-mono btn-page-first" ${state.page <= 1 ? 'disabled' : ''}>⏮ Pertama</button>
+      <button class="btn btn-secondary btn-xs font-mono btn-page-prev" ${state.page <= 1 ? 'disabled' : ''}>◀ Sebelumnya</button>
+      <span class="ws-page-current font-mono">Halaman <strong>${state.page}</strong> / ${totalPages}</span>
+      <button class="btn btn-secondary btn-xs font-mono btn-page-next" ${state.page >= totalPages ? 'disabled' : ''}>Berikutnya ▶</button>
+      <button class="btn btn-secondary btn-xs font-mono btn-page-last" ${state.page >= totalPages ? 'disabled' : ''}>Terakhir ⏭</button>
+    </div>
+  `;
+
+  pEl.querySelector(".btn-page-first")?.addEventListener("click", () => {
+    if (state.page > 1) { state.page = 1; onPageChange(); }
+  });
+  pEl.querySelector(".btn-page-prev")?.addEventListener("click", () => {
+    if (state.page > 1) { state.page--; onPageChange(); }
+  });
+  pEl.querySelector(".btn-page-next")?.addEventListener("click", () => {
+    if (state.page < totalPages) { state.page++; onPageChange(); }
+  });
+  pEl.querySelector(".btn-page-last")?.addEventListener("click", () => {
+    if (state.page < totalPages) { state.page = totalPages; onPageChange(); }
+  });
+}
+
 function renderWorkspaceAssets(assets) {
+  wsPaginationState.assets.data = assets || [];
+  wsPaginationState.assets.page = 1;
+  
+  const searchInput = el("wsAssetSearchInput");
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "true";
+    searchInput.addEventListener("input", (e) => {
+      wsPaginationState.assets.query = e.target.value.toLowerCase().trim();
+      wsPaginationState.assets.page = 1;
+      updateAssetsView();
+    });
+  }
+
+  setupFilterPills("wsAssetFilterPills", "assets", updateAssetsView, "data-asset-filter");
+  updateAssetsView();
+}
+
+function updateAssetsView() {
   const tbody = el("wsAssetsTbody");
   if (!tbody) return;
+  const { data, page, pageSize, query, filter } = wsPaginationState.assets;
 
-  if (!assets.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center p-3 text-muted">Tidak ada data aset subdomain yang ditemukan.</td></tr>`;
+  let filtered = data;
+  if (filter === "ACTIVE") {
+    filtered = filtered.filter(a => (a.status || "ACTIVE").toUpperCase() === "ACTIVE");
+  } else if (filter === "DOMAIN") {
+    filtered = filtered.filter(a => (a.asset_type || "domain").toLowerCase().includes("domain"));
+  } else if (filter === "IP") {
+    filtered = filtered.filter(a => (a.asset_type || "").toLowerCase() === "ip" || (a.ip && a.ip === a.hostname));
+  }
+
+  if (query) {
+    filtered = filtered.filter(a => (a.hostname || a.fqdn || "").toLowerCase().includes(query) || (a.ip || "").toLowerCase().includes(query) || (a.status || "").toLowerCase().includes(query));
+  }
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center p-3 text-muted font-mono">${(query || filter !== 'ALL') ? 'Tidak ada asset yang cocok dengan filter atau pencarian.' : 'Tidak ada data aset subdomain yang ditemukan.'}</td></tr>`;
+    renderWsPaginationControls("assets", 0, updateAssetsView);
     return;
   }
 
-  tbody.innerHTML = assets.map((a) => {
-    const statusPill = `<span class="pill pill-${a.status === 'ACTIVE' ? 'success' : 'neutral'}">${esc(a.status || 'ACTIVE')}</span>`;
+  const start = (page - 1) * pageSize;
+  const paged = filtered.slice(start, start + pageSize);
+
+  tbody.innerHTML = paged.map((a) => {
+    const statusPill = `<span class="pill pill-${a.status === 'ACTIVE' ? 'success' : 'neutral'} font-mono">${esc(a.status || 'ACTIVE')}</span>`;
     return `
       <tr>
-        <td><strong>${esc(a.hostname || a.fqdn || '-')}</strong></td>
-        <td><code>${esc(a.ip || '-')}</code></td>
-        <td><span class="pill pill-neutral">${esc(a.asset_type || 'domain')}</span></td>
+        <td><strong class="font-mono text-bright">${esc(a.hostname || a.fqdn || '-')}</strong></td>
+        <td><code class="font-mono text-cyan">${esc(a.ip || '-')}</code></td>
+        <td><span class="pill pill-neutral font-mono">${esc(a.asset_type || 'domain')}</span></td>
         <td>${statusPill}</td>
-        <td class="text-xs">${(a.first_seen || a.created_at) ? new Date(a.first_seen || a.created_at).toLocaleDateString('id-ID') : '-'}</td>
+        <td class="text-xs font-mono">${(a.first_seen || a.created_at) ? new Date(a.first_seen || a.created_at).toLocaleDateString('id-ID') : '-'}</td>
         <td>
-          <button class="btn btn-secondary btn-xs" onclick="openAssetDetail(${jsArg(a.id)})">🔍 Detail Asset</button>
+          <button class="btn btn-secondary btn-xs font-mono" onclick="openAssetDetail(${jsArg(a.id)})">🔍 Detail Asset</button>
         </td>
       </tr>
     `;
   }).join("");
+
+  renderWsPaginationControls("assets", filtered.length, updateAssetsView);
 }
 
 function renderWorkspaceServices(services) {
+  wsPaginationState.services.data = services || [];
+  wsPaginationState.services.page = 1;
+
+  const searchInput = el("wsServiceSearchInput");
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "true";
+    searchInput.addEventListener("input", (e) => {
+      wsPaginationState.services.query = e.target.value.toLowerCase().trim();
+      wsPaginationState.services.page = 1;
+      updateServicesView();
+    });
+  }
+
+  setupFilterPills("wsServiceFilterPills", "services", updateServicesView, "data-service-filter");
+  updateServicesView();
+}
+
+function updateServicesView() {
   const tbody = el("wsServicesTbody");
   if (!tbody) return;
+  const { data, page, pageSize, query, filter } = wsPaginationState.services;
 
-  if (!services.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center p-3 text-muted">Tidak ada port atau service terbuka yang terdeteksi.</td></tr>`;
+  let filtered = data;
+  if (filter === "WEB") {
+    const webPorts = [80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9000];
+    filtered = filtered.filter(s => webPorts.includes(Number(s.port)) || (s.service || "").toLowerCase().includes("http"));
+  } else if (filter === "TLS") {
+    filtered = filtered.filter(s => s.is_tls || s.tls_enabled || Number(s.port) === 443 || Number(s.port) === 8443);
+  } else if (filter === "PLAIN") {
+    filtered = filtered.filter(s => !s.is_tls && !s.tls_enabled && Number(s.port) !== 443 && Number(s.port) !== 8443);
+  } else if (filter === "AUTH") {
+    filtered = filtered.filter(s => s.is_auth_surface);
+  } else if (filter === "NON_STD") {
+    filtered = filtered.filter(s => s.is_nonstandard_http || s.is_non_standard_http || ![80, 443].includes(Number(s.port)));
+  }
+
+  if (query) {
+    filtered = filtered.filter(s => (s.host || "").toLowerCase().includes(query) || String(s.port || "").includes(query) || (s.service || s.service_name || "").toLowerCase().includes(query) || (s.banner || "").toLowerCase().includes(query));
+  }
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center p-3 text-muted font-mono">${(query || filter !== 'ALL') ? 'Tidak ada service yang cocok dengan filter atau pencarian.' : 'Tidak ada port atau service terbuka yang terdeteksi.'}</td></tr>`;
+    renderWsPaginationControls("services", 0, updateServicesView);
     return;
   }
 
-  tbody.innerHTML = services.map((s) => {
-    const isNonStdHttp = (s.is_nonstandard_http ?? s.is_non_standard_http) ? `<span class="pill pill-warning">Non-Std HTTP</span>` : '';
-    const isTls = (s.is_tls ?? s.tls_enabled) ? `<span class="pill pill-success">TLS/HTTPS</span>` : `<span class="pill pill-muted">Plain</span>`;
-    const authSurface = s.is_auth_surface ? `<span class="pill pill-danger">Auth Surface</span>` : `<span class="text-xs text-muted">Standard</span>`;
+  const start = (page - 1) * pageSize;
+  const paged = filtered.slice(start, start + pageSize);
+
+  tbody.innerHTML = paged.map((s) => {
+    const isNonStdHttp = (s.is_nonstandard_http ?? s.is_non_standard_http) ? `<span class="pill pill-warning font-mono">Non-Std HTTP</span>` : '';
+    const isTls = (s.is_tls ?? s.tls_enabled) ? `<span class="pill pill-success font-mono">TLS/HTTPS</span>` : `<span class="pill pill-muted font-mono">Plain</span>`;
+    const authSurface = s.is_auth_surface ? `<span class="pill pill-danger font-mono">Auth Surface</span>` : `<span class="text-xs text-muted font-mono">Standard</span>`;
 
     return `
       <tr>
-        <td><strong>${esc(s.host || '-')}</strong></td>
+        <td><strong class="font-mono text-bright">${esc(s.host || '-')}</strong></td>
         <td><span class="font-mono font-bold text-primary">${esc(String(s.port))}</span></td>
-        <td><code>${esc(s.protocol || 'tcp')}</code></td>
-        <td><span class="pill pill-neutral">${esc(s.service || s.service_name || '-')}</span> ${isNonStdHttp}</td>
-        <td>${esc(s.product || '')} ${esc(s.version || '')}</td>
+        <td><code class="font-mono">${esc(s.protocol || 'tcp')}</code></td>
+        <td><span class="pill pill-neutral font-mono">${esc(s.service || s.service_name || '-')}</span> ${isNonStdHttp}</td>
+        <td class="font-mono">${esc(s.product || '')} ${esc(s.version || '')}</td>
         <td class="text-xs font-mono text-muted truncate-cell" title="${esc(s.banner || '')}">${esc(s.banner || '-')}</td>
         <td>${isTls}</td>
         <td>${authSurface}</td>
       </tr>
     `;
   }).join("");
+
+  renderWsPaginationControls("services", filtered.length, updateServicesView);
 }
 
 function renderWorkspaceEndpoints(endpoints) {
+  wsPaginationState.endpoints.data = endpoints || [];
+  wsPaginationState.endpoints.page = 1;
+
+  const searchInput = el("wsEndpointSearchInput");
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "true";
+    searchInput.addEventListener("input", (e) => {
+      wsPaginationState.endpoints.query = e.target.value.toLowerCase().trim();
+      wsPaginationState.endpoints.page = 1;
+      updateEndpointsView();
+    });
+  }
+
+  setupFilterPills("wsEndpointFilterPills", "endpoints", updateEndpointsView, "data-endpoint-filter");
+  updateEndpointsView();
+}
+
+function updateEndpointsView() {
   const tbody = el("wsEndpointsTbody");
   if (!tbody) return;
+  const { data, page, pageSize, query, filter } = wsPaginationState.endpoints;
 
-  if (!endpoints.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="text-center p-3 text-muted">Tidak ada endpoint URL yang terpetakan.</td></tr>`;
+  let filtered = data;
+  if (filter === "GET") {
+    filtered = filtered.filter(u => (u.method || "GET").toUpperCase() === "GET");
+  } else if (filter === "POST") {
+    filtered = filtered.filter(u => (u.method || "").toUpperCase() === "POST");
+  } else if (filter === "2XX") {
+    filtered = filtered.filter(u => u.status_code >= 200 && u.status_code < 300);
+  } else if (filter === "3XX") {
+    filtered = filtered.filter(u => u.status_code >= 300 && u.status_code < 400);
+  } else if (filter === "4XX") {
+    filtered = filtered.filter(u => u.status_code >= 400 && u.status_code < 500);
+  } else if (filter === "SENSITIVE") {
+    const sensitivePatterns = [".env", ".sql", ".git", "dump", "backup", "config", "admin", "secret", "login"];
+    filtered = filtered.filter(u => sensitivePatterns.some(p => (u.url || "").toLowerCase().includes(p)));
+  }
+
+  if (query) {
+    filtered = filtered.filter(u => (u.url || "").toLowerCase().includes(query) || (u.method || "").toLowerCase().includes(query) || (u.title || u.page_title || "").toLowerCase().includes(query) || String(u.status_code || "").includes(query));
+  }
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center p-3 text-muted font-mono">${(query || filter !== 'ALL') ? 'Tidak ada endpoint yang cocok dengan filter atau pencarian.' : 'Tidak ada endpoint URL yang terpetakan.'}</td></tr>`;
+    renderWsPaginationControls("endpoints", 0, updateEndpointsView);
     return;
   }
 
-  tbody.innerHTML = endpoints.map((u) => {
-    const methodClass = (u.method || 'GET').toUpperCase() === 'POST' ? 'pill-warning' : 'pill-primary';
+  const start = (page - 1) * pageSize;
+  const paged = filtered.slice(start, start + pageSize);
+
+  tbody.innerHTML = paged.map((u) => {
+    const m = (u.method || 'GET').toUpperCase();
+    const methodClass = m === 'POST' ? 'pill-warning' : (m === 'PUT' ? 'pill-info' : (m === 'DELETE' ? 'pill-danger' : 'pill-primary'));
     const statusClass = (u.status_code >= 200 && u.status_code < 300) ? 'text-success' : (u.status_code >= 400 ? 'text-danger' : 'text-muted');
 
     return `
       <tr>
-        <td><span class="pill ${methodClass}">${esc((u.method || 'GET').toUpperCase())}</span></td>
-        <td class="font-mono text-xs"><a href="${esc(safeLink(u.url))}" target="_blank" rel="noopener">${esc(u.url)}</a></td>
-        <td><span class="font-bold ${statusClass}">${esc(String(u.status_code || '-'))}</span></td>
-        <td class="text-xs text-muted">${esc(u.content_type || '-')}</td>
-        <td class="text-xs">${esc(u.title || u.page_title || '-')}</td>
+        <td><span class="pill ${methodClass} font-mono">${esc(m)}</span></td>
+        <td class="font-mono text-xs"><a href="${esc(safeLink(u.url))}" target="_blank" rel="noopener" class="text-cyan">${esc(u.url)}</a></td>
+        <td><span class="font-bold font-mono ${statusClass}">${esc(String(u.status_code || '-'))}</span></td>
+        <td class="text-xs text-muted font-mono">${esc(u.content_type || '-')}</td>
+        <td class="text-xs font-mono">${esc(u.title || u.page_title || '-')}</td>
       </tr>
     `;
   }).join("");
+
+  renderWsPaginationControls("endpoints", filtered.length, updateEndpointsView);
+}
+
+function renderWorkspaceArtifacts(artifacts) {
+  wsPaginationState.artifacts.data = artifacts || [];
+  wsPaginationState.artifacts.page = 1;
+
+  const searchInput = el("wsArtifactSearchInput");
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "true";
+    searchInput.addEventListener("input", (e) => {
+      wsPaginationState.artifacts.query = e.target.value.toLowerCase().trim();
+      wsPaginationState.artifacts.page = 1;
+      updateArtifactsView();
+    });
+  }
+
+  setupFilterPills("wsArtifactFilterPills", "artifacts", updateArtifactsView, "data-artifact-filter");
+  updateArtifactsView();
+}
+
+function updateArtifactsView() {
+  const tbody = el("wsArtifactsTbody");
+  if (!tbody) return;
+  const { data, page, pageSize, query, filter } = wsPaginationState.artifacts;
+
+  let filtered = data;
+  if (filter === "SENSITIVE") {
+    filtered = filtered.filter(a => ["CONFIDENTIAL", "SENSITIVE", "HIGHLY_SENSITIVE"].includes((a.classification || "").toUpperCase()));
+  } else if (filter === "DATABASE") {
+    filtered = filtered.filter(a => (a.category || "").toLowerCase().includes("database") || (a.filename || a.name || "").endsWith(".sql") || (a.filename || a.name || "").includes("dump"));
+  } else if (filter === "CONFIG") {
+    filtered = filtered.filter(a => (a.category || "").toLowerCase().includes("config") || (a.filename || a.name || "").includes(".env") || (a.filename || a.name || "").includes("config"));
+  }
+
+  if (query) {
+    filtered = filtered.filter(a => (a.filename || a.name || "").toLowerCase().includes(query) || (a.category || "").toLowerCase().includes(query) || (a.classification || "").toLowerCase().includes(query) || (a.sha256 || "").toLowerCase().includes(query));
+  }
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center p-3 text-muted font-mono">${(query || filter !== 'ALL') ? 'Tidak ada artefak yang cocok dengan filter atau pencarian.' : 'Tidak ada artefak yang diekstrak.'}</td></tr>`;
+    renderWsPaginationControls("artifacts", 0, updateArtifactsView);
+    return;
+  }
+
+  const start = (page - 1) * pageSize;
+  const paged = filtered.slice(start, start + pageSize);
+
+  tbody.innerHTML = paged.map((a, idx) => {
+    const cls = (a.classification || "INTERNAL").toUpperCase();
+    const clsBadge = cls === "HIGHLY_SENSITIVE" ? "pill-danger" : (cls === "CONFIDENTIAL" ? "pill-warning" : "pill-neutral");
+    const shortHash = a.sha256 ? `${a.sha256.slice(0, 16)}…` : "-";
+
+    return `
+      <tr>
+        <td><strong class="font-mono text-bright">${esc(a.filename || a.name || `artifact_${idx+1}`)}</strong></td>
+        <td><span class="pill ${clsBadge} font-mono">${esc(cls)}</span></td>
+        <td><span class="text-xs font-mono text-muted">${esc(a.category || 'EXTRACTED_DATA')}</span></td>
+        <td class="font-mono">${esc(String(a.record_count || a.rows || '-'))}</td>
+        <td class="font-mono text-xs">${esc(formatBytes(a.size || a.file_size || 0))}</td>
+        <td><code class="font-mono text-xs" title="${esc(a.sha256 || '')}">${esc(shortHash)}</code></td>
+        <td>
+          <button class="btn btn-secondary btn-xs font-mono" onclick="openArtifactPreview(${jsArg(a.id || idx)})">👁️ Preview</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  renderWsPaginationControls("artifacts", filtered.length, updateArtifactsView);
 }
 
 function renderWorkspaceFindings(findings) {

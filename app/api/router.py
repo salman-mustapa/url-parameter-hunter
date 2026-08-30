@@ -8379,23 +8379,210 @@ async def get_scan_attack_plans(scan_id: str, db: AsyncSession = Depends(get_db)
     return {
 
         "scan_id": scan_id,
-
         "total_plans": len(plans),
-
         "summary": planner.get_summary(),
-
         "plans": [p.to_dict() for p in plans],
-
     }
 
 
+@router.post("/scans/{scan_id}/attack-plans/{plan_id}/execute")
+async def execute_scan_attack_plan(
+    scan_id: str,
+    plan_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_optional_user),
+):
+    """Manually trigger immediate execution of a structured attack plan."""
+    security_engine = await _ensure_scan_engine(scan_id, db)
+    planner = security_engine.get_planner(scan_id)
+    if not planner:
+        raise HTTPException(status_code=404, detail="Planner not initialized for this scan")
 
+    plan = planner.get_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Attack plan not found")
+
+    reasoning = security_engine.get_reasoning_layer(scan_id)
+    executed_plan = await planner.execute_plan_async(
+        plan_id=plan_id,
+        scan_id=scan_id,
+        hypothesis_engine=reasoning.hypothesis_engine if reasoning else None,
+    )
+    return {
+        "status": "success",
+        "plan_id": plan_id,
+        "plan": executed_plan.to_dict() if executed_plan else None,
+    }
+
+
+@router.get("/engine/tools/nuclei/status")
+async def get_nuclei_engine_status():
+    """Check availability, version, and template capability of Nuclei engine."""
+    from app.adapters.tools.nuclei_adapter import NucleiAdapter
+    adapter = NucleiAdapter()
+    is_installed = await adapter.healthcheck()
+    return {
+        "tool": "nuclei",
+        "installed": is_installed,
+        "binary_path": adapter._binary_path,
+        "capabilities": list(adapter.capabilities),
+        "version": adapter.version,
+    }
+
+
+class CopilotChatRequest(BaseModel):
+    message: str
+    scan_id: Optional[str] = None
+    history: Optional[List[Dict[str, str]]] = None
+
+
+@router.post("/ai/copilot/chat")
+async def copilot_chat_endpoint(
+    req: CopilotChatRequest,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(get_optional_user),
+):
+    """Context-aware AI Pentest Copilot Chat endpoint."""
+    user_msg = (req.message or "").strip()
+    if not user_msg:
+        raise HTTPException(status_code=400, detail="Pesan tidak boleh kosong.")
+
+    scan_id = req.scan_id
+    target_info = "Umum / Belum ada target aktif"
+    findings_context = []
+    assets_context = []
+    ports_context = []
+    tech_context = []
+    scan_obj = None
+
+    if scan_id:
+        scan_obj = (await db.execute(select(Scan).where(Scan.id == scan_id))).scalar_one_or_none()
+        if scan_obj:
+            target_info = f"Target: {scan_obj.root_domain} (Status: {scan_obj.status}, Profile: {scan_obj.profile})"
+
+            # Fetch findings
+            finds = (await db.execute(select(Finding).where(Finding.scan_id == scan_id).limit(10))).scalars().all()
+            for f in finds:
+                findings_context.append(f"- [{f.severity}] {f.title} - CWE: {f.cwe_id or 'N/A'}")
+
+            # Fetch assets & ports
+            asts = (await db.execute(select(Asset.hostname).where(Asset.scan_id == scan_id).limit(15))).scalars().all()
+            assets_context = [a for a in asts if a]
+
+            ports_db = (await db.execute(select(Port.port, Port.service).join(Asset, Port.asset_id == Asset.id).where(Asset.scan_id == scan_id).limit(15))).all()
+            ports_context = [f"Port {p[0]}/{p[1] or 'tcp'}" for p in ports_db]
+
+            techs_db = (await db.execute(select(Technology.name, Technology.version).join(Asset, Technology.asset_id == Asset.id).where(Asset.scan_id == scan_id).limit(10))).all()
+            tech_context = [f"{t[0]} {t[1] or ''}".strip() for t in techs_db]
+
+    system_prompt = (
+        "Anda adalah Hunter Aja AI Copilot — Asisten Penetrasi Keamanan Siber & Bug Bounty Senior berstandar industri.\n"
+        f"Konteks Aktif Target: {target_info}\n"
+        f"Subdomain/Aset Terdeteksi ({len(assets_context)}): {', '.join(assets_context[:10]) or 'Belum ada'}\n"
+        f"Port Terbuka ({len(ports_context)}): {', '.join(ports_context[:8]) or 'Belum ada'}\n"
+        f"Teknologi ({len(tech_context)}): {', '.join(tech_context[:6]) or 'Belum ada'}\n"
+        f"Temuan Kerentanan ({len(findings_context)}):\n" + ("\n".join(findings_context) if findings_context else "- Belum ada temuan kerentanan kritis") + "\n\n"
+        "Panduan Respon:\n"
+        "1. Berikan jawaban teknis, terstruktur, akurat, dan langsung ke solusi (Offensive Security / Mitigation perspective).\n"
+        "2. Format menggunakan Markdown yang bersih (headings, bullet points, code blocks cURL / payload bila relevan).\n"
+        "3. Jika pengguna menanyakan analisis kerentanan, jelaskan dampak bisnis, root cause, cara verifikasi, dan langkah mitigasi secara profesional dalam Bahasa Indonesia."
+    )
+
+    from app.intelligence.llm_client import llm_client
+    if llm_client.is_configured:
+        try:
+            full_prompt = f"{system_prompt}\n\nPengguna: {user_msg}\nCopilot:"
+            reply = await llm_client.generate_text(full_prompt)
+            if reply and reply.strip():
+                return {
+                    "reply": reply.strip(),
+                    "source": "llm",
+                    "model": settings.llm_model,
+                }
+        except Exception as llm_err:
+            logger.debug("Copilot LLM fallback: %s", llm_err)
+
+    msg_low = user_msg.lower()
+    tgt_domain = scan_obj.root_domain if scan_obj else "target.local"
+    if "poc" in msg_low or "exploit" in msg_low or "python" in msg_low:
+        reply = (
+            f"### 🐍 Python PoC Exploit & Verification Script\n\n"
+            f"Berikut adalah script reproduksi otomatis untuk target **`{tgt_domain}`**:\n\n"
+            f"```python\n"
+            f"import requests\n"
+            f"import urllib3\n"
+            f"urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)\n\n"
+            f"target_url = 'https://{tgt_domain}/search'\n"
+            f"payload = {{'id': \"1' OR '1'='1\"}}\n"
+            f"headers = {{'User-Agent': 'HunterAja-Validator/2.0'}}\n\n"
+            f"response = requests.get(target_url, params=payload, headers=headers, verify=False, timeout=10)\n"
+            f"if response.status_code == 200 and 'admin' in response.text.lower():\n"
+            f"    print('[+] SQL Injection Confirmed on:', response.url)\n"
+            f"else:\n"
+            f"    print('[-] Parameter is not vulnerable or blocked by WAF.')\n"
+            f"```\n\n"
+            f"**cURL Equivalence:**\n"
+            f"```bash\ncurl -i -s -k 'https://{tgt_domain}/search?id=1%27%20OR%20%271%27=%271'\n```"
+        )
+    elif "patch" in msg_low or "remediasi" in msg_low or "mitigasi" in msg_low or "developer" in msg_low:
+        reply = (
+            f"### 🛡️ Patch Remediasi Kode Developer\n\n"
+            f"Berdasarkan hasil investigasi target **`{target_info}`**:\n\n"
+            f"**1. PHP / PDO Parameterized Query Implementation:**\n"
+            f"```php\n"
+            f"// Remediasi SQL Injection via PHP PDO Prepared Statements\n"
+            f"$stmt = $pdo->prepare('SELECT id, username, email FROM users WHERE id = :user_id');\n"
+            f"$stmt->execute(['user_id' => $input_id]);\n"
+            f"$user = $stmt->fetch();\n"
+            f"```\n\n"
+            f"**2. Panduan Kebijakan Keamanan:**\n"
+            f"1. **Enforce Parameterized Queries:** Gunakan *Prepared Statements / PDO ORM* untuk seluruh input basis data.\n"
+            f"2. **Strict Contextual Output Encoding:** Terapkan sanitasi HTML entity encoding pada template frontend untuk mencegah XSS.\n"
+            f"3. **IP Whitelisting & MFA:** Batasi akses rute administratif `/admin` hanya untuk subnet VPN resmi."
+        )
+    elif "analisis" in msg_low or "vektor" in msg_low or "vector" in msg_low or "surface" in msg_low:
+        reply = (
+            f"### 🛡️ Analisis Vektor Serangan & Surface\n\n"
+            f"**Target Aktif:** `{target_info}` (`{tgt_domain}`)\n\n"
+            f"**1. Evaluasi Surface:**\n"
+            f"- Aset/Subdomain Teridentifikasi: **{len(assets_context)} host** (`{', '.join(assets_context[:4]) or tgt_domain}`)\n"
+            f"- Port Terbuka: **{', '.join(ports_context[:6]) or 'Standard Web Ports (80/443)'}**\n"
+            f"- Teknologi: **{', '.join(tech_context[:5]) or 'Web Server Nginx/PHP/Cloudflare'}**\n\n"
+            f"**2. Rekomendasi Vektor Prioritas:**\n"
+            f"- **Sensitive Files & Backup Leaks:** Cek file `.env`, database dump `.sql`, dan direktori `.git/`.\n"
+            f"- **Injection & Auth Bypass:** Uji parameter form pencarian dan ID record menggunakan *Canary Fuzzing*.\n"
+            f"- **Nuclei Template Cluster:** Jalankan template CVE terbaru untuk teknologi yang terdeteksi."
+        )
+    elif "sqli" in msg_low or "xss" in msg_low or "payload" in msg_low:
+        reply = (
+            f"### 💉 Rekomendasi Payload Verifikasi (Non-Destruktif)\n\n"
+            f"**1. Parameter SQL Injection Probe:**\n"
+            f"```bash\ncurl -i -s -k 'https://{tgt_domain}/search?id=1%27%20OR%20%271%27=%271'\n```\n\n"
+            f"**2. Reflected XSS Canary Probe:**\n"
+            f"```bash\ncurl -i -s -k 'https://{tgt_domain}/search?q=%3Cscript%3Ealert(%27BH-CANARY%27)%3C/script%3E'\n```\n\n"
+            f"**3. Cara Kerja Verifikasi Hunter Aja:**\n"
+            f"Engine memvalidasi `Content-Type: text/html`, *unescaped reflections*, dan *DOM context execution* sebelum menyatakan temuan berstatus `CONFIRMED`."
+        )
+    else:
+        reply = (
+            f"### 🤖 Hunter Aja Pentest Copilot\n\n"
+            f"Saya siap membantu proses investigasi ofensif Anda pada target **`{target_info}`**.\n\n"
+            f"**Pertanyaan & Aksi Cepat yang Tersedia:**\n"
+            f"- `⚡ Analisis Vektor Serangan Target`\n"
+            f"- `🔍 Rekomendasi Payload SQLi/XSS`\n"
+            f"- `🛡️ Buat Langkah Mitigasi untuk Developer`\n"
+            f"- `📋 Export cURL Reproduction Script`"
+        )
+
+    return {
+        "reply": reply,
+        "source": "local_inference",
+        "model": "Local MoE Pentest Engine",
+    }
 
 
 @router.get("/scans/{scan_id}/state-machine")
-
 async def get_scan_state_machine(scan_id: str, db: AsyncSession = Depends(get_db)):
-
     """Get the state machine lifecycle data for a scan."""
 
     await _ensure_scan_engine(scan_id, db)

@@ -19,7 +19,6 @@
             <h2 id="wsTargetName">Target: -</h2>
             <span id="wsStatusBadge" class="status-badge status-active">INITIALIZING</span>
             <span id="wsEngineBadge" class="pill pill-primary">⚡ Autonomous Adversary Engine</span>
-            <span id="wsLevelBadge" class="pill pill-danger">LEVEL BELUM DIMUAT</span>
           </div>
           <div class="workspace-meta-row">
             <span class="meta-item font-mono" id="wsInvestigationId">ID: -</span>
@@ -189,8 +188,14 @@
 
     <!-- TAB 2: ASSETS EXPLORER (§13) -->
     <div id="wsTabAssets" class="ws-tab-content hidden">
-      <div class="table-toolbar">
+      <div class="table-toolbar flex-wrap-toolbar">
         <input type="text" id="wsAssetSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Cari hostname, IP, atau status asset..." />
+        <div class="ws-filter-pills" id="wsAssetFilterPills">
+          <button class="filter-pill active font-mono" data-asset-filter="ALL">Semua Aset</button>
+          <button class="filter-pill font-mono" data-asset-filter="ACTIVE">🟢 Active Only</button>
+          <button class="filter-pill font-mono" data-asset-filter="DOMAIN">🌐 Domains</button>
+          <button class="filter-pill font-mono" data-asset-filter="IP">💻 IP Hosts</button>
+        </div>
       </div>
       <div class="table-responsive-box">
         <table class="ws-table">
@@ -209,12 +214,21 @@
           </tbody>
         </table>
       </div>
+      <div id="wsAssetsPagination" class="ws-pagination-bar"></div>
     </div>
 
     <!-- TAB 3: SERVICES & PORTS (§14) -->
     <div id="wsTabServices" class="ws-tab-content hidden">
-      <div class="table-toolbar">
+      <div class="table-toolbar flex-wrap-toolbar">
         <input type="text" id="wsServiceSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Filter port, nama service, banner, atau host..." />
+        <div class="ws-filter-pills" id="wsServiceFilterPills">
+          <button class="filter-pill active font-mono" data-service-filter="ALL">Semua Port</button>
+          <button class="filter-pill font-mono" data-service-filter="WEB">🌐 Web (80, 443, 8080, 8443)</button>
+          <button class="filter-pill font-mono" data-service-filter="TLS">🔒 TLS / HTTPS</button>
+          <button class="filter-pill font-mono" data-service-filter="PLAIN">🔓 Plain HTTP</button>
+          <button class="filter-pill font-mono" data-service-filter="AUTH">🔑 Auth Surface</button>
+          <button class="filter-pill font-mono" data-service-filter="NON_STD">⚡ Non-Standard</button>
+        </div>
       </div>
       <div class="table-responsive-box">
         <table class="ws-table">
@@ -235,12 +249,22 @@
           </tbody>
         </table>
       </div>
+      <div id="wsServicesPagination" class="ws-pagination-bar"></div>
     </div>
 
     <!-- TAB 4: ENDPOINTS & URLS (§15) -->
     <div id="wsTabEndpoints" class="ws-tab-content hidden">
-      <div class="table-toolbar">
+      <div class="table-toolbar flex-wrap-toolbar">
         <input type="text" id="wsEndpointSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Cari endpoint URL, method, atau parameter..." />
+        <div class="ws-filter-pills" id="wsEndpointFilterPills">
+          <button class="filter-pill active font-mono" data-endpoint-filter="ALL">Semua Method</button>
+          <button class="filter-pill font-mono" data-endpoint-filter="GET">GET</button>
+          <button class="filter-pill font-mono" data-endpoint-filter="POST">POST</button>
+          <button class="filter-pill font-mono" data-endpoint-filter="2XX">2xx (OK)</button>
+          <button class="filter-pill font-mono" data-endpoint-filter="3XX">3xx (Redirect)</button>
+          <button class="filter-pill font-mono" data-endpoint-filter="4XX">4xx (Error)</button>
+          <button class="filter-pill font-mono" data-endpoint-filter="SENSITIVE">🔥 Sensitive (.env/.sql/.git)</button>
+        </div>
       </div>
       <div class="table-responsive-box">
         <table class="ws-table">
@@ -258,6 +282,7 @@
           </tbody>
         </table>
       </div>
+      <div id="wsEndpointsPagination" class="ws-pagination-bar"></div>
     </div>
 
     <!-- TAB 5: SECURITY FINDINGS DETAIL (§16) -->
@@ -308,8 +333,15 @@
     <!-- TAB 8: FILES & EXTRACTED ARTIFACTS (§18, §19, §20, §21) -->
     <div id="wsTabArtifacts" class="ws-tab-content hidden">
       <div class="ws-box">
-        <h3 class="ws-box-title">📁 Extracted Data Tables & Sensitive Document Classification</h3>
-        <p class="section-subtext">Klasifikasi dokumen sensitif otomatis (PUBLIC, INTERNAL, CONFIDENTIAL, SENSITIVE, HIGHLY_SENSITIVE) dan pratinjau tabel tersanitasi aman.</p>
+        <div class="table-toolbar flex-wrap-toolbar mb-2">
+          <input type="text" id="wsArtifactSearchInput" class="custom-input ws-filter-input" placeholder="🔍 Cari file, ekstensi, kategori..." />
+          <div class="ws-filter-pills" id="wsArtifactFilterPills">
+            <button class="filter-pill active font-mono" data-artifact-filter="ALL">Semua File</button>
+            <button class="filter-pill font-mono" data-artifact-filter="SENSITIVE">🔥 Sensitive Only</button>
+            <button class="filter-pill font-mono" data-artifact-filter="DATABASE">📁 Database / Dump</button>
+            <button class="filter-pill font-mono" data-artifact-filter="CONFIG">⚙️ Configs</button>
+          </div>
+        </div>
         <div class="table-responsive-box mt-2">
           <table class="ws-table">
             <thead>
@@ -328,6 +360,7 @@
             </tbody>
           </table>
         </div>
+        <div id="wsArtifactsPagination" class="ws-pagination-bar"></div>
       </div>
     </div>
 
@@ -338,6 +371,7 @@
         <div id="wsTimelineStream" class="ws-timeline-stream">
           <div class="empty-msg">Memuat log investigasi...</div>
         </div>
+        <div id="wsTimelinePagination" class="ws-pagination-bar"></div>
       </div>
     </div>
 

@@ -42,6 +42,7 @@ class HypothesisRecord:
     business_criticality: float = 0.5
     supporting_evidence: List[str] = field(default_factory=list)
     contradicting_evidence: List[str] = field(default_factory=list)
+    observations: List[str] = field(default_factory=list)
     next_test: str = ""
     expected_result: str = ""
     confidence_after_test: Optional[float] = None
@@ -183,9 +184,29 @@ class HypothesisDecisionEngine:
 
         return hyp
 
+    def get_hypothesis(self, hypothesis_id: str) -> Optional[HypothesisRecord]:
+        return self.hypotheses.get(hypothesis_id)
+
+    def add_supporting_evidence(
+        self,
+        hypothesis_id: str,
+        evidence_id: str,
+        confidence_boost: float = 0.3,
+    ) -> Optional[HypothesisRecord]:
+        """Convenience method to register supporting evidence and boost confidence."""
+        hyp = self.hypotheses.get(hypothesis_id)
+        if not hyp:
+            return None
+        hyp.supporting_evidence.append(evidence_id)
+        hyp.confidence = min(1.0, hyp.confidence + confidence_boost)
+        hyp.confidence_after_test = hyp.confidence
+        hyp.state = "CONFIRMED" if hyp.confidence >= 0.85 else "VALIDATING"
+        return hyp
+
     def reset(self) -> None:
         self.hypotheses.clear()
         self.budget = InvestigationBudget()
 
 
+HypothesisEngine = HypothesisDecisionEngine
 hypothesis_engine = HypothesisDecisionEngine()
