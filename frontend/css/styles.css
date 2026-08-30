@@ -12519,3 +12519,66 @@ tbody td, td {
 .toast-danger { border-color: #f7768e !important; box-shadow: 0 0 16px rgba(247, 118, 142, 0.2) !important; }
 .toast-warning { border-color: #ff9e64 !important; box-shadow: 0 0 16px rgba(255, 158, 100, 0.2) !important; }
 .toast-info { border-color: #7dcfff !important; box-shadow: 0 0 16px rgba(125, 207, 255, 0.2) !important; }
+
+
+/* ==========================================================================
+   FINDING DETAIL & DOSSIER HIGH-CONTRAST TYPOGRAPHY (Zero Unreadable Text)
+   ========================================================================== */
+
+.detail-content-block, .evidence-list, .exec-summary-box {
+  background: #090b14 !important;
+  border: 1px solid #1e243a !important;
+  border-radius: 8px !important;
+  padding: 14px 16px !important;
+  color: #f1f5f9 !important;
+  font-family: var(--font-mono) !important;
+  font-size: 12.5px !important;
+  line-height: 1.6 !important;
+}
+
+.detail-content-block p, .evidence-list p, .exec-summary-box p {
+  color: #f1f5f9 !important;
+  font-size: 12.5px !important;
+  line-height: 1.6 !important;
+  margin-bottom: 8px !important;
+}
+
+.evidence-list h4, .detail-content-block h4 {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  color: #bb9af7 !important;
+  margin-top: 12px !important;
+  margin-bottom: 6px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+}
+
+.code-box-mini {
+  background: #07080e !important;
+  border: 1px solid #1c2138 !important;
+  border-radius: 6px !important;
+  padding: 10px 14px !important;
+  color: #73daca !important;
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  margin-bottom: 10px !important;
+}
+
+.evidence-list ol, .evidence-list ul {
+  padding-left: 20px !important;
+  color: #e0e6fc !important;
+  font-size: 12.5px !important;
+  line-height: 1.6 !important;
+}
+
+.evidence-list li {
+  margin-bottom: 4px !important;
+}
+
+.evidence-list strong {
+  color: #7dcfff !important;
+}

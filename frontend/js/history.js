@@ -738,17 +738,18 @@ async function openHistoricalScan(scanId, domain) {
     }
 
     // 5. Refresh essential dashboard components immediately
+    lastRenderedTreeHash = ""; // Force re-render of asset tree for new scan
     if (typeof refreshAssetTree === "function") refreshAssetTree();
     if (typeof loadFindings === "function") loadFindings();
+    if (typeof loadV4HypothesesAndPlans === "function") loadV4HypothesesAndPlans();
 
     // 6. Stagger secondary modules (Report, AI Hypotheses, State Machine) for smooth 60fps UI
     setTimeout(() => {
       if (state.activeScanId === scanId) {
         if (typeof loadReportHubData === "function") loadReportHubData(scanId, false);
-        if (typeof loadV4HypothesesAndPlans === "function" && v4State.activeViewMode === "hypotheses") loadV4HypothesesAndPlans();
         if (typeof loadV4StateMachineData === "function" && v4State.activeViewMode === "statemachine") loadV4StateMachineData();
       }
-    }, 120);
+    }, 80);
   } catch (err) {
     console.debug("Failed to load historical scan:", err);
   }

@@ -1080,39 +1080,21 @@ async def get_scan(
 
     prog = dict(scan.progress or {})
 
-    if scan.status == "running" or not prog or ("assets" not in prog and "urls" not in prog):
+    assets_cnt = (await db.execute(select(func.count()).select_from(Asset).where(Asset.scan_id == scan.id))).scalar() or 0
+    asset_ids = select(Asset.id).where(Asset.scan_id == scan.id)
+    urls_cnt = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
+    ports_cnt = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
+    url_ids = select(URL.id).where(URL.asset_id.in_(asset_ids))
+    params_cnt = (await db.execute(select(func.count()).select_from(Parameter).where(Parameter.url_id.in_(url_ids)))).scalar() or 0
+    techs_cnt = (await db.execute(select(func.count()).select_from(Technology).where(Technology.asset_id.in_(asset_ids)))).scalar() or 0
+    findings_cnt = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == scan.id))).scalar() or 0
 
-        assets_cnt = (await db.execute(select(func.count()).select_from(Asset).where(Asset.scan_id == scan.id))).scalar() or 0
-
-        asset_ids = select(Asset.id).where(Asset.scan_id == scan.id)
-
-        urls_cnt = (await db.execute(select(func.count()).select_from(URL).where(URL.asset_id.in_(asset_ids)))).scalar() or 0
-
-        ports_cnt = (await db.execute(select(func.count()).select_from(Port).where(Port.asset_id.in_(asset_ids)))).scalar() or 0
-
-        url_ids = select(URL.id).where(URL.asset_id.in_(asset_ids))
-
-        params_cnt = (await db.execute(select(func.count()).select_from(Parameter).where(Parameter.url_id.in_(url_ids)))).scalar() or 0
-
-        techs_cnt = (await db.execute(select(func.count()).select_from(Technology).where(Technology.asset_id.in_(asset_ids)))).scalar() or 0
-
-        findings_cnt = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == scan.id))).scalar() or 0
-
-        prog = {
-
-            "assets": assets_cnt,
-
-            "ports": ports_cnt,
-
-            "urls": urls_cnt,
-
-            "parameters": params_cnt,
-
-            "technologies": techs_cnt,
-
-            "findings": findings_cnt,
-
-        }
+    prog["assets"] = max(int(prog.get("assets", 0) or 0), assets_cnt)
+    prog["ports"] = max(int(prog.get("ports", 0) or 0), ports_cnt)
+    prog["urls"] = max(int(prog.get("urls", 0) or 0), urls_cnt)
+    prog["parameters"] = max(int(prog.get("parameters", 0) or 0), params_cnt)
+    prog["technologies"] = max(int(prog.get("technologies", 0) or 0), techs_cnt)
+    prog["findings"] = max(int(prog.get("findings", 0) or 0), findings_cnt)
 
 
 
