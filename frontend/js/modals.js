@@ -44,6 +44,7 @@ async function loadAllPorts() {
     const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(state.activeScanId)}/ports/all`);
     const ports = await res.json();
     state.allPortsData = ports || [];
+    if (state.allPortsData.length) { state.counters.ports = state.allPortsData.length; if (typeof updateCounterDisplays === "function") updateCounterDisplays(); }
     renderPortsMatrix();
   } catch (err) {
     container.innerHTML = `<div class="empty-msg">Gagal memuat ports: ${err.message}</div>`;

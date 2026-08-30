@@ -680,7 +680,7 @@ async function openHistoricalScan(scanId, domain) {
     state.events = Array.isArray(eventsData) ? eventsData : (eventsData?.events || []);
     if (typeof renderStreamEvents === "function") renderStreamEvents();
 
-    // 3. Update telemetry counters from progress
+    // 3. Update telemetry counters from progress with live workspace fallback
     const prog = scanObj.progress || scanData.progress || scanData.statistics || {};
     state.counters.assets = prog.assets ?? prog.total_assets ?? 0;
     state.counters.ports = prog.ports ?? prog.total_ports ?? 0;
@@ -690,6 +690,24 @@ async function openHistoricalScan(scanId, domain) {
     state.counters.findings = prog.findings ?? prog.total_findings ?? 0;
     if (typeof updateScanStatusUI === "function") updateScanStatusUI(scanStatus);
     if (typeof updateCounterDisplays === "function") updateCounterDisplays();
+
+    // 3b. Self-healing workspace metrics sync (guarantees accurate non-zero telemetry)
+    if (!state.counters.assets || !state.counters.ports || !state.counters.urls || !state.counters.techs) {
+      authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/workspace`)
+        .then(r => r.ok ? r.json() : null)
+        .then(ws => {
+          if (!ws || state.activeScanId !== scanId) return;
+          const m = ws.metrics || {};
+          if (m.assets_count || (ws.assets || []).length) state.counters.assets = m.assets_count ?? (ws.assets || []).length;
+          if (m.services_count || (ws.services || []).length) state.counters.ports = m.services_count ?? (ws.services || []).length;
+          if (m.endpoints_count || (ws.endpoints || []).length) state.counters.urls = m.endpoints_count ?? (ws.endpoints || []).length;
+          if (m.parameters_count) state.counters.params = m.parameters_count;
+          if (m.technologies_count || (ws.technologies || []).length) state.counters.techs = m.technologies_count ?? (ws.technologies || []).length;
+          if (m.findings_count || (ws.findings || []).length) state.counters.findings = m.findings_count ?? (ws.findings || []).length;
+          if (typeof updateCounterDisplays === "function") updateCounterDisplays();
+        })
+        .catch(e => console.debug("Workspace metrics fallback skip:", e));
+    }
 
     // 4. If RUNNING or QUEUED, connect to live SSE stream & start timer with accurate elapsed time
     if (scanStatus === "RUNNING" || scanStatus === "QUEUED") {

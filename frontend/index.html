@@ -14,8 +14,8 @@
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="vendor/jstree/jstree.min.css" />
-  <link rel="stylesheet" href="css/styles.css?v=10.15.0" />
-  <link rel="stylesheet" href="css/responsive.css?v=10.15.0" />
+  <link rel="stylesheet" href="css/styles.css?v=10.16.0" />
+  <link rel="stylesheet" href="css/responsive.css?v=10.16.0" />
 </head>
 
 <body>
@@ -165,6 +165,7 @@
 
       <!-- VIEW 1: HOME / LANDING PAGE -->
       <!-- VIEW 1: HOME / LANDING PAGE -->
+<!-- VIEW 1: HOME / LANDING PAGE (Cyberpunk Terminal Bento Recon Engine) -->
 <!-- VIEW 1: HOME / LANDING PAGE (Cyberpunk Terminal Bento Recon Engine) -->
 <!-- VIEW 1: HOME / LANDING PAGE (Cyberpunk Terminal Bento Recon Engine) -->
 <!-- VIEW 1: HOME / LANDING PAGE (Cyberpunk Terminal Bento Recon Engine) -->
@@ -521,6 +522,7 @@
 
       <!-- VIEW 2: DASHBOARD -->
       <!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS) -->
+<!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS) -->
 <!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS) -->
 <!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS) -->
 <!-- VIEW 2: DASHBOARD (FULL COMMAND CENTER FOR AUTHENTICATED USERS) -->
@@ -1094,6 +1096,7 @@
 <!-- VIEW 3: SCAN HISTORY (TARGET WORKSPACE & SCAN SESSIONS) -->
 <!-- VIEW 3: SCAN HISTORY (TARGET WORKSPACE & SCAN SESSIONS) -->
 <!-- VIEW 3: SCAN HISTORY (TARGET WORKSPACE & SCAN SESSIONS) -->
+<!-- VIEW 3: SCAN HISTORY (TARGET WORKSPACE & SCAN SESSIONS) -->
 <section id="viewHistory" class="tab-view hidden">
   <!-- History Level Breadcrumb Navigation -->
   <nav id="historyBreadcrumb" class="breadcrumb-nav">
@@ -1180,6 +1183,7 @@
 
       <!-- VIEW 4: REPORTS CENTER -->
       <!-- VIEW 4: DEDICATED INVESTIGATION WORKSPACE & SECURITY REPORTING (§11-§27) -->
+<!-- VIEW 4: DEDICATED INVESTIGATION WORKSPACE & SECURITY REPORTING (§11-§27) -->
 <!-- VIEW 4: DEDICATED INVESTIGATION WORKSPACE & SECURITY REPORTING (§11-§27) -->
 <!-- VIEW 4: DEDICATED INVESTIGATION WORKSPACE & SECURITY REPORTING (§11-§27) -->
 <!-- VIEW 4: DEDICATED INVESTIGATION WORKSPACE & SECURITY REPORTING (§11-§27) -->
@@ -1811,6 +1815,49 @@
 
 <!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
 <div id="wsFindingPocModal" class="modal-backdrop hidden">
+  <div class="modal-dialog modal-xl poc-modal-dialog">
+    <div class="modal-header flex-between">
+      <div class="dossier-header-left">
+        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
+        <h3 id="wsPocModalTitle" class="ws-modal-title font-mono">Bug Hunting Proof of Concept (PoC)</h3>
+      </div>
+      <button class="btn-close" onclick="closeFindingPocModal()" title="Tutup Modal (ESC)">✕</button>
+    </div>
+    <div class="modal-body" id="wsPocModalBody">
+      <!-- Dynamic PoC Dossier Content -->
+    </div>
+    <div class="modal-footer flex-between">
+      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
+      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
+<div id="wsArtifactModal" class="modal-backdrop hidden">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-header">
+      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
+      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="artifact-meta-bar mb-3">
+        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
+        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
+        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
+      </div>
+        <div id="wsArtModalContent" class="artifact-preview-body">
+          Memuat pratinjau...
+        </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
+<div id="wsFindingPocModal" class="modal-backdrop hidden">
   <div class="modal-dialog modal-xl">
     <div class="modal-header flex-between">
       <div class="flex-row-gap align-center flex-wrap">
@@ -2175,6 +2222,7 @@
 
       <!-- VIEW 5: DIFFERENTIAL SCAN -->
       <!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
+<!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
 <!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
 <!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
 <!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
