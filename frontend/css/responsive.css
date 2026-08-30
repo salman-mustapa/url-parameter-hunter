@@ -107,3 +107,36 @@ body.modal-open { overflow: hidden; }
   .hero-dual-grid { grid-template-columns: minmax(0, 1fr); }
   .stats-bar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+
+/* Mobile Landing Page & Controls Clean-up */
+@media (max-width: 640px) {
+  .home-trial-card, .scan-control-card, .card {
+    padding: 14px 12px !important;
+  }
+  .input-group-target {
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+  .input-group-target .custom-input {
+    width: 100% !important;
+  }
+  .profile-pills-wrap {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+  .profile-pill-btn {
+    width: 100% !important;
+    text-align: center !important;
+  }
+  .copilot-drawer {
+    width: 100vw !important;
+  }
+  .poc-modal-dialog {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+  }
+}

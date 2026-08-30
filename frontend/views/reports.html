@@ -534,13 +534,13 @@
 
 <!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
 <div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
+  <div class="modal-dialog modal-xl poc-modal-dialog">
     <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
+      <div class="dossier-header-left">
         <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
+        <h3 id="wsPocModalTitle" class="ws-modal-title font-mono">Bug Hunting Proof of Concept (PoC)</h3>
       </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
+      <button class="btn-close" onclick="closeFindingPocModal()" title="Tutup Modal (ESC)">✕</button>
     </div>
     <div class="modal-body" id="wsPocModalBody">
       <!-- Dynamic PoC Dossier Content -->
