@@ -54,7 +54,7 @@ async function loadAllPorts() {
 let currentPortsPage = 1;
 let currentParamsPage = 1;
 let currentUrlsPage = 1;
-const MODAL_CHUNK_SIZE = 50;
+const MODAL_CHUNK_SIZE = 25;
 
 function renderModalPagination(currentPage, totalPages, totalItems, onPageChangeFn) {
   if (totalPages <= 1) {
