@@ -52,9 +52,9 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       # AI Orchestrator Settings (propagated from host .env):
-      - LLM_ENABLED=${LLM_ENABLED:-true}
-      - LLM_PROVIDER=${LLM_PROVIDER:-openai_compatible}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ninerouter}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-combo}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.2}
