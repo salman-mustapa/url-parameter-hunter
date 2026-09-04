@@ -613,9 +613,28 @@ function triggerRescan(target, profile) {
   }
 }
 
+let historicalScanRequest = null;
 async function openHistoricalScan(scanId, domain) {
+  historicalScanRequest?.controller.abort();
+  const request = {controller: new AbortController()};
+  historicalScanRequest = request;
+  const isCurrent = () => historicalScanRequest === request && state.activeScanId === scanId && !request.controller.signal.aborted;
   const isSameScan = state.activeScanId === scanId;
   state.activeScanId = scanId;
+  if (!isSameScan) {
+    if (state.es) { state.es.close(); state.es = null; }
+    clearInterval(state.treePollInterval);
+    clearInterval(state.statusPollInterval);
+    if (typeof stopTimer === "function") stopTimer();
+    state.events = [];
+    state.allFindings = [];
+    state.assetsTreeData = [];
+    state.counters = {assets: 0, ports: 0, urls: 0, params: 0, techs: 0, findings: 0};
+    state.severityCounts = {CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0};
+    if (typeof updateCounterDisplays === "function") updateCounterDisplays();
+    if (typeof renderFindings === "function") renderFindings([]);
+    if (typeof renderAssetTree === "function") renderAssetTree([]);
+  }
   if (domain) {
     state.activeTarget = domain;
     state.currentTarget = domain;
@@ -650,12 +669,13 @@ async function openHistoricalScan(scanId, domain) {
   try {
     // 1. Fetch scan status and event history concurrently for maximum speed
     const [scanRes, eventsRes] = await Promise.all([
-      authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}`),
-      authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events/history?limit=300`)
+      authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}`, {signal: request.controller.signal}),
+      authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events/history?limit=300`, {signal: request.controller.signal})
     ]);
-
+    if (!scanRes.ok || !eventsRes.ok) throw new Error(`Scan fetch failed: ${scanRes.status}/${eventsRes.status}`);
     const scanData = await scanRes.json();
     const eventsData = await eventsRes.json();
+    if (!isCurrent()) return;
 
     const scanObj = scanData.scan || scanData;
     const exactTarget = (scanObj.options && (scanObj.options.target_url || scanObj.options.target_host)) 
@@ -696,7 +716,7 @@ async function openHistoricalScan(scanId, domain) {
       authFetch(`${API_BASE}/scans/${encodeURIComponent(scanId)}/workspace`)
         .then(r => r.ok ? r.json() : null)
         .then(ws => {
-          if (!ws || state.activeScanId !== scanId) return;
+          if (!ws || !isCurrent()) return;
           const m = ws.metrics || {};
           if (m.assets_count || (ws.assets || []).length) state.counters.assets = m.assets_count ?? (ws.assets || []).length;
           if (m.services_count || (ws.services || []).length) state.counters.ports = m.services_count ?? (ws.services || []).length;
@@ -710,7 +730,7 @@ async function openHistoricalScan(scanId, domain) {
     }
 
     // 4. If RUNNING or QUEUED, connect to live SSE stream & start timer with accurate elapsed time
-    if (scanStatus === "RUNNING" || scanStatus === "QUEUED") {
+    if (["RUNNING", "QUEUED", "PAUSED"].includes(scanStatus)) {
       let initialSecs = 0;
       const timeStr = scanObj.started_at || scanObj.created_at;
       if (timeStr) {
@@ -726,7 +746,8 @@ async function openHistoricalScan(scanId, domain) {
         if (typeof startTimer === "function") startTimer(initialSecs);
       }
 
-      if (!state.es || !isSameScan) {
+      if (scanStatus === "PAUSED" && typeof stopTimer === "function") stopTimer();
+      if (!state.es || state.es.readyState === 2 || !isSameScan) {
         if (typeof connectEventSource === "function") connectEventSource(scanId);
       }
 
@@ -763,7 +784,7 @@ async function openHistoricalScan(scanId, domain) {
 
     // 6. Stagger secondary modules (Report, AI Hypotheses, State Machine) for smooth 60fps UI
     setTimeout(() => {
-      if (state.activeScanId === scanId) {
+      if (isCurrent()) {
         if (typeof loadReportHubData === "function") loadReportHubData(scanId, false);
         if (typeof loadV4StateMachineData === "function" && v4State.activeViewMode === "statemachine") loadV4StateMachineData();
       }

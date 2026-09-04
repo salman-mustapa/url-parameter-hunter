@@ -75,11 +75,13 @@ class ResultService:
                 if ev_dict.get("scan_id") not in existing:
                     continue  # The scan may have been deleted before its last event drained.
                 db.add(ScanEvent(
+                    id=ev_dict.get("event_id"),
                     scan_id=ev_dict["scan_id"],
                     event_type=ev_dict.get("event_type", "system.event"),
                     severity=ev_dict.get("severity", "info"),
                     message=RedactionEngine.redact_text(sanitize_text(ev_dict.get("message", ""))),
                     data=RedactionEngine.redact_dict(sanitize_text(ev_dict.get("data", {}))),
+                    created_at=ev_dict.get("created_at") or datetime.now(timezone.utc),
                 ))
             await db.commit()
 
@@ -111,10 +113,17 @@ class ResultService:
         severity = event.get("severity") or (event.get("status", "info").lower() if isinstance(event.get("status"), str) else "info")
         message = event.get("message") or ""
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        raw_time = event.get("created_at") or event.get("timestamp")
+        try:
+            created_at = datetime.fromisoformat(raw_time) if isinstance(raw_time, str) else datetime.now(timezone.utc)
+        except ValueError:
+            created_at = datetime.now(timezone.utc)
 
         self._ensure_worker()
         try:
             self._event_queue.put_nowait({
+                "event_id": event.get("event_id"),
+                "created_at": created_at,
                 "scan_id": scan_id,
                 "event_type": event_type,
                 "severity": severity,
@@ -127,6 +136,8 @@ class ResultService:
                 self._event_queue.get_nowait()
                 self._event_queue.task_done()
                 self._event_queue.put_nowait({
+                    "event_id": event.get("event_id"),
+                    "created_at": created_at,
                     "scan_id": scan_id,
                     "event_type": event_type,
                     "severity": severity,

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 import uuid
@@ -35,6 +36,7 @@ class EventBus:
         self._persist: Optional[Callable] = None
         self._redis: Optional[Any] = None
         self._pubsub_task: Optional[asyncio.Task] = None
+        self._origin_id = uuid.uuid4().hex
 
     # ── Redis lifecycle ──────────────────────────────────────────────
 
@@ -65,6 +67,8 @@ class EventBus:
                 if message["type"] == "message":
                     try:
                         event = json.loads(message["data"])
+                        if event.pop("_bus_origin", None) == self._origin_id:
+                            continue
                         # Fan out to local subscribers without re-publishing to Redis
                         await self._local_fanout(event)
                     except Exception:
@@ -157,16 +161,15 @@ class EventBus:
             except Exception:
                 logger.exception("event persist failed")
 
-        # Publish to Redis or local fanout
+        # Local clients must not depend on the Redis listener being healthy.
+        # Redis messages from this instance are ignored on replay to avoid duplicates.
+        await self._local_fanout(event)
         if self._redis:
             try:
-                serialized = json.dumps(event, default=str)
+                serialized = json.dumps({**event, "_bus_origin": self._origin_id}, default=str)
                 await self._redis.publish(self.CHANNEL, serialized)
             except Exception as exc:
-                logger.warning("Redis publish failed (%s), falling back to local fanout", exc)
-                await self._local_fanout(event)
-        else:
-            await self._local_fanout(event)
+                logger.warning("Redis publish failed (%s); local subscribers already notified", exc)
 
     async def _local_fanout(self, event: dict) -> None:
         """Fan out event to specific subscribers matching event type, plus wildcard subscribers."""
@@ -190,7 +193,7 @@ class EventBus:
 
         for handler in unique_handlers:
             try:
-                if asyncio.iscoroutinefunction(handler):
+                if inspect.iscoroutinefunction(handler):
                     await handler(event)
                 else:
                     handler(event)

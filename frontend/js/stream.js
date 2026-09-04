@@ -180,7 +180,12 @@ function addEventToStream(ev) {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && !el("viewDashboard")?.classList.contains("hidden")) renderStreamEvents();
+  if (!document.hidden && !el("viewDashboard")?.classList.contains("hidden")) {
+    renderStreamEvents();
+    if (typeof syncScanStatus === "function") syncScanStatus();
+    if (typeof refreshAssetTree === "function") refreshAssetTree();
+    if (typeof loadFindings === "function") loadFindings();
+  }
 });
 
 function filterStreamEvents(filterCat) {

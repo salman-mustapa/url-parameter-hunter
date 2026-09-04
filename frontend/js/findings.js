@@ -20,7 +20,7 @@ async function loadFindings() {
     return;
   }
   const scanId = state.activeScanId;
-  if (findingsRequest?.scanId === scanId) return;
+  if (findingsRequest?.scanId === scanId) { findingsRequest.again = true; return; }
   findingsRequest?.controller.abort();
   const request = {scanId, controller: new AbortController()};
   findingsRequest = request;
@@ -54,7 +54,10 @@ async function loadFindings() {
   } catch (err) {
     if (err.name !== "AbortError") console.error("Load findings error:", err);
   } finally {
-    if (findingsRequest === request) findingsRequest = null;
+    if (findingsRequest === request) {
+      findingsRequest = null;
+      if (request.again && state.activeScanId === scanId) loadFindings();
+    }
   }
 }
 
@@ -86,7 +89,8 @@ function renderFindings(customFindings) {
     const item = document.createElement("div");
     item.className = "finding-item-card";
 
-    const evJson = f.evidence && Object.keys(f.evidence).length ? JSON.stringify(f.evidence) : "";
+    // Cards show a bounded preview; full evidence remains in the detail view.
+    const evJson = f.evidence && Object.keys(f.evidence).length ? JSON.stringify(f.evidence).slice(0, 1200) : "";
     const pocCode = (f.evidence && (f.evidence.poc || f.evidence.poc_curl || f.evidence.curl_command)) || "";
     const techDetails = f.technical_details || "";
 

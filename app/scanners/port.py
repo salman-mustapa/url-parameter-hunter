@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.tools.nmap_adapter import NmapAdapter
 from app.core.config import settings
+from app.core.profiles import is_deep_profile, is_passive_profile
 from app.core.rate_limit import RateLimiter
 from app.core.resource_governor import resource_governor
 from app.core.resource_guard import resource_guard
@@ -381,7 +382,7 @@ async def _probe_http_on_port(ctx: ScanContext, db: AsyncSession, asset_id: str,
 
 async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     """Async High-Performance Port & Service Scanner (§12, §37)."""
-    if ctx.profile == "passive":
+    if is_passive_profile(ctx.profile):
         return
 
     await ctx.emit("scan.port", f"Starting comprehensive port and service discovery for {root_domain}", severity="info")
@@ -394,9 +395,17 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     )).scalars().all()
 
     # Cap hosts scanned to keep runtime sane; prioritize root + shallow depth
-    assets = sorted(assets, key=lambda a: a.depth)[: settings.max_port_hosts]
+    target_host = str(ctx.options.get("target_host") or root_domain).lower()
+    assets = sorted(
+        assets,
+        key=lambda a: (
+            0 if (a.hostname or a.fqdn or "").lower() == target_host else 1,
+            a.depth,
+            a.hostname or a.fqdn or a.ip or "",
+        ),
+    )[: settings.max_port_hosts]
     # Use focused port list for standard mode, full list for deep/full
-    if ctx.profile in ("deep", "full", "pentest", "adversary_simulation"):
+    if is_deep_profile(ctx.profile):
         ports_to_scan = DEEP_PORTS
         timeout = settings.port_timeout_seconds
     elif ctx.profile == "standard":
@@ -413,7 +422,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     other_ports = [p for p in ports_to_scan if p not in priority_set]
     ports_to_scan = priority_ports + other_ports
 
-    limiter = RateLimiter(settings.port_rps)
+    limiter = ctx.rate_limiter if ctx.options.get("engagement") else RateLimiter(settings.port_rps)
     requested_asset_concurrency = min(settings.max_concurrent_hosts, settings.max_port_hosts)
     asset_concurrency = ResourceMonitor.calculate_optimal_concurrency(
         max(1, requested_asset_concurrency)
@@ -631,4 +640,4 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
 
 def port_rps(ctx: ScanContext) -> int:
     base = getattr(settings, "port_rps", 250)
-    return base // (2 if ctx.profile == "deep" else 1)
+    return base // (2 if is_deep_profile(ctx.profile) else 1)

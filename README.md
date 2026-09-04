@@ -1,6 +1,8 @@
 # 🐙 Hunter Aja — Bug Hunting Platform (V7.1)
 ### Evidence-First Deep Validation & Professional Disclosure Architecture
 
+Catatan implementasi terkini: [audit AI-first, policy HackerOne, realtime, dan batas cakupan](docs/AI_FIRST_RELIABILITY_AUDIT_2026-09-03.md) serta [validasi rilis Docker 4 September 2026](docs/RELEASE_VALIDATION_2026-09-04.md). Hasil tes lokal tidak menjamin bebas timeout/error atau deteksi seluruh kerentanan. Validator legacy belum memiliki executor produksi untuk target eksternal.
+
 <p align="center">
   <img src="https://img.shields.io/badge/Version-7.1_V5-7C3AED?style=for-the-badge&logo=shield&logoColor=white" alt="Version 7.1" />
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
@@ -224,12 +226,35 @@ Buka antarmuka web di browser: **`http://localhost:9001`**
 
 ## 🐳 6. Menjalankan dengan Docker Compose
 
-Untuk deployment instan berbasis container:
+Untuk instalasi pertama, salin template lalu isi `.env`. Minimal gunakan
+`JWT_SECRET` acak minimal 32 karakter dan kredensial administrator awal yang kuat.
+AI default-nya nonaktif sampai endpoint, key, model, dan mode routing yang nyata
+diisi; ini mencegah placeholder dianggap sebagai kredensial.
 
 ```bash
-docker-compose up -d --build
+cp .env.example .env
+# edit .env; untuk NineRouter isi LLM_ENABLED=true, LLM_BASE_URL,
+# LLM_API_KEY, LLM_MODEL, dan LLM_ROUTING_MODE
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1:9001/health
 ```
 Akses platform di `http://localhost:9001`.
+
+Untuk memperbarui server yang sudah mempunyai `.env`:
+
+```bash
+git pull --ff-only origin master
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1:9001/health
+```
+
+Jangan menimpa `.env` server dengan `.env.example`; `.env` tidak masuk Git. Compose
+meneruskan timeout/mode routing AI, batas scan, SSE, dan fallback Hermes yang baru.
+Biarkan `HERMES_BASE_URL` serta `HERMES_API_KEY` kosong untuk mode NineRouter-only.
 
 ---
 

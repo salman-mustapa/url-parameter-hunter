@@ -64,6 +64,9 @@ class PentestCopilot:
                     "3. Jika diminta Remediasi, berikan contoh kode perbaikan nyata (PHP / Python / Node.js / Go).\n"
                     "4. Gunakan format Markdown yang rapi dengan code block."
                 )
+                # Older templates used escaped newlines; normalize them before
+                # sending context to a provider or rendering Markdown in the UI.
+                system_prompt = system_prompt.replace("\\n", "\n")
                 res = await ai_gateway.complete(msg_clean, system=system_prompt)
                 ai_text = res.get("content") or res.get("text")
                 if ai_text and len(ai_text) > 40 and res.get("status") == "success" and res.get("provider") != "zero_resource_heuristic":
@@ -78,7 +81,7 @@ class PentestCopilot:
             logger.warning("Cloud AI Copilot call skipped/failed, using local reasoning engine: %s", err)
 
         # 3. Built-in Deterministic Pentest Copilot Reasoning Engine
-        reply = cls._synthesize_deterministic_response(msg_clean, scan_ctx)
+        reply = cls._synthesize_deterministic_response(msg_clean, scan_ctx).replace("\\n", "\n")
         return {
             "reply": reply,
             "source": "local_security_engine",

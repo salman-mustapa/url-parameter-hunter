@@ -62,21 +62,33 @@
 
       </div>
 
-      <!-- Hidden default engagement settings for automated compliance & authorization -->
-      <div id="engagementHiddenDefaults" class="hidden" style="display:none;" aria-hidden="true">
-        <input id="engOrganization" maxlength="160" value="" />
-        <input id="engProgram" maxlength="160" value="" />
-        <input id="engAuthorization" maxlength="300" value="AUTHORIZED-SELF-AUDIT" />
-        <input id="engAssessor" maxlength="120" value="" />
-        <input id="engStartsAt" type="datetime-local" />
-        <input id="engEndsAt" type="datetime-local" />
-        <textarea id="engScopeHosts"></textarea>
-        <textarea id="engExcludedHosts"></textarea>
-        <input id="engAllowedPorts" value="80,443" maxlength="600" />
-        <input id="engMaxRps" type="number" value="15" />
-        <textarea id="engNotes"></textarea>
-        <input id="engAuthorizationAck" type="checkbox" checked />
-      </div>
+      <details class="engagement-panel" id="scanEngagementPanel" open>
+        <summary>🛡️ Scope & Izin Pengujian — Program / Private (wajib sebelum scan)</summary>
+        <p class="muted">Pilih platform atau Private untuk aset sendiri/engagement berizin tanpa program bounty. Referensi izin, scope, waktu, dan batas teknik tetap wajib. Salin policy ke catatan untuk ringkasan AI; teks atau hasil AI tidak memperluas izin.</p>
+        <div class="engagement-grid">
+          <label>Platform<select id="engPlatform"><option>HackerOne</option><option>Bugcrowd</option><option>Intigriti</option><option>Private</option><option>Other</option></select></label>
+          <label>Program / engagement<input id="engProgram" maxlength="160" placeholder="Nama program / audit private / lab sendiri" /></label>
+          <label>Program policy URL<input id="engProgramUrl" maxlength="500" placeholder="https://hackerone.com/program/policy_scopes" /></label>
+          <label>Authorization / policy reference<input id="engAuthorization" maxlength="300" placeholder="Policy URL / izin tertulis / referensi aset sendiri" /></label>
+          <label>Organization<input id="engOrganization" maxlength="160" /></label>
+          <label>Researcher / assessor<input id="engAssessor" maxlength="120" /></label>
+          <label>Mulai diizinkan<input id="engStartsAt" type="datetime-local" /></label>
+          <label>Berakhir<input id="engEndsAt" type="datetime-local" /></label>
+          <label>In-scope hosts<textarea id="engScopeHosts" placeholder="example.com&#10;*.example.com"></textarea></label>
+          <label>Out-of-scope hosts<textarea id="engExcludedHosts" placeholder="status.example.com"></textarea></label>
+          <label>Allowed ports<input id="engAllowedPorts" value="80,443" maxlength="600" /></label>
+          <label>Maximum requests/second<input id="engMaxRps" type="number" value="5" min="1" max="30" /></label>
+          <label>Allowed techniques<textarea id="engAllowedTechniques">safe_probe, validation, authentication_testing, artifact_analysis</textarea></label>
+          <label>Prohibited techniques<textarea id="engProhibitedTechniques">denial_of_service, social_engineering, credential_stuffing, data_exfiltration, persistence</textarea></label>
+          <label>Out-of-scope finding types<textarea id="engOutOfScopeFindings" placeholder="self_xss, missing_security_headers"></textarea></label>
+          <label>Program rules / notes (boleh bahasa Inggris)<textarea id="engNotes" maxlength="12000" placeholder="Paste the relevant HackerOne policy text here..."></textarea></label>
+          <button type="button" id="reviewProgramPolicyBtn" class="btn btn-secondary btn-sm">Analisis policy dengan AI (Bahasa Indonesia)</button>
+          <p class="text-xs text-muted">Teks dikirim ke provider AI yang dikonfigurasi. Pastikan policy boleh dibagikan; hapus informasi rahasia.</p>
+          <pre id="programPolicyReview" class="text-sm" style="white-space:pre-wrap;overflow-wrap:anywhere" aria-live="polite"></pre>
+        </div>
+        <label><input id="engSafeHarborAck" type="checkbox" /> Saya telah membaca ketentuan safe harbor program.</label>
+        <label><input id="engAuthorizationAck" type="checkbox" /> Saya mengonfirmasi target, waktu, teknik, dan rate limit di atas diizinkan oleh pemilik/program.</label>
+      </details>
 
       <div class="control-actions">
         <button id="startBtn" class="btn btn-primary btn-lg">

@@ -44,6 +44,8 @@ class NucleiAdapter(BaseAdapter):
 
         if not targets:
             return {"status": "error", "error": "No target provided", "findings": [], "count": 0}
+        if not self._binary_path:
+            return {"status": "unavailable", "error": "Nuclei binary is not installed", "findings": [], "count": 0}
 
         findings: List[Dict[str, Any]] = []
 
@@ -73,6 +75,8 @@ class NucleiAdapter(BaseAdapter):
                 proc_result = await run_bounded_subprocess(cmd, timeout_seconds=max(timeout_sec, 45.0))
                 if proc_result.timed_out:
                     return {"status": "timeout", "target": targets[0], "findings": [], "count": 0, "tool": "nuclei"}
+                if proc_result.returncode != 0:
+                    return {"status": "error", "error": f"Nuclei exited with code {proc_result.returncode}", "findings": [], "count": 0}
 
                 stdout = proc_result.stdout
                 for line in stdout.decode("utf-8", errors="ignore").splitlines():
@@ -96,6 +100,7 @@ class NucleiAdapter(BaseAdapter):
                             continue
             except Exception as exc:
                 logger.debug("Nuclei execution note: %s", exc)
+                return {"status": "error", "error": type(exc).__name__, "findings": [], "count": 0}
             finally:
                 if tmp_target_file and os.path.exists(tmp_target_file):
                     try:

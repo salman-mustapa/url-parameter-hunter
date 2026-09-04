@@ -101,12 +101,12 @@ async def test_scan_defaults_do_not_escalate_validation(monkeypatch):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", headers=headers[0]) as client:
         response = await client.post("/api/scans", json={"target": "example.com", "include_subdomains": False, "authorization_reference": "LOCAL-MOCK-ONLY"})
         assert response.status_code == 200, response.text
-        assert response.json()["validation_level"] == "L4_HIGH_RISK"
+        assert response.json()["validation_level"] == "L2_SAFE_ACTIVE"
         scan_id = response.json().get("id") or response.json().get("scan_id")
         async with AsyncSessionLocal() as db:
             scan = await db.get(Scan, scan_id)
             assert scan.user_id == users[0].id
-            assert scan.options["authorized_high_risk"] is True
+            assert scan.options["authorized_high_risk"] is False
             assert scan.options["security_checks"] is True
 
 
@@ -285,14 +285,13 @@ async def test_full_platform_api_workflows():
         assert data["id"] == scan_id
         assert data["root_domain"] == target_host
 
-        # 4. Test Pause, Resume, Stop scan controls
+        # 4. A seeded DB row has no live runner: pause/resume must reject it
+        # instead of falsely claiming execution resumed.
         res = await async_client.post(f"/api/scans/{scan_id}/pause", headers=auth_headers)
-        assert res.status_code == 200
-        assert res.json()["status"] == "paused"
+        assert res.status_code == 409
 
         res = await async_client.post(f"/api/scans/{scan_id}/resume", headers=auth_headers)
-        assert res.status_code == 200
-        assert res.json()["status"] == "resumed"
+        assert res.status_code == 409
 
         res = await async_client.post(f"/api/scans/{scan_id}/stop", headers=auth_headers)
         assert res.status_code == 200

@@ -28,7 +28,8 @@ async def verify(base, output):
             assert (await client.get(path)).status_code == 200, path
         schema = (await client.get("/openapi.json")).json()
         checked = []
-        public = {"/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/logout", "/api/auth/me", "/api/oob/{correlation_id}"}
+        # Keep aligned with the intentional guest copilot/auth routes in access.py.
+        public = {"/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/logout", "/api/auth/me", "/api/oob/{correlation_id}", "/api/ai/copilot/chat"}
         for path, operations in schema["paths"].items():
             if not path.startswith("/api/") or path in public:
                 continue
@@ -54,6 +55,19 @@ async def verify(base, output):
         evidence = await client.get(f"/api/findings/{finding_id}/evidence-package")
         assert evidence.status_code == 200
         report_hashes = {}
+        for kind in ("bugbounty", "reproduction", "cve-ready"):
+            disclosure = await client.get(f"/api/findings/{finding_id}/{kind}")
+            assert disclosure.status_code == 200, (kind, disclosure.status_code)
+            assert "## Expected vs Actual Result" in disclosure.text
+            assert "## Authorization & Scope" in disclosure.text
+            assert "## Coverage & Limitations" in disclosure.text
+            assert "Recorded response fields" in disclosure.text
+            replay = next(line for line in disclosure.text.splitlines() if line.startswith("curl "))
+            import shlex
+            replay_args = shlex.split(replay)
+            assert "--url" in replay_args, "Header redaction truncated the replay command"
+            assert replay_args[replay_args.index("--url") + 1].startswith("http://127.0.0.1:")
+            (output / f"synthetic-{kind}.md").write_text(disclosure.text, encoding="utf-8")
         for extension, endpoint in (("md", "markdown"), ("html", "html"), ("pdf", "pdf"), ("json", "json")):
             response = await client.get(f"/api/scans/{scan_id}/report/{endpoint}")
             assert response.status_code == 200, (endpoint, response.text[:200])

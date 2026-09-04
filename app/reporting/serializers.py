@@ -4,8 +4,10 @@ from urllib.parse import urlsplit
 
 def finding_location(finding, host: str) -> str:
     evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+    structured = evidence.get("structured_validation") or {}
+    structured = structured if isinstance(structured, dict) else {}
     for value in (evidence.get("url"), evidence.get("endpoint_url"), evidence.get("location"),
-                  evidence.get("endpoint"), getattr(finding, "technical_details", None)):
+                  evidence.get("endpoint"), structured.get("endpoint_url"), getattr(finding, "technical_details", None)):
         if not isinstance(value, str) or any(c in value for c in "\r\n "):
             continue
         if value.startswith("/") and not value.startswith("//"):
@@ -23,6 +25,15 @@ def finding_quality(finding: dict) -> dict:
         "raw_http_response", "response_body", "body_sample", "response", "response_headers",
         "command_output", "observations", "execution_proof", "screenshot_id",
     ))
+    structured = evidence.get("structured_validation") or {}
+    if isinstance(structured, dict):
+        ids = set(structured.get("evidence_ids") or [])
+        observed = observed or any(
+            isinstance(item, dict) and item.get("id") in ids
+            and isinstance(item.get("request"), dict) and item["request"].get("url")
+            and isinstance(item.get("response"), dict) and item["response"].get("status_code")
+            for item in (structured.get("evidence") or [])
+        )
     steps = finding.get("reproduction_steps") or evidence.get("reproduction_steps")
     command = finding.get("poc") or any(evidence.get(k) for k in ("curl", "poc_curl", "curl_command", "poc"))
     checks = {
@@ -46,6 +57,11 @@ def finding_quality(finding: dict) -> dict:
 def serialize_finding(finding, root_domain: str, asset_map: dict | None = None) -> dict:
     host = (asset_map or {}).get(finding.asset_id) or root_domain
     evidence = dict(finding.evidence) if isinstance(finding.evidence, dict) else {}
+    structured = evidence.get("structured_validation") or {}
+    if isinstance(structured, dict):
+        for key in ("actual_result", "expected_result", "preconditions", "reproduction_steps"):
+            if structured.get(key):
+                evidence.setdefault(key, structured[key])
     for key in ("actual_result", "expected_result", "preconditions"):
         if getattr(finding, key, None):
             evidence.setdefault(key, getattr(finding, key))

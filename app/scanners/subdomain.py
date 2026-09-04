@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.tools.subfinder_adapter import SubfinderAdapter
 from app.core.config import settings
+from app.core.profiles import is_deep_profile, is_passive_profile
 from app.core.resource_guard import resource_guard
 from app.models.models import Asset
 from app.scanners.base import ScanContext
@@ -394,7 +395,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             _threatcrowd(root_domain),
             _urlscan(root_domain),
         ]
-        if ctx.profile != "passive":
+        if not is_passive_profile(ctx.profile):
             passive_tasks.append(_load_wordlist(root_domain))
 
         results = await asyncio.gather(*passive_tasks, return_exceptions=True)
@@ -407,7 +408,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         raw_candidates.add(name)
 
         # Standard High-Probability Prefixes
-        if ctx.profile != "passive":
+        if not is_passive_profile(ctx.profile):
             standard_prefixes = (
                 "www", "api", "dev", "staging", "test", "mail", "admin", "portal",
                 "app", "m", "cdn", "auth", "sso", "gateway", "beta", "vpn", "webmail",
@@ -462,7 +463,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         active_hosts[primary_host] = {"ips": [], "cname": None}
 
     # 5. Smart Permutation & Alter-DNS (Deep Profile & Recursive Only)
-    if include_subdomains and ctx.profile == "deep" and len(active_hosts) < settings.max_assets_per_scan:
+    if include_subdomains and is_deep_profile(ctx.profile) and len(active_hosts) < settings.max_assets_per_scan:
         permutations = _generate_smart_permutations(set(active_hosts.keys()), root_domain)
         new_mutations = [m for m in permutations if m not in active_hosts and ctx.scope.host_allowed(m)]
         if new_mutations:

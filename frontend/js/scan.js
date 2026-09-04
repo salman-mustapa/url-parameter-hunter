@@ -17,6 +17,7 @@ function updateScanStatusUI(statusText) {
   const isFailed = ["FAILED", "PARTIAL_FAILURE", "DEGRADED", "TIMEOUT"].includes(state.scanStatus);
   const isStopped = ["STOPPED", "CANCELLED"].includes(state.scanStatus);
   const isCompleted = state.scanStatus === "COMPLETED";
+  if (el("resumeBtn")) el("resumeBtn").disabled = !isPaused;
 
   if (badge) {
     if (isRunning) badge.classList.add("pill-running");
@@ -227,12 +228,12 @@ async function startScan() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: target,
-        profile: "adversary_simulation",
-        validation_level: "L4_HIGH_RISK",
+        profile: "deep_bug_hunt",
+        validation_level: "L3_CONTROLLED",
         include_subdomains: includeSubdomains,
         device_fingerprint: device_fingerprint,
         engagement,
-        authorization_reference: engagement.authorization_reference || `AUTHORIZED-L4-${target.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}-AUDIT`,
+        authorization_reference: engagement.authorization_reference,
       }),
     });
 
@@ -307,26 +308,28 @@ async function startScan() {
   }
 }
 
-let isStatusFetching = false;
+let statusRequest = null;
 
 async function syncScanStatus() {
-  if (!state.activeScanId || isStatusFetching) return;
+  if (!state.activeScanId) return;
   if (typeof document !== "undefined" && document.hidden) return;
-
-  isStatusFetching = true;
   const currentScanId = state.activeScanId;
+  if (statusRequest?.scanId === currentScanId) { statusRequest.again = true; return; }
+  statusRequest?.controller.abort();
+  const request = {scanId: currentScanId, controller: new AbortController(), again: false};
+  statusRequest = request;
   try {
-    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(currentScanId)}`);
+    const res = await authFetch(`${API_BASE}/scans/${encodeURIComponent(currentScanId)}`, {signal: request.controller.signal});
     if (!res.ok || state.activeScanId !== currentScanId) return;
     const scan = await res.json();
-    if (state.activeScanId !== currentScanId) return;
+    if (state.activeScanId !== currentScanId || statusRequest !== request || request.controller.signal.aborted) return;
     if (scan.progress) {
-      if (scan.progress.assets != null && scan.progress.assets > state.counters.assets) state.counters.assets = scan.progress.assets;
-      if (scan.progress.ports != null && scan.progress.ports > state.counters.ports) state.counters.ports = scan.progress.ports;
-      if (scan.progress.urls != null && scan.progress.urls > state.counters.urls) state.counters.urls = scan.progress.urls;
-      if (scan.progress.parameters != null && scan.progress.parameters > state.counters.params) state.counters.params = scan.progress.parameters;
-      if (scan.progress.technologies != null && scan.progress.technologies > state.counters.techs) state.counters.techs = scan.progress.technologies;
-      if (scan.progress.findings != null && scan.progress.findings > state.counters.findings) {
+      if (scan.progress.assets != null) state.counters.assets = scan.progress.assets;
+      if (scan.progress.ports != null) state.counters.ports = scan.progress.ports;
+      if (scan.progress.urls != null) state.counters.urls = scan.progress.urls;
+      if (scan.progress.parameters != null) state.counters.params = scan.progress.parameters;
+      if (scan.progress.technologies != null) state.counters.techs = scan.progress.technologies;
+      if (scan.progress.findings != null && scan.progress.findings !== state.counters.findings) {
         state.counters.findings = scan.progress.findings;
         if (typeof loadFindings === "function") loadFindings();
       }
@@ -348,7 +351,10 @@ async function syncScanStatus() {
   } catch (err) {
     console.debug("Sync scan status skip:", err);
   } finally {
-    isStatusFetching = false;
+    if (statusRequest === request) {
+      statusRequest = null;
+      if (request.again && state.activeScanId === currentScanId) syncScanStatus();
+    }
   }
 }
 
@@ -426,10 +432,28 @@ function connectEventSource(scanId) {
 
   const es = new EventSource(`${API_BASE}/scans/${encodeURIComponent(scanId)}/events`);
   state.es = es;
+  const seenEventIds = new Set();
+  const isCurrent = () => state.es === es && state.activeScanId === scanId;
+
+  es.onopen = () => {
+    if (!isCurrent()) return;
+    // Reconcile against persisted state after a reconnect/replay gap.
+    syncScanStatus();
+    debouncedRefreshAssetTree();
+    debouncedLoadFindings();
+  };
 
   es.onmessage = (e) => {
+    if (!isCurrent()) return;
     try {
       const raw = JSON.parse(e.data);
+      if (raw.scan_id && raw.scan_id !== scanId) return;
+      const eventId = raw.event_id || e.lastEventId;
+      if (eventId && seenEventIds.has(eventId)) return;
+      if (eventId) {
+        seenEventIds.add(eventId);
+        if (seenEventIds.size > 2000) seenEventIds.delete(seenEventIds.values().next().value);
+      }
       const ev = {
         ...(raw.data && typeof raw.data === "object" ? raw.data : {}),
         ...raw,
@@ -443,6 +467,7 @@ function connectEventSource(scanId) {
   };
 
   es.onerror = () => {
+    if (!isCurrent()) return;
     console.debug("SSE connection closed or re-negotiating.");
     const terminal = ["COMPLETED", "FAILED", "STOPPED", "PARTIAL_FAILURE", "DEGRADED", "TIMEOUT", "CANCELLED"].includes((state.scanStatus || "").toUpperCase());
     if (terminal && state.es) {
@@ -475,7 +500,14 @@ function debouncedLoadFindings() {
 }
 
 function processEventTelemetry(ev) {
+  if (ev.scan_id && ev.scan_id !== state.activeScanId) return;
   const type = ev.event_type || "";
+  if (type === "stream.gap") {
+    syncScanStatus();
+    debouncedRefreshAssetTree();
+    debouncedLoadFindings();
+    return;
+  }
 
   if (type.startsWith("asset.") || type === "discovery.validated" || type.startsWith("discovery.")) {
     state.counters.assets++;
@@ -506,6 +538,7 @@ function processEventTelemetry(ev) {
     clearInterval(state.statusPollInterval);
     if (typeof refreshAssetTree === "function") refreshAssetTree();
     if (typeof loadFindings === "function") loadFindings();
+    syncScanStatus();
     if (typeof loadReportHubData === "function" && state.activeScanId) loadReportHubData(state.activeScanId);
     if (state.es) {
       state.es.close();
@@ -519,6 +552,7 @@ function processEventTelemetry(ev) {
     clearInterval(state.statusPollInterval);
     if (typeof refreshAssetTree === "function") refreshAssetTree();
     if (typeof loadFindings === "function") loadFindings();
+    syncScanStatus();
     if (typeof loadReportHubData === "function" && state.activeScanId) loadReportHubData(state.activeScanId);
     if (state.es) {
       state.es.close();

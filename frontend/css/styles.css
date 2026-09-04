@@ -7228,12 +7228,14 @@ html, body {
 
 .ai-chat-logs {
   flex: 1;
+  min-height: 0;
   padding: 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: #FDFCF7;
+  background: #0e1220;
+  color: #e2e8f0;
 }
 
 .chat-msg-bubble {
@@ -7249,15 +7251,15 @@ html, body {
 
 .chat-msg-bubble.user {
   align-self: flex-end;
-  background: #DBEAFE;
-  color: #1E3A8A;
+  background: #15315b;
+  color: #dbeafe;
   border-bottom-right-radius: 2px;
 }
 
 .chat-msg-bubble.assistant {
   align-self: flex-start;
   background: #121524;
-  color: var(--text, #23283e);
+  color: #e2e8f0;
   border-bottom-left-radius: 2px;
 }
 
@@ -7265,7 +7267,7 @@ html, body {
   align-self: center;
   max-width: 95%;
   background: var(--surface-alt, #171b2e);
-  color: var(--text-muted, #64748B);
+  color: #a9b5cb;
   font-style: italic;
   font-size: 11px;
   text-align: center;
@@ -7274,7 +7276,7 @@ html, body {
 
 .chat-msg-text pre {
   background: #23283e;
-  color: #151829;
+  color: #e2e8f0;
   padding: 8px 12px;
   border-radius: 6px;
   overflow-x: auto;
@@ -7290,7 +7292,7 @@ html, body {
   padding: 2px 4px;
   border-radius: 4px;
   font-size: 11px;
-  color: #23283e;
+  color: #c4b5fd;
 }
 
 .ai-chat-input-area {

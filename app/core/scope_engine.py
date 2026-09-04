@@ -131,7 +131,7 @@ class ScopeEngine:
     def module_allowed(self, module_name: str) -> bool:
         if not self.allowed_modules:
             return True
-        return module_name.lower() in self.allowed_modules
+        return "*" in self.allowed_modules or module_name.lower() in self.allowed_modules
 
     def url_allowed(self, url: str) -> bool:
         try:

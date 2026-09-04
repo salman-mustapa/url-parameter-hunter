@@ -14,7 +14,9 @@ class RedactionEngine:
         (re.compile(r'(?i)(\b(?:[a-z0-9]+_)*(?:token|secret|api_key)\s*[=:]\s*)[^\s,;\"\']+'), r'\1[REDACTED]'),
         (re.compile(r'(?i)([?&](?:token|access_token|refresh_token|api_key|secret|password|session_id)=)[^&#\s]+'), r'\1[REDACTED]'),
         (re.compile(r'(?i)(https?://)[^/@\s]+:[^/@\s]+@'), r'\1[REDACTED]@'),
-        (re.compile(r'((?:authorization|cookie|set-cookie)\s*:\s*)[^\r\n]+', re.I), r'\1[REDACTED]'),
+        # Stop at shell/JSON quote boundaries so redacting a header value does
+        # not remove the rest of a curl command or surrounding JSON string.
+        (re.compile(r'((?:authorization|cookie|set-cookie)\s*:\s*)[^\'"\r\n]+', re.I), r'\1[REDACTED]'),
         (re.compile(r'("(?:password|passwd|pwd|token|access_token|api_key|secret|plaintext)"\s*:\s*)"[^"]*"', re.I), r'\1"[REDACTED]"'),
         (re.compile(r'(password|passwd|pwd)\s*[:=]\s*["\']?([^"\'\s&]+)', re.I), r"\1=[REDACTED]"),
         (re.compile(r'(authorization:\s*bearer\s+)([a-zA-Z0-9_\-\.]+)', re.I), r"\1[REDACTED_JWT]"),

@@ -16,6 +16,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.config import settings
+from app.core.profiles import is_deep_profile
 from app.core.resource_governor import resource_governor
 from app.core.session_context import SessionContext
 from app.scanners.base import ScanContext
@@ -45,7 +46,7 @@ async def trigger_host_nmap_vuln_pipeline(
     enabled = (
         bool(option)
         if option is not None
-        else settings.nmap_vuln_enabled or ctx.profile == "adversary_simulation"
+        else settings.nmap_vuln_enabled or is_deep_profile(ctx.profile)
     )
     if not enabled:
         return {"status": "disabled", "findings": []}

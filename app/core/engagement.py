@@ -59,7 +59,22 @@ class EngagementRules(BaseModel):
     excluded_hosts: list[str] = Field(default_factory=list, max_length=100)
     allowed_ports: list[int] = Field(default_factory=lambda: [80, 443], min_length=1, max_length=100)
     max_rps: int = Field(default=5, ge=1, le=30)
-    notes: str = Field(default="", max_length=3000)
+    platform: Literal["HackerOne", "Bugcrowd", "Intigriti", "Private", "Other"] = "HackerOne"
+    program_url: str = Field(default="", max_length=500)
+    allowed_techniques: list[str] = Field(default_factory=list, max_length=100)
+    prohibited_techniques: list[str] = Field(
+        default_factory=lambda: [
+            "denial_of_service",
+            "social_engineering",
+            "credential_stuffing",
+            "data_exfiltration",
+            "persistence",
+        ],
+        max_length=100,
+    )
+    out_of_scope_findings: list[str] = Field(default_factory=list, max_length=100)
+    safe_harbor_acknowledged: bool = False
+    notes: str = Field(default="", max_length=12000)
     report: ReportProfile = Field(default_factory=ReportProfile)
 
     @field_validator("starts_at", "ends_at")
@@ -89,6 +104,23 @@ class EngagementRules(BaseModel):
             raise ValueError("Allowed ports must be between 1 and 65535")
         return sorted(set(values))
 
+    @field_validator("allowed_techniques", "prohibited_techniques", "out_of_scope_findings")
+    @classmethod
+    def normalized_policy_items(cls, values):
+        result = []
+        for raw in values:
+            value = "_".join(str(raw).strip().lower().replace("-", " ").split())[:120]
+            if value and value not in result:
+                result.append(value)
+        return result
+
+    @field_validator("program_url")
+    @classmethod
+    def valid_program_url(cls, value):
+        if value and not value.startswith(("https://", "http://")):
+            raise ValueError("Program policy URL must start with https:// or http://")
+        return value
+
     @model_validator(mode="after")
     def validate_rules(self):
         if not self.authorization_acknowledged:
@@ -104,6 +136,19 @@ class EngagementRules(BaseModel):
         if self.ends_at and now >= self.ends_at:
             raise ValueError("Testing window has expired; obtain renewed authorization")
 
+    def action_allowed(self, action: str) -> bool:
+        """Enforce structured rules; prose notes never grant execution rights."""
+        normalized = "_".join(str(action).strip().lower().replace("-", " ").split())
+        if not normalized:
+            return False
+        permitted = self.allowed_techniques or ["safe_probe", "validation"]
+        explicitly_allowed = "*" in permitted or normalized in permitted
+        explicitly_prohibited = any(
+            item == normalized or item in normalized or normalized in item
+            for item in self.prohibited_techniques
+        )
+        return explicitly_allowed and not explicitly_prohibited
+
 
 def report_context(scan) -> dict:
     options = scan.options or {}
@@ -116,6 +161,12 @@ def report_context(scan) -> dict:
         "started_at": scan.started_at.isoformat() if scan.started_at else None,
         "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
         "scope_note": "Recorded rules are not independent proof of authorization or complete test coverage.",
-        "prohibited": ["DoS / resource exhaustion", "Brute force / credential stuffing", "Social engineering / phishing",
-                       "Unapproved access changes, data extraction or lateral movement"],
+        "ai_analysis": options.get("ai_analysis") or {},
+        "scan_status": scan.status,
+        "coverage_complete": (scan.progress or {}).get("coverage_complete"),
+        "coverage_failures": (scan.progress or {}).get("coverage_failures") or [],
+        "prohibited": engagement.get("prohibited_techniques") or [
+            "denial_of_service", "social_engineering", "credential_stuffing",
+            "data_exfiltration", "persistence",
+        ],
     }

@@ -30,7 +30,16 @@ class HTTPSecurityMiddleware:
                 ]
                 if path.startswith("/api/"):
                     extra.append((b"cache-control", b"no-store"))
-                message = {**message, "headers": list(message.get("headers", [])) + extra}
+                elif path.startswith(("/js/", "/css/", "/views/")) or any(
+                    key.lower() == b"content-type" and b"text/html" in value
+                    for key, value in message.get("headers", [])
+                ):
+                    # Revalidate mutable SPA assets so an updated HTML document
+                    # cannot keep running the previous deployment's fetch logic.
+                    extra.append((b"cache-control", b"no-cache, max-age=0, must-revalidate"))
+                replaced = {key for key, _ in extra}
+                original = [(key, value) for key, value in message.get("headers", []) if key.lower() not in replaced]
+                message = {**message, "headers": original + extra}
             await send(message)
 
         async def reject(code, detail, response_headers=None):

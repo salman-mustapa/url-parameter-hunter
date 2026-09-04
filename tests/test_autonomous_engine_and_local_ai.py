@@ -2,6 +2,8 @@
 
 import pytest
 import asyncio
+from unittest.mock import AsyncMock
+from types import SimpleNamespace
 from app.ai.attack_planner import AttackPlanner, PlanStatus, StepStatus
 from app.ai.hypothesis_engine import HypothesisEngine
 from app.ai.local_c_inference_adapter import LocalCInferenceAdapter
@@ -28,9 +30,14 @@ async def test_local_c_inference_adapter():
 
 
 @pytest.mark.asyncio
-async def test_attack_planner_live_execution():
+async def test_attack_planner_mocked_execution(monkeypatch):
     """Verify AttackPlanner moves plans from DRAFT -> EXECUTING -> COMPLETED with step results."""
     planner = AttackPlanner()
+    # Test lifecycle with a deterministic result, not installed binaries or a
+    # forbidden remote legacy adapter masquerading as a successful clean test.
+    monkeypatch.setattr(planner, "_dispatch_step_execution", AsyncMock(return_value={
+        "status": "clean", "vulnerable": False, "summary": "Synthetic completed check",
+    }))
     hyp_engine = HypothesisEngine()
 
     hyp = hyp_engine.create_hypothesis(
@@ -70,9 +77,13 @@ async def test_attack_planner_live_execution():
 
 
 @pytest.mark.asyncio
-async def test_nuclei_adapter_execution():
+async def test_nuclei_adapter_execution(monkeypatch):
     """Verify NucleiAdapter handles single and batch targets gracefully."""
     adapter = NucleiAdapter()
+    adapter._binary_path = "nuclei-fixture"
+    monkeypatch.setattr("app.adapters.tools.nuclei_adapter.run_bounded_subprocess", AsyncMock(
+        return_value=SimpleNamespace(timed_out=False, returncode=0, stdout=b"", stderr=b""),
+    ))
     res = await adapter.execute({
         "targets": ["https://target1.local", "https://target2.local"],
         "tags": "cve,misconfig",

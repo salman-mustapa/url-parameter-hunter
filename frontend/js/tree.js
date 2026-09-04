@@ -4,21 +4,24 @@
  */
 
 let lastRenderedTreeHash = "";
-let isTreeFetching = false;
+let treeRequest = null;
 
 async function refreshAssetTree() {
-  if (!state.activeScanId || isTreeFetching) return;
+  if (!state.activeScanId) return;
   if (typeof document !== "undefined" && document.hidden) return;
 
-  isTreeFetching = true;
   const currentScanId = state.activeScanId;
+  if (treeRequest?.scanId === currentScanId) { treeRequest.again = true; return; }
+  treeRequest?.controller.abort();
+  const request = {scanId: currentScanId, controller: new AbortController(), again: false};
+  treeRequest = request;
   try {
-    const res = await authFetch(`${API_BASE}/assets/tree?scan_id=${encodeURIComponent(currentScanId)}`);
+    const res = await authFetch(`${API_BASE}/assets/tree?scan_id=${encodeURIComponent(currentScanId)}`, {signal: request.controller.signal});
     if (!res.ok || state.activeScanId !== currentScanId) return;
     const data = await res.json();
-    if (state.activeScanId !== currentScanId) return;
+    if (state.activeScanId !== currentScanId || treeRequest !== request || request.controller.signal.aborted) return;
     const searchVal = el("treeSearchInput")?.value || "";
-    const dataHash = JSON.stringify(data) + "_" + (state.currentTreeSevFilter || "ALL") + "_" + searchVal;
+    const dataHash = currentScanId + "_" + JSON.stringify(data) + "_" + (state.currentTreeSevFilter || "ALL") + "_" + searchVal;
     if (dataHash === lastRenderedTreeHash && state.assetsTreeData) {
       return; // Skip DOM update if data is unchanged
     }
@@ -28,7 +31,10 @@ async function refreshAssetTree() {
   } catch (err) {
     console.debug("Fetch asset tree skip:", err);
   } finally {
-    isTreeFetching = false;
+    if (treeRequest === request) {
+      treeRequest = null;
+      if (request.again && state.activeScanId === currentScanId) refreshAssetTree();
+    }
   }
 }
 

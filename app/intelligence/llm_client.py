@@ -1,28 +1,21 @@
 """Universal LLM Client & AI Pentest Intelligence Engine (Multi-Model Combo & Dynamic Task Router).
 
-Features:
-1. Multi-Model Intelligent Combo Ensemble:
-   - Reasoning & Hypotheses: ag/gemini-3.7-flash-high, ag/gemini-3.7-flash-medium, developer, ag/claude-sonnet-4-6
-   - High-Throughput Payload Fuzzing: gemini/gemini-3.5-flash-lite, fast, developer
-   - Code & JavaScript Reverse Engineering: developer, ag/gemini-3.7-flash-high, ag/gemini-3.7-flash-medium
-   - Evidence Critic & Triaging: ag/gemini-3.7-flash-high, developer, assistant
-   - Executive Reporting: ag/gemini-3.7-flash-high, developer, assistant
-2. Automatic Cascading & Zero-Downtime Failover:
-   - If the primary model for any task encounters a rate limit (429), times out, or fails,
-     the client seamlessly cascades to the next best model in the pool in real time.
-3. In-memory LRU cache for synthesized payloads (Zero tokens wasted on duplicate parameters).
-4. Concurrency bounding with asyncio.Semaphore.
+Task-based NineRouter aliases, bounded fallback attempts and advisory Hermes
+integration. Availability, pricing and quota depend on the configured providers;
+neither failover nor a "free" alias guarantees unlimited or uninterrupted service.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
 import os
 import re
 import time
+from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -36,54 +29,87 @@ DEFAULT_SYSTEM_PROMPT = (
     "Provide concise, high-impact payloads, clear vulnerability reproduction steps, and root-cause analysis."
 )
 
-# Task-specialized multi-model cascade pools for NineRouter / OpenAI-Compatible endpoints
+# Task-specialized NineRouter aliases. Aliases remain stable while the provider
+# can rotate underlying models; concrete model IDs are still accepted via
+# LLM_MODEL for operators who need to pin one.
 NINEROUTER_COMBO_POOLS: Dict[str, List[str]] = {
     "reasoning": [
+        "security",
         "developer",
-        "ag/gemini-3.7-flash-medium",
-        "gemini/gemini-3.5-flash-lite",
-        "fast",
-        "ag/claude-sonnet-4-6",
+        "free",
     ],
     "hypothesis": [
+        "security",
         "developer",
-        "ag/gemini-3.7-flash-medium",
-        "gemini/gemini-3.5-flash-lite",
-        "fast",
-        "ag/claude-sonnet-4-6",
+        "free",
     ],
     "payload_synthesis": [
-        "developer",
-        "gemini/gemini-3.5-flash-lite",
         "fast",
-        "ag/gemini-3.7-flash-medium",
+        "security",
+        "free",
     ],
     "code_analysis": [
         "developer",
-        "ag/gemini-3.7-flash-medium",
-        "gemini/gemini-3.5-flash-lite",
-        "ag/claude-sonnet-4-6",
+        "security",
+        "free",
     ],
     "evidence_critic": [
+        "security",
         "developer",
-        "ag/gemini-3.7-flash-medium",
-        "gemini/gemini-3.5-flash-lite",
-        "ag/claude-sonnet-4-6",
+        "free",
     ],
     "reporting": [
+        "business",
+        "content",
         "developer",
-        "ag/gemini-3.7-flash-medium",
-        "gemini/gemini-3.5-flash-lite",
-        "ag/claude-sonnet-4-6",
+        "free",
     ],
     "general": [
+        "free",
+        "assistant",
         "developer",
-        "ag/gemini-3.7-flash-medium",
-        "gemini/gemini-3.5-flash-lite",
-        "fast",
-        "ag/claude-sonnet-4-6",
     ],
 }
+
+
+class LLMResponseError(RuntimeError):
+    """A provider response that must not be presented as successful analysis."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _completion_text(data: Any) -> str:
+    if not isinstance(data, dict) or data.get("error"):
+        raise LLMResponseError("provider_error")
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise LLMResponseError("missing_completion")
+    choice = choices[0]
+    if choice.get("finish_reason") in {"length", "max_tokens", "content_filter", "tool_calls", "function_call"}:
+        raise LLMResponseError("incomplete_completion")
+    message = choice.get("message") or {}
+    if not isinstance(message, dict):
+        raise LLMResponseError("invalid_completion")
+    # Reasoning is not a final answer. Some routers return only reasoning when
+    # a token budget is exhausted; accepting it would create false AI success.
+    content = message.get("content") or choice.get("text") or ""
+    if isinstance(content, list):
+        content = "".join(
+            part["text"] for part in content
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+        )
+    if not isinstance(content, str) or not content.strip():
+        raise LLMResponseError("missing_final_answer")
+    # Observed live NineRouter/Antigravity retirement notice was wrapped as a
+    # normal HTTP 200 completion. Do not report it as a successful AI response.
+    if re.fullmatch(
+        r"Gemini [\w. -]+ is no longer available\.\s+Please switch to .{1,200}latest version of Antigravity\.?",
+        content.strip(), flags=re.IGNORECASE,
+    ):
+        raise LLMResponseError("upstream_model_unavailable")
+    return content
 
 
 class LLMClient:
@@ -96,137 +122,124 @@ class LLMClient:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        provider: Optional[str] = None,
+        routing_mode: Optional[str] = None,
     ) -> None:
         self.base_url = (base_url or settings.llm_base_url).rstrip("/")
-        self.api_key = (
-            api_key
-            or getattr(settings, "llm_api_key", "")
-            or getattr(settings, "gemini_api_key", "")
-            or getattr(settings, "openai_api_key", "")
-            or getattr(settings, "ninerouter_api_key", "")
-            or os.getenv("LLM_API_KEY", "")
-            or os.getenv("GEMINI_API_KEY", "")
-            or os.getenv("OPENAI_API_KEY", "")
-            or os.getenv("NINEROUTER_API_KEY", "")
-        )
+        # Provider credentials must never cascade into an unrelated endpoint.
+        provider_key = ""
+        if self.base_url == str(settings.llm_base_url).rstrip("/"):
+            host = urlsplit(self.base_url).hostname
+            key_field = {"api.openai.com": "openai_api_key", "generativelanguage.googleapis.com": "gemini_api_key"}.get(host)
+            if settings.llm_provider == "ninerouter":
+                key_field = "ninerouter_api_key"
+            provider_key = settings.llm_api_key or (getattr(settings, key_field, "") if key_field else "")
+        self.api_key = api_key if api_key is not None else provider_key
         self.model = model or settings.llm_model
+        self.provider = provider or settings.llm_provider
+        self.routing_mode = routing_mode if routing_mode is not None else settings.llm_routing_mode
         self.temperature = temperature if temperature is not None else settings.llm_temperature
         self.max_tokens = max_tokens or settings.llm_max_tokens
+        self.timeout_seconds = max(5.0, float(settings.llm_timeout_seconds))
+        self.hermes_base_url = str(settings.hermes_base_url or "").rstrip("/")
+        self.hermes_api_key = str(settings.hermes_api_key or "")
+        self.hermes_model = str(settings.hermes_model or "hermes-agent")
         self._payload_cache: Dict[str, List[str]] = {}
         self._js_cache: Dict[str, Dict[str, Any]] = {}
         self._semaphore = asyncio.Semaphore(4)
+
+    @property
+    def effective_routing_mode(self) -> str:
+        if self.routing_mode in {"single", "router_combo", "task_router"}:
+            return self.routing_mode
+        if self.model in {"combo", "auto", "ninerouter_combo", "all", "dynamic"}:
+            return "task_router"
+        return "single"
+
+    def candidate_models(self, task: str = "general", model: Optional[str] = None) -> List[str]:
+        # Explicit overrides and named router combos are sent verbatim. Only
+        # task_router may change IDs locally; NineRouter owns combo membership.
+        if model:
+            return [model]
+        if self.effective_routing_mode == "task_router":
+            return list(NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"]))
+        return [self.model]
 
     @property
     def is_configured(self) -> bool:
         """Checks if LLM is enabled and API key or local endpoint is configured."""
         if not settings.llm_enabled:
             return False
-        if "localhost" in self.base_url or "127.0.0.1" in self.base_url:
+        if urlsplit(self.base_url).hostname in {"localhost", "127.0.0.1", "::1"}:
             return True
-        return bool(self.api_key and len(self.api_key) > 4)
+        return bool(
+            (self.api_key and len(self.api_key) > 4)
+            or self.hermes_base_url
+        )
 
-    async def list_models(
-        self,
-        provider: Optional[str] = None,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None
-    ) -> List[str]:
-        """Lists available models from the AI provider."""
-        prov = provider or settings.llm_provider
-        url = base_url or self.base_url
-        key = api_key or self.api_key
+    async def model_catalog(self) -> List[Dict[str, str]]:
+        """Return only provider-reported IDs, retaining NineRouter combo metadata."""
+        native = urlsplit(self.base_url).hostname == "generativelanguage.googleapis.com" and "/openai" not in self.base_url
+        endpoint = "https://generativelanguage.googleapis.com/v1beta/models" if native else f"{self.base_url}/models"
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key and not native else {}
+        params = {"key": self.api_key} if native and self.api_key else {}
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await asyncio.wait_for(client.get(endpoint, headers=headers, params=params), 8.0)
+            response.raise_for_status()
+            data = response.json()
+        rows = data.get("models" if native else "data", []) if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            raise ValueError("Invalid model catalog")
+        entries = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            identifier = str(row.get("name" if native else "id") or "").removeprefix("models/")
+            if not identifier:
+                continue
+            owner = str(row.get("owned_by") or ("gemini" if native else ""))
+            entries[identifier] = {"id": identifier, "owned_by": owner,
+                                   "kind": "combo" if owner.lower() == "combo" else "model"}
+        return list(entries.values())
 
-        if url:
-            url = url.rstrip("/")
-
-        if prov == "gemini" or (url and "generativelanguage.googleapis.com" in url):
-            endpoint = "https://generativelanguage.googleapis.com/v1beta/models"
-            params = {"key": key} if key else {}
-            try:
-                async with httpx.AsyncClient(timeout=8.0, verify=False) as client:
-                    resp = await client.get(endpoint, params=params)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        models = []
-                        for m in data.get("models", []):
-                            name = m.get("name", "")
-                            if name.startswith("models/"):
-                                name = name[7:]
-                            models.append(name)
-                        return models
-            except Exception as e:
-                logger.error("Failed to list Gemini models: %s", e)
-                return []
-        else:
-            endpoint = f"{url}/models" if url else "https://api.openai.com/v1/models"
-            if not endpoint.startswith("http"):
-                endpoint = f"https://{endpoint}"
-            
-            headers = {}
-            if key:
-                headers["Authorization"] = f"Bearer {key}"
-            
-            try:
-                async with httpx.AsyncClient(timeout=8.0, verify=False) as client:
-                    resp = await client.get(endpoint, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        models = []
-                        if isinstance(data, dict) and "data" in data:
-                            for m in data["data"]:
-                                if isinstance(m, dict) and "id" in m:
-                                    models.append(m["id"])
-                        elif isinstance(data, list):
-                            for m in data:
-                                if isinstance(m, dict) and "id" in m:
-                                    models.append(m["id"])
-                        return models
-            except Exception as e:
-                logger.error("Failed to list OpenAI-compatible models from %s: %s", endpoint, e)
-                return []
-        return []
+    async def list_models(self, provider=None, base_url=None, api_key=None) -> List[str]:
+        candidate = copy.copy(self)
+        if base_url is not None:
+            candidate.base_url = base_url.rstrip("/")
+            if candidate.base_url != self.base_url:
+                candidate.api_key = ""
+        if api_key is not None:
+            candidate.api_key = api_key
+        if provider is not None:
+            candidate.provider = provider
+        try:
+            return [entry["id"] for entry in await candidate.model_catalog()]
+        except Exception as exc:
+            logger.warning("Model catalog unavailable (%s)", type(exc).__name__)
+            return []
 
     async def test_connection(self) -> Dict[str, Any]:
-        """Tests connection and verifies the active multi-model combo ensemble."""
-        if not self.is_configured:
-            return {
-                "status": "unconfigured",
-                "message": "AI Provider belum dikonfigurasi di .env",
-                "provider": settings.llm_provider,
-                "model": self.model,
-            }
-
+        """Verify inference, not merely a catalog response or a nonempty key."""
+        started = time.monotonic()
+        trace: Dict[str, Any] = {}
         try:
-            resp_text = await self.chat(
-                messages=[{"role": "user", "content": "Respond with 'PENTEST_AI_READY' and nothing else."}],
-                max_tokens=64,
-                task="general",
-                timeout=8.0,
+            response = await self.chat(
+                messages=[{"role": "user", "content": "Respond with PENTEST_AI_READY and nothing else."}],
+                max_tokens=64, task="general", timeout=self.timeout_seconds, _trace=trace,
             )
-            active_models = NINEROUTER_COMBO_POOLS["general"]
+            valid = response.strip() == "PENTEST_AI_READY"
             return {
-                "status": "connected",
-                "mode": "Multi-Model Combo Ensemble (Auto-Cascade & Task Routing)",
-                "message": f"Koneksi AI Combo Aktif & Siap ({len(active_models)} Model Pool)",
-                "model": self.model,
-                "base_url": self.base_url,
-                "combo_pool": active_models,
-                "task_routing": {
-                    "reasoning": NINEROUTER_COMBO_POOLS["reasoning"][0],
-                    "payload_synthesis": NINEROUTER_COMBO_POOLS["payload_synthesis"][0],
-                    "code_analysis": NINEROUTER_COMBO_POOLS["code_analysis"][0],
-                    "evidence_critic": NINEROUTER_COMBO_POOLS["evidence_critic"][0],
-                    "reporting": NINEROUTER_COMBO_POOLS["reporting"][0],
-                },
-                "sample_reply": resp_text.strip()[:100],
+                "status": "connected" if valid else "error",
+                "message": "Inference berhasil diuji." if valid else "Respons tidak memenuhi uji readiness.",
+                "model": self.model, "routing_mode": self.effective_routing_mode,
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "routing": trace, "sample_reply": response.strip()[:100],
             }
         except Exception as exc:
-            return {
-                "status": "error",
-                "message": f"Gagal terhubung ke AI provider: {str(exc)}",
-                "model": self.model,
-                "base_url": self.base_url,
-            }
+            return {"status": "error", "message": f"Inference gagal ({type(exc).__name__}).",
+                    "model": self.model, "routing_mode": self.effective_routing_mode,
+                    "latency_ms": round((time.monotonic() - started) * 1000, 2), "routing": trace,
+                    "error_code": getattr(exc, "code", type(exc).__name__)}
 
     async def chat(
         self,
@@ -236,24 +249,45 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         task: str = "general",
         model: Optional[str] = None,
-        timeout: float = 12.0,
+        timeout: Optional[float] = None,
+        _trace: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        # One wall-clock deadline includes semaphore queueing, all providers,
+        # slow streaming responses and fallback. HTTP read timeouts alone do not.
+        budget = max(0.05, float(timeout if timeout is not None else self.timeout_seconds))
+        snapshot = copy.copy(self)
+        return await asyncio.wait_for(
+            snapshot._chat_with_cascade(messages, system_prompt, temperature, max_tokens, task, model, budget, _trace),
+            timeout=budget,
+        )
+
+    async def _chat_with_cascade(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        task: str = "general",
+        model: Optional[str] = None,
+        timeout: Optional[float] = None,
+        trace: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Sends a chat completion request with automatic Multi-Model Combo cascading and failover."""
+        total_timeout = float(timeout or self.timeout_seconds)
+        deadline = time.monotonic() + total_timeout
         async with self._semaphore:
-            if "generativelanguage.googleapis.com" in self.base_url or (
-                settings.llm_provider == "gemini" and not self.base_url.endswith("/v1")
-            ):
-                return await self._chat_gemini_native(messages, system_prompt, temperature, max_tokens, timeout)
+            if urlsplit(self.base_url).hostname == "generativelanguage.googleapis.com" and "/openai" not in self.base_url:
+                if model:
+                    self.model = model
+                if trace is not None:
+                    trace.update(requested_model=self.model, response_model=None, attempts=[self.model], mode="single")
+                return await self._chat_gemini_native(messages, system_prompt, temperature, max_tokens, total_timeout)
 
             # Determine cascade candidate models
-            if model:
-                candidate_models = [model]
-            elif self.model and self.model not in ("combo", "auto", "ninerouter_combo", "all", "dynamic"):
-                # Use user's selected model first, then fallback to combo pool
-                pool = NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"])
-                candidate_models = [self.model] + [m for m in pool if m != self.model]
-            else:
-                candidate_models = NINEROUTER_COMBO_POOLS.get(task, NINEROUTER_COMBO_POOLS["general"])
+            candidate_models = self.candidate_models(task, model)
+            allow_fallback = not model and self.effective_routing_mode == "task_router"
+            if trace is not None:
+                trace.update(mode="single" if model else self.effective_routing_mode, attempts=[])
 
             endpoint = f"{self.base_url}/chat/completions"
             if not endpoint.startswith("http"):
@@ -280,7 +314,11 @@ class LLMClient:
             payload_messages.extend(messages)
 
             last_err = None
+            primary_deadline = deadline - min(10.0, total_timeout / 2) if self.hermes_base_url and allow_fallback else deadline
             for cand_model in candidate_models:
+                remaining = primary_deadline - time.monotonic()
+                if remaining < 1.0:
+                    break
                 body = {
                     "model": cand_model,
                     "messages": payload_messages,
@@ -288,18 +326,19 @@ class LLMClient:
                     "max_tokens": max_tokens or min(self.max_tokens, 1024),
                     "stream": False,
                 }
+                if trace is not None:
+                    trace["attempts"].append(cand_model)
 
                 try:
-                    async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-                        resp = await client.post(endpoint, headers=headers, json=body)
+                    attempt_timeout = min(12.0, remaining) if allow_fallback else remaining
+                    async with httpx.AsyncClient(timeout=attempt_timeout) as client:
+                        resp = await asyncio.wait_for(client.post(endpoint, headers=headers, json=body), timeout=attempt_timeout)
                         if resp.status_code != 200:
-                            err_body = resp.text[:200]
                             logger.warning(
-                                "Model '%s' returned HTTP %d: %s. Cascading to next combo model...",
-                                cand_model, resp.status_code, err_body
+                                "Route '%s' returned HTTP %d",
+                                cand_model, resp.status_code
                             )
-                            last_err = RuntimeError(f"HTTP {resp.status_code} ({cand_model}): {err_body}")
-                            continue
+                            raise LLMResponseError(f"http_{resp.status_code}")
 
                         raw_text = resp.text.strip()
                         try:
@@ -315,23 +354,78 @@ class LLMClient:
                                 else:
                                     raise json_err
 
-                        choices = data.get("choices", [])
-                        if not choices:
-                            logger.warning("Model '%s' returned empty choices. Cascading...", cand_model)
-                            continue
-
-                        msg = choices[0].get("message", {})
-                        content = msg.get("content") or msg.get("reasoning") or choices[0].get("text") or ""
-                        if content and content.strip():
-                            logger.debug("Successfully executed task '%s' using model '%s'", task, cand_model)
-                            return content
+                        content = _completion_text(data)
+                        if trace is not None:
+                            trace.update(requested_model=cand_model, response_model=data.get("model"))
+                        logger.debug("Successfully executed task '%s' using model '%s'", task, cand_model)
+                        return content
                 except Exception as exc:
-                    logger.warning("Model '%s' failed (%s). Cascading to next combo model...", cand_model, exc)
+                    logger.warning("Route '%s' failed (%s)", cand_model, type(exc).__name__)
+                    if trace is not None:
+                        trace.setdefault("failures", []).append({
+                            "model": cand_model, "error_code": getattr(exc, "code", type(exc).__name__),
+                        })
                     last_err = exc
 
+            remaining = deadline - time.monotonic()
+            if self.hermes_base_url and allow_fallback and remaining >= 1.0:
+                try:
+                    if trace is not None:
+                        trace["attempts"].append("hermes:" + self.hermes_model)
+                    content = await self._chat_hermes(
+                        payload_messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=min(10.0, remaining),
+                    )
+                    if trace is not None:
+                        trace.update(requested_model="hermes:" + self.hermes_model, response_model=None)
+                    return content
+                except Exception as exc:
+                    logger.warning("Hermes Agent fallback failed (%s)", type(exc).__name__)
+                    last_err = exc
             if last_err:
                 raise last_err
-            raise RuntimeError("All models in combo pool failed to respond.")
+            raise RuntimeError("Configured AI route did not return a response.")
+
+    async def _chat_hermes(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        timeout: float,
+    ) -> str:
+        """Hermes Agent fallback, restricted to an analysis-only server profile."""
+        if not self.hermes_api_key:
+            raise RuntimeError("Hermes Agent requires its own API_SERVER_KEY")
+        headers = {"Content-Type": "application/json"}
+        if self.hermes_api_key:
+            headers["Authorization"] = f"Bearer {self.hermes_api_key}"
+        body = {
+            "model": self.hermes_model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens or min(self.max_tokens, 1024),
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # Hermes can run its own terminal/network tools. A prompt cannot
+            # constrain those side effects, so refuse a tool-enabled profile.
+            toolsets = await client.get(f"{self.hermes_base_url}/toolsets", headers=headers)
+            toolsets.raise_for_status()
+            capabilities = toolsets.json()
+            if not isinstance(capabilities, list) or any(
+                not isinstance(item, dict) or item.get("enabled", True)
+                for item in capabilities
+            ):
+                raise RuntimeError("Hermes profile must have all toolsets disabled for advisory analysis")
+            response = await client.post(
+                f"{self.hermes_base_url}/chat/completions", headers=headers, json=body
+            )
+            response.raise_for_status()
+            data = response.json()
+        return _completion_text(data)
 
     async def _chat_gemini_native(
         self,
@@ -363,16 +457,21 @@ class LLMClient:
         if system_prompt:
             body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(endpoint, json=body)
             if resp.status_code != 200:
-                raise RuntimeError(f"Gemini API Error [{resp.status_code}]: {resp.text[:300]}")
+                raise LLMResponseError(f"http_{resp.status_code}")
             data = resp.json()
             candidates = data.get("candidates", [])
             if not candidates:
                 raise RuntimeError("No candidates returned by Gemini")
+            if candidates[0].get("finishReason") not in {None, "STOP"}:
+                raise LLMResponseError("incomplete_completion")
             parts = candidates[0].get("content", {}).get("parts", [])
-            return "".join(p.get("text", "") for p in parts)
+            content = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+            if not content.strip():
+                raise LLMResponseError("missing_final_answer")
+            return content
 
     async def synthesize_parameter_payloads(
         self,
@@ -687,4 +786,3 @@ class LLMClient:
 
 
 llm_client = LLMClient()
-

@@ -14,8 +14,8 @@
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="vendor/jstree/jstree.min.css" />
-  <link rel="stylesheet" href="css/styles.css?v=10.18.0" />
-  <link rel="stylesheet" href="css/responsive.css?v=10.18.0" />
+  <link rel="stylesheet" href="css/styles.css?v=2026.09.03-ai1" />
+  <link rel="stylesheet" href="css/responsive.css?v=2026.09.03-ai1" />
 </head>
 
 <body>
@@ -265,7 +265,7 @@
           <span class="terminal-icon">⚡</span>
           <span>hunter-aja@engine:~# autonomous-recon</span>
         </div>
-        <span class="terminal-badge">LIVE STREAM</span>
+        <span class="terminal-badge">DEMO — BUKAN HASIL SCAN</span>
       </div>
 
       <div id="heroTerminalBody" class="terminal-body">
@@ -312,7 +312,7 @@
       <span class="trust-icon">🛡️</span>
       <div>
         <strong>Scope & Otorisasi Eksplisit</strong>
-        <p>Pengujian terisolasi dengan otorisasi otomatis dan kepatuhan penuh.</p>
+        <p>Otorisasi wajib dari pemilik/program. Periksa scope, teknik, dan batas pengujian sebelum scan.</p>
       </div>
     </div>
     <div class="trust-signal-item">
@@ -600,21 +600,33 @@
 
       </div>
 
-      <!-- Hidden default engagement settings for automated compliance & authorization -->
-      <div id="engagementHiddenDefaults" class="hidden" style="display:none;" aria-hidden="true">
-        <input id="engOrganization" maxlength="160" value="" />
-        <input id="engProgram" maxlength="160" value="" />
-        <input id="engAuthorization" maxlength="300" value="AUTHORIZED-SELF-AUDIT" />
-        <input id="engAssessor" maxlength="120" value="" />
-        <input id="engStartsAt" type="datetime-local" />
-        <input id="engEndsAt" type="datetime-local" />
-        <textarea id="engScopeHosts"></textarea>
-        <textarea id="engExcludedHosts"></textarea>
-        <input id="engAllowedPorts" value="80,443" maxlength="600" />
-        <input id="engMaxRps" type="number" value="15" />
-        <textarea id="engNotes"></textarea>
-        <input id="engAuthorizationAck" type="checkbox" checked />
-      </div>
+      <details class="engagement-panel" id="scanEngagementPanel" open>
+        <summary>🛡️ Scope & Izin Pengujian — Program / Private (wajib sebelum scan)</summary>
+        <p class="muted">Pilih platform atau Private untuk aset sendiri/engagement berizin tanpa program bounty. Referensi izin, scope, waktu, dan batas teknik tetap wajib. Salin policy ke catatan untuk ringkasan AI; teks atau hasil AI tidak memperluas izin.</p>
+        <div class="engagement-grid">
+          <label>Platform<select id="engPlatform"><option>HackerOne</option><option>Bugcrowd</option><option>Intigriti</option><option>Private</option><option>Other</option></select></label>
+          <label>Program / engagement<input id="engProgram" maxlength="160" placeholder="Nama program / audit private / lab sendiri" /></label>
+          <label>Program policy URL<input id="engProgramUrl" maxlength="500" placeholder="https://hackerone.com/program/policy_scopes" /></label>
+          <label>Authorization / policy reference<input id="engAuthorization" maxlength="300" placeholder="Policy URL / izin tertulis / referensi aset sendiri" /></label>
+          <label>Organization<input id="engOrganization" maxlength="160" /></label>
+          <label>Researcher / assessor<input id="engAssessor" maxlength="120" /></label>
+          <label>Mulai diizinkan<input id="engStartsAt" type="datetime-local" /></label>
+          <label>Berakhir<input id="engEndsAt" type="datetime-local" /></label>
+          <label>In-scope hosts<textarea id="engScopeHosts" placeholder="example.com&#10;*.example.com"></textarea></label>
+          <label>Out-of-scope hosts<textarea id="engExcludedHosts" placeholder="status.example.com"></textarea></label>
+          <label>Allowed ports<input id="engAllowedPorts" value="80,443" maxlength="600" /></label>
+          <label>Maximum requests/second<input id="engMaxRps" type="number" value="5" min="1" max="30" /></label>
+          <label>Allowed techniques<textarea id="engAllowedTechniques">safe_probe, validation, authentication_testing, artifact_analysis</textarea></label>
+          <label>Prohibited techniques<textarea id="engProhibitedTechniques">denial_of_service, social_engineering, credential_stuffing, data_exfiltration, persistence</textarea></label>
+          <label>Out-of-scope finding types<textarea id="engOutOfScopeFindings" placeholder="self_xss, missing_security_headers"></textarea></label>
+          <label>Program rules / notes (boleh bahasa Inggris)<textarea id="engNotes" maxlength="12000" placeholder="Paste the relevant HackerOne policy text here..."></textarea></label>
+          <button type="button" id="reviewProgramPolicyBtn" class="btn btn-secondary btn-sm">Analisis policy dengan AI (Bahasa Indonesia)</button>
+          <p class="text-xs text-muted">Teks dikirim ke provider AI yang dikonfigurasi. Pastikan policy boleh dibagikan; hapus informasi rahasia.</p>
+          <pre id="programPolicyReview" class="text-sm" style="white-space:pre-wrap;overflow-wrap:anywhere" aria-live="polite"></pre>
+        </div>
+        <label><input id="engSafeHarborAck" type="checkbox" /> Saya telah membaca ketentuan safe harbor program.</label>
+        <label><input id="engAuthorizationAck" type="checkbox" /> Saya mengonfirmasi target, waktu, teknik, dan rate limit di atas diizinkan oleh pemilik/program.</label>
+      </details>
 
       <div class="control-actions">
         <button id="startBtn" class="btn btn-primary btn-lg">
@@ -1751,522 +1763,6 @@
   </div>
 </div>
 
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl poc-modal-dialog">
-    <div class="modal-header flex-between">
-      <div class="dossier-header-left">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title font-mono">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()" title="Tutup Modal (ESC)">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl poc-modal-dialog">
-    <div class="modal-header flex-between">
-      <div class="dossier-header-left">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title font-mono">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()" title="Tutup Modal (ESC)">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl poc-modal-dialog">
-    <div class="modal-header flex-between">
-      <div class="dossier-header-left">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title font-mono">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()" title="Tutup Modal (ESC)">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Structured Tabular Preview for Artifacts (§19, §20) -->
-<div id="wsArtifactModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-header">
-      <h3 id="wsArtModalTitle">👁️ Pratinjau Struktur Data Tersanitasi</h3>
-      <button class="btn-close" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="artifact-meta-bar mb-3">
-        <span id="wsArtModalClassBadge" class="pill pill-danger">CONFIDENTIAL</span>
-        <span id="wsArtModalCategory" class="pill pill-neutral">database</span>
-        <span id="wsArtModalRecordCount" class="text-xs text-muted">Records: 0</span>
-      </div>
-        <div id="wsArtModalContent" class="artifact-preview-body">
-          Memuat pratinjau...
-        </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wsArtifactModal').classList.add('hidden')">Tutup</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Comprehensive Bug Hunting Proof of Concept (PoC) Dossier Modal -->
-<div id="wsFindingPocModal" class="modal-backdrop hidden">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-header flex-between">
-      <div class="flex-row-gap align-center flex-wrap">
-        <span id="wsPocModalSevBadge" class="severity-badge severity-critical">CRITICAL</span>
-        <h3 id="wsPocModalTitle" class="ws-modal-title">Bug Hunting Proof of Concept (PoC)</h3>
-      </div>
-      <button class="btn-close" onclick="closeFindingPocModal()">✕</button>
-    </div>
-    <div class="modal-body" id="wsPocModalBody">
-      <!-- Dynamic PoC Dossier Content -->
-    </div>
-    <div class="modal-footer flex-between">
-      <span class="text-xs text-muted font-mono">Bukti tersimpan & panduan reproduksi — perlu tinjauan</span>
-      <button class="btn btn-primary btn-sm" onclick="closeFindingPocModal()">Tutup Dossier</button>
-    </div>
-  </div>
-</div>
-
       <!-- VIEW 5: DIFFERENTIAL SCAN -->
       <!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
 <!-- VIEW 5: DIFFERENTIAL SCAN (DIFF) ANALYZER -->
@@ -2836,7 +2332,10 @@
             <div class="ai-form-group">
               <label for="aiProvider">API Provider Type</label>
               <select id="aiProvider" class="ai-select-field">
-                <option value="openai_compatible">NineRouter / OpenAI Compatible</option>
+                <option value="ninerouter">NineRouter</option>
+                <option value="openai_compatible">OpenAI Compatible / Custom</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="groq">Groq</option>
                 <option value="openai">Direct OpenAI</option>
                 <option value="gemini">Google Gemini</option>
               </select>
@@ -2853,15 +2352,33 @@
             </div>
 
             <div class="ai-form-group">
-              <label for="aiModel">Active Model (Fallback Cascade Enabled)</label>
+              <label for="aiRoutingMode">Mode routing</label>
+              <select id="aiRoutingMode" class="ai-select-field">
+                <option value="single">Model tunggal — ID persis</option>
+                <option value="router_combo">Combo NineRouter — nama persis</option>
+                <option value="task_router">Routing per tugas — fallback aplikasi</option>
+              </select>
+              <p id="aiRoutingHelp" class="token-label"></p>
+            </div>
+            <div class="ai-form-group">
+              <label for="aiModel">ID model / nama combo</label>
               <select id="aiModel" class="ai-select-field" disabled>
                 <option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>
               </select>
             </div>
 
+            <div class="ai-form-group">
+              <label for="aiModelManual">ID manual (opsional, mengganti pilihan katalog)</label>
+              <input id="aiModelManual" class="ai-input-field" placeholder="ID persis dari provider">
+              <p id="aiModelCatalogStatus" class="token-label">Katalog belum dimuat.</p>
+              <button id="loadAiModelsBtn" class="btn btn-secondary">Muat katalog</button>
+              <button id="reloadAiConfigBtn" class="btn btn-secondary">Muat ulang backend (buang draft)</button>
+              <p id="aiConfigSyncStatus" role="status" class="token-label"></p>
+              <p id="aiTestDetails" role="status" class="token-label"></p>
+            </div>
             <div class="ai-form-group" style="margin-top: 15px; display: flex; gap: 8px;">
               <button id="saveAiSettingsBtn" class="btn btn-primary" style="flex: 1;">💾 Save & Apply</button>
-              <button id="testAiConnectionBtn" class="btn btn-secondary">🔌 Connect & Load Models</button>
+              <button id="testAiConnectionBtn" class="btn btn-secondary">Uji inference</button>
             </div>
           </div>
         </div>
@@ -2877,7 +2394,7 @@
             <div id="aiChatLogs" class="ai-chat-logs">
               <div class="chat-msg-bubble system">
                 <div class="chat-msg-text">
-                  System: AI Copilot initialized. Ask anything about vulnerabilities, payloads, or target scopes. Change configurations on the left to swap models instantly.
+                  Chat memakai konfigurasi backend. Terapkan draft dengan Save &amp; Apply terlebih dahulu. Uji inference tidak menyimpan pengaturan.
                 </div>
               </div>
             </div>
@@ -3529,27 +3046,27 @@
   <script src="vendor/jstree/jstree.min.js"></script>
 
   <!-- Modular Frontend Architecture -->
-  <script src="js/state.js?v=9.9.0"></script>
-  <script src="js/auth.js?v=9.9.0"></script>
-  <script src="js/navigation.js?v=9.9.0"></script>
-  <script src="js/stream.js?v=9.9.0"></script>
-  <script src="js/scan.js?v=9.9.0"></script>
-  <script src="js/tree.js?v=9.9.0"></script>
-  <script src="js/findings.js?v=9.9.0"></script>
-  <script src="js/modals.js?v=9.9.0"></script>
-  <script src="js/artifacts.js?v=9.9.0"></script>
-  <script src="js/history.js?v=9.9.0"></script>
-  <script src="js/reports.js?v=9.9.0"></script>
-  <script src="js/admin.js?v=9.9.0"></script>
-  <script src="js/search.js?v=9.9.0"></script>
-  <script src="js/mitre.js?v=9.9.0"></script>
-  <script src="js/v4_engine_ui.js?v=9.9.0"></script>
-  <script src="js/engagement.js?v=9.9.0"></script>
-  <script src="js/app.js?v=9.9.0"></script>
-  <script src="js/responsive.js?v=9.9.0"></script>
-  <script src="js/notifications_settings.js?v=9.9.0"></script>
-  <script src="js/graph.js?v=9.9.0"></script>
-  <script src="js/copilot.js?v=9.9.0"></script>
+  <script src="js/state.js?v=2026.09.03-ai1"></script>
+  <script src="js/auth.js?v=2026.09.03-ai1"></script>
+  <script src="js/navigation.js?v=2026.09.03-ai1"></script>
+  <script src="js/stream.js?v=2026.09.03-ai1"></script>
+  <script src="js/scan.js?v=2026.09.03-ai1"></script>
+  <script src="js/tree.js?v=2026.09.03-ai1"></script>
+  <script src="js/findings.js?v=2026.09.03-ai1"></script>
+  <script src="js/modals.js?v=2026.09.03-ai1"></script>
+  <script src="js/artifacts.js?v=2026.09.03-ai1"></script>
+  <script src="js/history.js?v=2026.09.03-ai1"></script>
+  <script src="js/reports.js?v=2026.09.03-ai1"></script>
+  <script src="js/admin.js?v=2026.09.03-ai1"></script>
+  <script src="js/search.js?v=2026.09.03-ai1"></script>
+  <script src="js/mitre.js?v=2026.09.03-ai1"></script>
+  <script src="js/v4_engine_ui.js?v=2026.09.03-ai1"></script>
+  <script src="js/engagement.js?v=2026.09.03-ai1"></script>
+  <script src="js/app.js?v=2026.09.03-ai1"></script>
+  <script src="js/responsive.js?v=2026.09.03-ai1"></script>
+  <script src="js/notifications_settings.js?v=2026.09.03-ai1"></script>
+  <script src="js/graph.js?v=2026.09.03-ai1"></script>
+  <script src="js/copilot.js?v=2026.09.03-ai1"></script>
 </body>
 
 </html>

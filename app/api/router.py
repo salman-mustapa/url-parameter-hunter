@@ -143,6 +143,8 @@ from app.services.scan_manager import scan_manager
 
 
 router = APIRouter(prefix="/api", tags=["api"], dependencies=[Depends(enforce_api_access)])
+from app.api.policy_review import review_program_policy
+router.add_api_route("/ai/policy-review", review_program_policy, methods=["POST"])
 
 
 
@@ -216,163 +218,24 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 # ==========================================================================
 
-class AIConfigRequest(BaseModel):
-
-    provider: Optional[str] = "openai_compatible"  # "openai_compatible", "openrouter", "nine_router", "openai", "gemini", "groq", "custom", "heuristic", "auto"
-
-    api_key: Optional[str] = None
-
-    model: Optional[str] = None
-
-    base_url: Optional[str] = None
-
-    enabled: Optional[bool] = None
-
-    llm_enabled: Optional[bool] = None
-
-
-
+from app.ai.configuration import (
+    AIConfigRequest, apply_runtime_config, public_config, catalog_response, test_candidate,
+)
 
 
 @router.get("/ai/config")
-
 async def get_ai_config(_admin: User = Depends(require_admin_role)):
-
-    """Get active AI provider configuration, model info, and status across all subsystems."""
-
-    from app.core.config import settings
-
-    from app.intelligence.llm_client import llm_client
-
-    from app.ai.gateway import ai_gateway
-
-
-
-    api_key = settings.llm_api_key or llm_client.api_key or os.getenv("LLM_API_KEY", "")
-
-    key_configured = bool(api_key and len(api_key) > 4)
-
-    key_masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("***" if key_configured else "")
-
-
-
-    return {
-
-        "status": "success",
-
-        "llm_enabled": settings.llm_enabled,
-
-        "enabled": settings.llm_enabled,
-
-        "provider": settings.llm_provider,
-
-        "base_url": settings.llm_base_url or llm_client.base_url,
-
-        "model": settings.llm_model or llm_client.model,
-
-        "api_key_configured": key_configured,
-
-        "api_key_masked": key_masked,
-
-        "is_configured": llm_client.is_configured,
-
-        "active_provider": type(ai_gateway._provider).__name__,
-
-    }
-
-
-
+    return public_config()
 
 
 @router.post("/ai/config")
-
 async def update_ai_config(body: AIConfigRequest, _admin: User = Depends(require_admin_role)):
-
-    """Update active AI provider configuration dynamically at runtime across all subsystems."""
-
-    from app.core.config import settings
-
-    from app.intelligence.llm_client import llm_client
-
-    from app.ai.gateway import ai_gateway
-
-
-
-    is_enabled = body.llm_enabled if body.llm_enabled is not None else (body.enabled if body.enabled is not None else True)
-
-    settings.llm_enabled = is_enabled
-
-
-
-    if body.provider:
-
-        settings.llm_provider = body.provider
-
-    if body.base_url:
-
-        clean_url = body.base_url.rstrip("/")
-
-        settings.llm_base_url = clean_url
-
-        llm_client.base_url = clean_url
-
-    if body.api_key and body.api_key.strip():
-
-        clean_key = body.api_key.strip()
-
-        settings.llm_api_key = clean_key
-
-        llm_client.api_key = clean_key
-
-    if body.model:
-
-        settings.llm_model = body.model
-
-        llm_client.model = body.model
-
-
-
-    ai_gateway.apply_config({
-
-        "provider": settings.llm_provider,
-
-        "base_url": settings.llm_base_url,
-
-        "api_key": settings.llm_api_key or llm_client.api_key,
-
-        "model": settings.llm_model,
-
-        "enabled": settings.llm_enabled,
-
-    })
-
-
-
-    return {
-
-        "status": "success",
-
-        "message": "Konfigurasi AI berhasil disimpan.",
-
-        "config": {
-
-            "llm_enabled": settings.llm_enabled,
-
-            "enabled": settings.llm_enabled,
-
-            "provider": settings.llm_provider,
-
-            "base_url": settings.llm_base_url,
-
-            "model": settings.llm_model,
-
-            "api_key_configured": bool(llm_client.api_key),
-
-            "is_configured": llm_client.is_configured,
-
-        }
-
-    }
+    try:
+        return {"status": "success", "config": apply_runtime_config(body)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 
@@ -384,13 +247,7 @@ async def test_ai_gateway_connection(body: AIConfigRequest, _admin: User = Depen
 
     """Test connection and measure response latency against candidate AI provider."""
 
-    from app.ai.gateway import ai_gateway
-
-    cfg = body.model_dump(exclude_unset=True)
-
-    result = await ai_gateway.test_config(cfg)
-
-    return result
+    return await test_ai_connection(body, _admin)
 
 
 
@@ -742,11 +599,11 @@ class CreateScanRequest(BaseModel):
 
     target: Optional[str] = None
 
-    profile: Optional[str] = "adversary_simulation"
+    profile: Optional[str] = "deep_bug_hunt"
 
     include_subdomains: Optional[bool] = True
 
-    validation_level: Optional[str] = "L4_HIGH_RISK"
+    validation_level: Optional[str] = "L2_SAFE_ACTIVE"
 
     allowed_modules: Optional[List[str]] = None
 
@@ -816,9 +673,9 @@ async def create_scan(
 
 
 
-    final_level = (body.validation_level if body else None) or validation_level or "L4_HIGH_RISK"
+    final_level = (body.validation_level if body else None) or validation_level or "L2_SAFE_ACTIVE"
 
-    reference = (body.engagement.authorization_reference if body and body.engagement else None) or (body.authorization_reference if body else None) or f"AUTHORIZED-L4-{final_target.strip()[:30]}-AUDIT"
+    reference = (body.engagement.authorization_reference if body and body.engagement else None) or (body.authorization_reference if body else None)
 
 
 
@@ -828,7 +685,7 @@ async def create_scan(
 
             target=final_target.strip(),
 
-            profile=(body.profile if body else None) or profile or "adversary_simulation",
+            profile=(body.profile if body else None) or profile or "deep_bug_hunt",
 
             include_subdomains=final_subs,
 
@@ -1089,12 +946,8 @@ async def get_scan(
     techs_cnt = (await db.execute(select(func.count()).select_from(Technology).where(Technology.asset_id.in_(asset_ids)))).scalar() or 0
     findings_cnt = (await db.execute(select(func.count()).select_from(Finding).where(Finding.scan_id == scan.id))).scalar() or 0
 
-    prog["assets"] = max(int(prog.get("assets", 0) or 0), assets_cnt)
-    prog["ports"] = max(int(prog.get("ports", 0) or 0), ports_cnt)
-    prog["urls"] = max(int(prog.get("urls", 0) or 0), urls_cnt)
-    prog["parameters"] = max(int(prog.get("parameters", 0) or 0), params_cnt)
-    prog["technologies"] = max(int(prog.get("technologies", 0) or 0), techs_cnt)
-    prog["findings"] = max(int(prog.get("findings", 0) or 0), findings_cnt)
+    prog.update(assets=assets_cnt, ports=ports_cnt, urls=urls_cnt,
+                parameters=params_cnt, technologies=techs_cnt, findings=findings_cnt)
 
 
 
@@ -1142,7 +995,10 @@ async def get_scan(
 
 async def pause_scan(scan_id: str):
 
-    await scan_manager.pause(scan_id)
+    try:
+        await scan_manager.pause(scan_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
     return {"scan_id": scan_id, "action": "pause", "status": "paused"}
 
@@ -1154,7 +1010,10 @@ async def pause_scan(scan_id: str):
 
 async def resume_scan(scan_id: str):
 
-    await scan_manager.resume(scan_id)
+    try:
+        await scan_manager.resume(scan_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
     return {"scan_id": scan_id, "action": "resume", "status": "resumed"}
 
@@ -1181,113 +1040,79 @@ async def stop_scan(scan_id: str):
 async def scan_events(scan_id: str, request: Request):
 
     async def gen():
-
         queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, settings.sse_client_queue_size))
+        overflow = False
+        seen: set[str] = set()
 
+        def encode(payload: dict) -> str:
+            event_id = str(payload.get("event_id") or "")
+            return (f"id: {event_id}\n" if event_id else "") + f"data: {json.dumps(payload, default=str)}\n\n"
 
-
-        async def enqueue(payload: dict) -> None:
-
-            item = json.dumps(payload, default=str)
-
+        async def handler(event: dict):
+            nonlocal overflow
+            if event.get("scan_id") != scan_id:
+                return
             if queue.full():
+                queue.get_nowait()
+                overflow = True
+            queue.put_nowait(event)
 
-                try:
-
-                    queue.get_nowait()
-
-                except asyncio.QueueEmpty:
-
-                    pass
-
-            await queue.put(item)
-
-
-
-        async with AsyncSessionLocal() as db:
-
-            rows = (await db.execute(
-
-                select(ScanEvent)
-
-                .where(ScanEvent.scan_id == scan_id)
-
-                .order_by(ScanEvent.created_at.desc())
-
-                .limit(settings.sse_replay_limit)
-
-            )).scalars().all()
-
-            for ev in reversed(rows):
-
-                await enqueue({
-
-                    "scan_id": scan_id,
-
-                    "event_type": ev.event_type,
-
-                    "type": ev.event_type,
-
-                    "category": ev.event_type.split(".")[0].upper() if "." in ev.event_type else ev.event_type.upper(),
-
-                    "severity": ev.severity,
-
-                    "message": ev.message,
-
-                    "data": ev.data or {},
-
-                    "created_at": ev.created_at.isoformat() if ev.created_at else None,
-
-                })
-
-
-
-        async def handler(ev: dict):
-
-            if ev.get("scan_id") == scan_id:
-
-                await enqueue(ev)
-
-
-
+        # Subscribe BEFORE reading the DB; events arriving during replay are
+        # buffered and deduplicated using the same persisted event ID.
         event_bus.subscribe("*", handler)
-
         try:
-
-            while True:
-
-                if await request.is_disconnected():
-
-                    break
-
+            async with AsyncSessionLocal() as db:
+                rows = (await db.execute(
+                    select(ScanEvent).where(ScanEvent.scan_id == scan_id)
+                    .order_by(ScanEvent.created_at.desc(), ScanEvent.id.desc())
+                    .limit(settings.sse_replay_limit)
+                )).scalars().all()
+            replay = [{
+                "event_id": ev.id, "scan_id": scan_id, "event_type": ev.event_type,
+                "type": ev.event_type, "category": ev.event_type.split(".")[0].upper(),
+                "severity": ev.severity, "message": ev.message, "data": ev.data or {},
+                "created_at": ev.created_at.isoformat() if ev.created_at else None,
+            } for ev in reversed(rows)]
+            # Include events not yet committed by the background event writer.
+            replay_ids = {event["event_id"] for event in replay}
+            replay.extend(event for event in event_bus.get_recent(scan_id, settings.sse_replay_limit)
+                          if event.get("event_id") not in replay_ids)
+            last_id = request.headers.get("last-event-id")
+            if last_id:
+                cursor = next((i for i, event in enumerate(replay) if event.get("event_id") == last_id), None)
+                if cursor is not None:
+                    replay = replay[cursor + 1:]
+                else:
+                    yield encode({"scan_id": scan_id, "event_type": "stream.gap",
+                                  "message": "Replay cursor expired; refresh persisted scan state."})
+            # Yield directly: loading 500 replay items into a 256-slot live
+            # queue previously discarded older items before sending anything.
+            for event in replay:
+                event_id = event.get("event_id")
+                if event_id in seen:
+                    continue
+                if event_id:
+                    seen.add(event_id)
+                yield encode(event)
+            while not await request.is_disconnected():
+                if overflow:
+                    overflow = False
+                    yield encode({"scan_id": scan_id, "event_type": "stream.gap",
+                                  "message": "Live event buffer overflow; refresh persisted scan state."})
                 try:
-
-                    item = await asyncio.wait_for(queue.get(), timeout=settings.sse_keepalive_seconds)
-
-                    try:
-
-                        decoded = json.loads(item)
-
-                        event_id = decoded.get("event_id") or decoded.get("created_at") or decoded.get("timestamp")
-
-                    except Exception:
-
-                        event_id = None
-
+                    event = await asyncio.wait_for(queue.get(), timeout=settings.sse_keepalive_seconds)
+                    event_id = event.get("event_id")
+                    if event_id in seen:
+                        continue
                     if event_id:
-                        yield f"id: {event_id}\n"
-                    yield f"data: {item}\n\n"
+                        seen.add(event_id)
+                    if len(seen) > 2000:
+                        seen = {event_id} if event_id else set()
+                    yield encode(event)
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
-        except asyncio.CancelledError:
-
-            pass
-
         finally:
-
             event_bus.unsubscribe(handler)
-
-
 
     headers = {
 
@@ -4956,7 +4781,10 @@ async def get_finding_reproduction_md(finding_id: str, db: AsyncSession = Depend
 
     asset = await db.get(Asset, finding.asset_id) if finding.asset_id else None
 
-    finding_dict = serialize_finding(finding, asset.hostname if asset else "")
+    scan = await db.get(Scan, finding.scan_id)
+    target_host = asset.hostname if asset else (scan.root_domain if scan else "Not recorded")
+    finding_dict = serialize_finding(finding, target_host)
+    finding_dict["report_context"] = report_context(scan) if scan else {}
 
 
 
@@ -4994,7 +4822,10 @@ async def get_finding_bugbounty_report(finding_id: str, db: AsyncSession = Depen
 
 
 
+    scan = await db.get(Scan, finding.scan_id)
+    target_host = asset.hostname if asset else (scan.root_domain if scan else "Not recorded")
     finding_dict = serialize_finding(finding, target_host)
+    finding_dict["report_context"] = report_context(scan) if scan else {}
 
 
 
@@ -5032,7 +4863,10 @@ async def get_finding_cve_ready_report(finding_id: str, db: AsyncSession = Depen
 
 
 
+    scan = await db.get(Scan, finding.scan_id)
+    target_host = asset.hostname if asset else (scan.root_domain if scan else "Not recorded")
     finding_dict = serialize_finding(finding, target_host)
+    finding_dict["report_context"] = report_context(scan) if scan else {}
 
 
 
@@ -7172,43 +7006,10 @@ class AIChatRequest(BaseModel):
 
 
 
-class AISettingsRequest(BaseModel):
-
-    enabled: Optional[bool] = None
-
-    provider: Optional[str] = None
-
-    base_url: Optional[str] = None
-
-    api_key: Optional[str] = None
-
-    model: Optional[str] = None
-
-    temperature: Optional[float] = None
-
-
-
-
-
-class AIModelsRequest(BaseModel):
-
-    provider: Optional[str] = None
-
-    base_url: Optional[str] = None
-
-    api_key: Optional[str] = None
-
-
-
-
-
-class AITestRequest(BaseModel):
-
-    provider: Optional[str] = None
-
-    base_url: Optional[str] = None
-
-    api_key: Optional[str] = None
+# Legacy endpoint request names retain the same validated configuration contract.
+AISettingsRequest = AIConfigRequest
+AIModelsRequest = AIConfigRequest
+AITestRequest = AIConfigRequest
 
 
 
@@ -7243,176 +7044,24 @@ async def get_ai_status():
 
 
 @router.post("/ai/test")
-
-async def test_ai_connection(body: Optional[AITestRequest] = None):
-
-    """Tests connection to the configured or candidate AI provider and lists models."""
-
-    from app.intelligence.llm_client import llm_client
-
-    from app.core.config import settings
-
-
-
-    provider = body.provider if body and body.provider is not None else settings.llm_provider
-
-    base_url = (body.base_url if body and body.base_url is not None else "") or llm_client.base_url or settings.llm_base_url
-
-    api_key = (body.api_key if body and body.api_key is not None else "") or llm_client.api_key or settings.llm_api_key
-
-
-
-    # Fetch models to verify connection and key validity
-
-    models = await llm_client.list_models(
-
-        provider=provider,
-
-        base_url=base_url,
-
-        api_key=api_key
-
-    )
-
-
-
-    if models:
-
-        return {
-
-            "status": "success",
-
-            "message": f"Koneksi AI Berhasil! Ditemukan {len(models)} model.",
-
-            "models": models
-
-        }
-
-    else:
-
-        # If model listing endpoint is not supported by custom provider, perform chat ping
-
-        fallback_models = ["combo", "developer", "ag/gemini-3.7-flash-medium", "gemini/gemini-3.5-flash-lite", "fast", "ag/claude-sonnet-4-6"]
-
-        if api_key and len(api_key) > 4:
-
-            return {
-
-                "status": "success",
-
-                "message": "Koneksi AI Terhubung & Kredensial Valid!",
-
-                "models": fallback_models
-
-            }
-
-        return {
-
-            "status": "error",
-
-            "message": "Koneksi gagal: Tidak dapat menghubungi API provider. Silakan periksa kembali API Key dan Base URL Anda.",
-
-            "models": fallback_models
-
-        }
-
-
-
+async def test_ai_connection(body: Optional[AITestRequest] = None, _admin: User = Depends(require_admin_role)):
+    try:
+        return await test_candidate(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/ai/models")
-
-async def get_ai_models():
-
-    """Fetch available models from the currently configured AI provider."""
-
-    from app.core.config import settings
-
-    from app.intelligence.llm_client import llm_client
-
-    models = await llm_client.list_models()
-
-    if not models:
-
-        prov = settings.llm_provider
-
-        if prov in ("openai_compatible", "openrouter", "nine_router"):
-
-            models = ["combo", "developer", "ag/gemini-3.7-flash-medium", "gemini/gemini-3.5-flash-lite", "fast", "ag/claude-sonnet-4-6"]
-
-        elif prov == "openai":
-
-            models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
-
-        elif prov == "gemini":
-
-            models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-
-        else:
-
-            models = ["combo", "developer", "ag/gemini-3.7-flash-medium", "gemini/gemini-3.5-flash-lite", "fast"]
-
-    return {"models": models}
-
-
-
+async def get_ai_models(_admin: User = Depends(require_admin_role)):
+    return await catalog_response()
 
 
 @router.post("/ai/models")
-
-async def list_ai_models(body: Optional[AIModelsRequest] = None):
-
-    """Fetch available models from the current or candidate AI provider."""
-
-    from app.core.config import settings
-
-    from app.intelligence.llm_client import llm_client
-
-    
-
-    provider = body.provider if body and body.provider is not None else None
-
-    base_url = body.base_url if body and body.base_url is not None else None
-
-    api_key = body.api_key if body and body.api_key is not None else None
-
-
-
-    models = await llm_client.list_models(
-
-        provider=provider,
-
-        base_url=base_url,
-
-        api_key=api_key
-
-    )
-
-    
-
-    if not models:
-
-        prov = provider or settings.llm_provider
-
-        if prov in ("openai_compatible", "openrouter", "nine_router"):
-
-            models = ["combo", "developer", "ag/gemini-3.7-flash-medium", "gemini/gemini-3.5-flash-lite", "fast", "ag/claude-sonnet-4-6"]
-
-        elif prov == "openai":
-
-            models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
-
-        elif prov == "gemini":
-
-            models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-
-        else:
-
-            models = ["combo", "developer", "ag/gemini-3.7-flash-medium", "gemini/gemini-3.5-flash-lite", "fast"]
-
-
-
-    return {"models": models}
+async def list_ai_models(body: Optional[AIModelsRequest] = None, _admin: User = Depends(require_admin_role)):
+    try:
+        return await catalog_response(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 
@@ -7430,7 +7079,7 @@ async def ai_chat_handler(body: AIChatRequest):
 
 
 
-    if not llm_client.is_configured and not (settings.llm_api_key and len(settings.llm_api_key) > 4):
+    if not settings.llm_enabled or not llm_client.is_configured:
 
         raise HTTPException(
 
@@ -7442,6 +7091,7 @@ async def ai_chat_handler(body: AIChatRequest):
 
     try:
 
+        routing = {}
         reply = await llm_client.chat(
 
             messages=body.messages,
@@ -7452,11 +7102,12 @@ async def ai_chat_handler(body: AIChatRequest):
 
             max_tokens=body.max_tokens,
 
-            model=body.model or llm_client.model or settings.llm_model,
+            model=body.model,
+            _trace=routing,
 
         )
 
-        return {"reply": reply, "model": body.model or llm_client.model or settings.llm_model}
+        return {"reply": reply, "model": routing.get("requested_model"), "routing": routing}
 
     except Exception as exc:
 
@@ -7469,84 +7120,8 @@ async def ai_chat_handler(body: AIChatRequest):
 
 
 @router.post("/ai/settings")
-
-async def update_ai_settings(body: AISettingsRequest):
-
-    """Updates AI Provider, API Key, Base URL, and Model on the fly."""
-
-    from app.core.config import settings
-
-    from app.intelligence.llm_client import llm_client
-
-    from app.ai.gateway import ai_gateway
-
-
-
-    if body.enabled is not None:
-
-        settings.llm_enabled = body.enabled
-
-    if body.provider is not None:
-
-        settings.llm_provider = body.provider
-
-    if body.base_url is not None:
-
-        settings.llm_base_url = body.base_url
-
-        llm_client.base_url = body.base_url.rstrip("/")
-
-    if body.api_key is not None:
-
-        settings.llm_api_key = body.api_key
-
-        llm_client.api_key = body.api_key
-
-    if body.model is not None:
-
-        settings.llm_model = body.model
-
-        llm_client.model = body.model
-
-    if body.temperature is not None:
-
-        settings.llm_temperature = body.temperature
-
-        llm_client.temperature = body.temperature
-
-
-
-    ai_gateway.apply_config({
-
-        "provider": settings.llm_provider,
-
-        "base_url": settings.llm_base_url,
-
-        "api_key": settings.llm_api_key or llm_client.api_key,
-
-        "model": settings.llm_model,
-
-        "enabled": settings.llm_enabled,
-
-    })
-
-
-
-    return {
-
-        "status": "updated",
-
-        "enabled": settings.llm_enabled,
-
-        "provider": settings.llm_provider,
-
-        "base_url": settings.llm_base_url,
-
-        "model": settings.llm_model,
-
-        "is_configured": llm_client.is_configured,
-
-    }
+async def update_ai_settings(body: AISettingsRequest, _admin: User = Depends(require_admin_role)):
+    return await update_ai_config(body, _admin)
 
 
 
@@ -8418,8 +7993,7 @@ class CopilotChatRequest(BaseModel):
     history: Optional[List[Dict[str, str]]] = None
 
 
-@router.post("/ai/copilot/chat")
-async def copilot_chat_endpoint(
+async def _legacy_copilot_chat_endpoint(
     req: CopilotChatRequest,
     db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_optional_user),
@@ -8593,7 +8167,12 @@ async def get_scan_state_machine(scan_id: str, db: AsyncSession = Depends(get_db
 
 # Out-of-band Callback receiver endpoint
 
-@router.api_route("/oob/{correlation_id}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
+@router.get("/oob/{correlation_id}", operation_id="oob_callback_get")
+@router.post("/oob/{correlation_id}", operation_id="oob_callback_post")
+@router.put("/oob/{correlation_id}", operation_id="oob_callback_put")
+@router.delete("/oob/{correlation_id}", operation_id="oob_callback_delete")
+@router.options("/oob/{correlation_id}", operation_id="oob_callback_options")
+@router.patch("/oob/{correlation_id}", operation_id="oob_callback_patch")
 
 async def oob_callback(correlation_id: str, request: Request):
 
@@ -8640,6 +8219,12 @@ async def oob_callback(correlation_id: str, request: Request):
     
 
     return {"status": "logged", "correlation_id": correlation_id}
+
+
+@router.head("/oob/{correlation_id}", include_in_schema=False)
+async def oob_callback_head(correlation_id: str, request: Request):
+    """Accept HEAD callbacks without creating a duplicate OpenAPI operation ID."""
+    return await oob_callback(correlation_id, request)
 
 
 
@@ -8794,18 +8379,23 @@ async def export_scan_openapi_json(
     )
 
 
-class CopilotChatRequest(BaseModel):
-    message: str
-    scan_id: Optional[str] = None
-    history: Optional[List[Dict[str, str]]] = None
-
-
 @router.post("/ai/copilot/chat")
 async def copilot_chat_endpoint(
     payload: CopilotChatRequest,
+    db: AsyncSession = Depends(get_db),
     user: Optional[User] = Depends(get_optional_user),
 ):
     """Interactive Pentest AI Copilot assistant."""
+    if not payload.message.strip():
+        raise HTTPException(status_code=400, detail="Pesan tidak boleh kosong.")
+    if payload.scan_id:
+        scan = await db.get(Scan, payload.scan_id)
+        if not scan:
+            raise HTTPException(status_code=404, detail="Scan tidak ditemukan.")
+        if user is None:
+            raise HTTPException(status_code=401, detail="Login diperlukan untuk memakai konteks scan.")
+        if user.role != "admin" and scan.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Anda tidak memiliki akses ke scan ini.")
     from app.ai.copilot import pentest_copilot
     res = await pentest_copilot.chat(
         message=payload.message,

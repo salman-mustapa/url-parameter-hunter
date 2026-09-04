@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.tools.dirsearch_adapter import DirsearchAdapter
 from app.adapters.tools.katana_adapter import KatanaAdapter
 from app.core.config import settings
+from app.core.profiles import is_passive_profile, supports_active_validation
 from app.core.db import AsyncSessionLocal
 from app.core.resource_guard import resource_guard
 from app.core.sanitizer import sanitize_text
@@ -611,7 +612,11 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
         select(URL).where(URL.asset_id == asset.id)
     )).scalars().all()
     if existing_urls:
-        base_urls = list({u.url for u in existing_urls})
+        requested_url = str(ctx.options.get("target_url") or "").rstrip("/")
+        base_urls = sorted(
+            {u.url for u in existing_urls},
+            key=lambda url: (0 if url.rstrip("/") == requested_url else 1, len(url), url),
+        )
 
     # 1. Fast Liveness Check — avoid wasting budgets on dead/unresponsive hosts
     is_live = False
@@ -629,7 +634,8 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
     is_soft_404 = soft_404_baseline.get("is_soft_404", False)
 
     seen_urls: Set[str] = {u.rstrip("/") for u in base_urls}
-    to_probe_queue: List[str] = []
+    # Crawl the operator's exact URL and live roots before opportunistic seeds.
+    to_probe_queue: List[str] = list(base_urls)
 
     # 2. Add Passive URL Discoveries
     passive_urls = await _harvest_passive_urls(root_domain, host)
@@ -706,7 +712,8 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
         # 5. Execute Dirsearch Tool Adapter selectively on primary/high-value targets (V10)
         # Avoid exhausting scan runtime budgets on dozens of secondary/leaf subdomains
         is_high_value_host = (
-            host == root_domain
+            host == str(ctx.options.get("target_host") or root_domain)
+            or host == root_domain
             or host == f"www.{root_domain}"
             or any(kw in host.lower() for kw in ["siakad", "portal", "admin", "api", "app", "login", "webmail", "elearning", "moodle", "kuesioner", "auth"])
             or (asset.depth == 0)
@@ -765,6 +772,8 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
 
     # Limit maximum URLs per host according to scan budget
     cap = min(len(to_probe_queue), settings.max_urls_per_scan // max(1, settings.max_web_hosts))
+    if cap < len(to_probe_queue):
+        ctx.record_coverage_gap("web_discovery", f"{host}: URL budget selected {cap}/{len(to_probe_queue)} seeds")
     probed_batch = to_probe_queue[:cap]
 
     resource_guard.reclaim_memory()
@@ -895,11 +904,9 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
                             severity="info",
                         )
 
-                # Real-Time Continuous In-Flight Vulnerability Escalation (§19-§22)
-                # As soon as parameters or API query routes are found, test SQLi/XSS live in background
-                if status == 200 and not is_waf and ctx.profile in ("standard", "deep", "custom") and found_params:
-                    param_list = [{"name": p[0], "location": p[1]} for p in set(found_params)]
-                    asyncio.create_task(_in_flight_fuzz_url(ctx, host, asset.id, clean_target_url, param_list))
+                # Parameters are validated by the scan-owned validation phase
+                # after commit. Detached duplicate fuzzers previously survived
+                # cancellation/completion and competed for the same resources.
 
                 # Dynamic Login Form Discovery — tag URLs containing auth forms
                 if resp.text and status == 200 and not is_waf and not is_suspended:
@@ -991,10 +998,23 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
                         return 2
 
                     new_links_to_crawl.sort(key=_crawl_priority)
-                    sub_tasks = [probe_endpoint(nl, depth=depth + 1) for nl in new_links_to_crawl[:25]]
-                    await asyncio.gather(*sub_tasks, return_exceptions=True)
+                    if len(new_links_to_crawl) > 25:
+                        ctx.record_coverage_gap("web_discovery", f"{host}: recursive link budget truncated a page")
+                    return new_links_to_crawl[:25]
 
-    await asyncio.gather(*[probe_endpoint(u) for u in probed_batch], return_exceptions=True)
+    # Breadth-first waves release every parent's semaphore before children run.
+    # Recursive gather while holding all 12 slots could deadlock indefinitely.
+    wave = probed_batch
+    for depth in range(3):
+        results = await asyncio.gather(*(probe_endpoint(u, depth) for u in wave), return_exceptions=True)
+        wave = []
+        for result in results:
+            if isinstance(result, Exception):
+                ctx.record_coverage_gap("web_discovery", f"{host}: {type(result).__name__}: {result}")
+            elif result:
+                wave.extend(result)
+        if not wave:
+            break
 
     # 5. Scrape Discovered JavaScript Bundles for API Routes & Hidden Endpoints
     if discovered_js_files:
@@ -1009,7 +1029,10 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
         new_discovered_urls = []
 
         async def analyze_js_file(js_url: str):
+            if not ctx.scope.url_allowed(js_url):
+                return
             async with sem:
+                await ctx.rate_limiter.wait()
                 resp = await fetch_http(js_url, timeout=settings.http_timeout_seconds)
                 if resp and resp.status_code == 200 and resp.text:
                     # 1. Regex Heuristic Extractor
@@ -1068,7 +1091,7 @@ async def crawl_and_discover_asset(ctx: ScanContext, db: AsyncSession, asset: As
 
 async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     """Intelligent Dynamic Web Crawler & Route Mining Pipeline."""
-    if ctx.profile == "passive":
+    if is_passive_profile(ctx.profile):
         return
 
     await ctx.emit("scan.web", f"Starting intelligent dynamic web & parameter discovery for {root_domain}", severity="info")
@@ -1081,15 +1104,21 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     )).scalars().all()
 
     # Prioritize root domain and high-value functional portals over leaf/CDN subdomains
+    target_host = str(ctx.options.get("target_host") or root_domain).lower()
+
     def _asset_priority(a: Asset) -> int:
         h = (a.hostname or "").lower()
-        if h == root_domain or h == f"www.{root_domain}":
+        if h == target_host:
             return 0
-        if any(kw in h for kw in ["siakad", "portal", "admin", "api", "app", "login", "auth", "moodle", "elearning", "kuesioner"]):
+        if h == root_domain or h == f"www.{root_domain}":
             return 1
-        return 2
+        if any(kw in h for kw in ["siakad", "portal", "admin", "api", "app", "login", "auth", "moodle", "elearning", "kuesioner"]):
+            return 2
+        return 3
 
     sorted_assets = sorted(assets, key=_asset_priority)[: settings.max_web_hosts]
+    if len(sorted_assets) < len(assets):
+        ctx.record_coverage_gap("web_discovery", f"Host budget selected {len(sorted_assets)}/{len(assets)} assets")
     total_count = len(sorted_assets)
     sem = asyncio.Semaphore(6)
 
@@ -1102,9 +1131,9 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         timeout=45.0,  # Max 45s per individual asset crawl
                     )
                 except asyncio.TimeoutError:
-                    logger.debug("Asset %s crawl exceeded 45s per-asset budget", a.hostname)
+                    ctx.record_coverage_gap("web_discovery", f"{a.hostname}: per-asset crawl timeout (45s)")
                 except Exception as exc:
-                    logger.debug("Asset %s crawl error: %s", a.hostname, exc)
+                    ctx.record_coverage_gap("web_discovery", f"{a.hostname}: {type(exc).__name__}: {exc}")
 
     try:
         # Cap total web crawl phase to 600s max (10 minutes)
@@ -1113,4 +1142,4 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             timeout=600.0,
         )
     except asyncio.TimeoutError:
-        logger.info("Web discovery phase reached maximum allocated budget (600s). Proceeding to next phase.")
+        ctx.record_coverage_gap("web_discovery", "Phase timeout (600s); unfinished crawls cancelled")

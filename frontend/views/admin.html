@@ -227,7 +227,10 @@
             <div class="ai-form-group">
               <label for="aiProvider">API Provider Type</label>
               <select id="aiProvider" class="ai-select-field">
-                <option value="openai_compatible">NineRouter / OpenAI Compatible</option>
+                <option value="ninerouter">NineRouter</option>
+                <option value="openai_compatible">OpenAI Compatible / Custom</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="groq">Groq</option>
                 <option value="openai">Direct OpenAI</option>
                 <option value="gemini">Google Gemini</option>
               </select>
@@ -244,15 +247,33 @@
             </div>
 
             <div class="ai-form-group">
-              <label for="aiModel">Active Model (Fallback Cascade Enabled)</label>
+              <label for="aiRoutingMode">Mode routing</label>
+              <select id="aiRoutingMode" class="ai-select-field">
+                <option value="single">Model tunggal — ID persis</option>
+                <option value="router_combo">Combo NineRouter — nama persis</option>
+                <option value="task_router">Routing per tugas — fallback aplikasi</option>
+              </select>
+              <p id="aiRoutingHelp" class="token-label"></p>
+            </div>
+            <div class="ai-form-group">
+              <label for="aiModel">ID model / nama combo</label>
               <select id="aiModel" class="ai-select-field" disabled>
                 <option value="">🔌 Harap hubungkan/koneksikan terlebih dahulu...</option>
               </select>
             </div>
 
+            <div class="ai-form-group">
+              <label for="aiModelManual">ID manual (opsional, mengganti pilihan katalog)</label>
+              <input id="aiModelManual" class="ai-input-field" placeholder="ID persis dari provider">
+              <p id="aiModelCatalogStatus" class="token-label">Katalog belum dimuat.</p>
+              <button id="loadAiModelsBtn" class="btn btn-secondary">Muat katalog</button>
+              <button id="reloadAiConfigBtn" class="btn btn-secondary">Muat ulang backend (buang draft)</button>
+              <p id="aiConfigSyncStatus" role="status" class="token-label"></p>
+              <p id="aiTestDetails" role="status" class="token-label"></p>
+            </div>
             <div class="ai-form-group" style="margin-top: 15px; display: flex; gap: 8px;">
               <button id="saveAiSettingsBtn" class="btn btn-primary" style="flex: 1;">💾 Save & Apply</button>
-              <button id="testAiConnectionBtn" class="btn btn-secondary">🔌 Connect & Load Models</button>
+              <button id="testAiConnectionBtn" class="btn btn-secondary">Uji inference</button>
             </div>
           </div>
         </div>
@@ -268,7 +289,7 @@
             <div id="aiChatLogs" class="ai-chat-logs">
               <div class="chat-msg-bubble system">
                 <div class="chat-msg-text">
-                  System: AI Copilot initialized. Ask anything about vulnerabilities, payloads, or target scopes. Change configurations on the left to swap models instantly.
+                  Chat memakai konfigurasi backend. Terapkan draft dengan Save &amp; Apply terlebih dahulu. Uji inference tidak menyimpan pengaturan.
                 </div>
               </div>
             </div>

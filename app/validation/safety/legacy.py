@@ -16,6 +16,10 @@ from app.validation.safety.executor import AuthorizedExecutor, SafetyViolation
 _executor: ContextVar[AuthorizedExecutor | None] = ContextVar("authorized_validation_executor", default=None)
 
 
+def executor_available() -> bool:
+    return _executor.get() is not None
+
+
 @contextmanager
 def use_executor(executor):
     if not isinstance(executor, AuthorizedExecutor):

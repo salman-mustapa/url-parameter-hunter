@@ -36,46 +36,45 @@ class BaseLLMProvider(ABC):
 
 
 class ZeroResourceHeuristicProvider(BaseLLMProvider):
-    """Pure CPU-based deterministic security reasoning engine.
-    Requires 0 GPU, 0 Disk downloads, <15MB RAM, and executes in <1ms.
-    """
+    """Offline keyword triage; it cannot validate a vulnerability or authorize a test."""
 
     def is_available(self) -> bool:
         return True
 
     async def complete(self, prompt: str, system: Optional[str] = None, json_mode: bool = False) -> Dict[str, Any]:
         p_lower = prompt.lower()
-        decision = "PROCEED_SAFE"
-        confidence = 0.90
-        explanation = "Deterministic AST heuristic analysis verified."
+        decision = "NEEDS_REVIEW"
+        confidence = 0.0
+        explanation = "Offline keyword triage only; no AI inference or evidence validation was performed."
 
         # False-Positive & Anti-Noise Heuristics
         if any(w in p_lower for w in ["404 not found", "cannot get", "page not found", "error 404", "route not defined"]):
-            decision = "FALSE_POSITIVE"
-            confidence = 0.95
-            explanation = "Page body matches standard 404/Not Found generic router signature."
+            decision = "POSSIBLE_FALSE_POSITIVE"
+            confidence = 0.5
+            explanation = "Possible generic 404 signature; compare baseline and target responses before dismissing the finding."
         elif "cloudflare" in p_lower or "pure 360" in p_lower or "attention required" in p_lower:
             decision = "WAF_CHALLENGE"
-            confidence = 0.98
+            confidence = 0.5
             explanation = "Response contains Cloudflare/Pure360 anti-bot challenge interstitial."
         elif any(w in p_lower for w in ["sql syntax", "mysql_fetch", "ora-01756", "pg_query", "sqlite3.operationalerror"]):
-            decision = "CONFIRMED_VULNERABILITY"
-            confidence = 0.99
-            explanation = "Authentic SQL database error signature confirmed in HTTP response body."
+            decision = "POTENTIAL_VULNERABILITY"
+            confidence = 0.5
+            explanation = "Possible SQL error signature; the supplied text alone does not prove an exploitable vulnerability."
         elif any(w in p_lower for w in ["create table", "insert into", "database:", "-- mysql dump", "pg_dump"]):
-            decision = "CONFIRMED_EXPOSURE"
-            confidence = 0.99
-            explanation = "Authentic SQL schema and DDL/DML data structure verified."
+            decision = "POTENTIAL_EXPOSURE"
+            confidence = 0.5
+            explanation = "Possible database content; validate access, provenance, and sensitivity before claiming exposure."
         elif any(w in p_lower for w in ["app_key=", "db_password=", "jwt_secret=", "aws_secret_access_key="]):
-            decision = "CONFIRMED_EXPOSURE"
-            confidence = 0.99
-            explanation = "Exposed environment configuration secret keys verified."
+            decision = "POTENTIAL_EXPOSURE"
+            confidence = 0.5
+            explanation = "Possible configuration keys; examples and variable names alone do not prove a secret leak."
 
         structured = {
             "decision": decision,
             "confidence": confidence,
             "explanation": explanation,
-            "is_actionable": decision in ("CONFIRMED_VULNERABILITY", "CONFIRMED_EXPOSURE", "PROCEED_SAFE"),
+            "is_actionable": False,
+            "requires_evidence_validation": True,
         }
 
         return {
@@ -369,20 +368,71 @@ class UniversalAutoProvider(BaseLLMProvider):
         return await self.heuristic.complete(prompt, system, json_mode)
 
 
+class ConfiguredLLMProvider(BaseLLMProvider):
+    """Use the same bounded routing implementation as scan intelligence."""
+
+    def __init__(self, config: Dict[str, Any]) -> None:
+        from app.intelligence.llm_client import LLMClient
+        self.enabled = config.get("enabled", True)
+        self.client = LLMClient(base_url=config.get("base_url"), api_key=config.get("api_key", ""),
+                                model=config.get("model"), provider=config.get("provider"),
+                                routing_mode=config.get("routing_mode", "auto"))
+
+    def is_available(self) -> bool:
+        return bool(self.enabled and self.client.base_url)
+
+    async def complete(self, prompt: str, system: Optional[str] = None, json_mode: bool = False) -> Dict[str, Any]:
+        trace = {}
+        if self.enabled:
+            try:
+                content = await self.client.chat(
+                    [{"role": "user", "content": prompt}],
+                    system_prompt=(system or "You are a security analysis assistant.") + (" Output JSON only." if json_mode else ""),
+                    _trace=trace,
+                )
+                structured = {}
+                if json_mode:
+                    try:
+                        structured = json.loads(content)
+                    except ValueError:
+                        match = re.search(r"\{.*\}", content, re.DOTALL)
+                        if match:
+                            structured = json.loads(match.group(0))
+                        else:
+                            raise ValueError("invalid_json_completion")
+                    if not isinstance(structured, (dict, list)):
+                        raise ValueError("invalid_json_completion")
+                return {"status": "success", "provider": self.client.provider,
+                        "model": trace.get("requested_model"), "routing": trace,
+                        "content": content, "structured": structured}
+            except Exception as exc:
+                logger.warning("Configured AI unavailable (%s)", type(exc).__name__)
+        result = await ZeroResourceHeuristicProvider().complete(prompt, system, json_mode)
+        result["status"] = "heuristic_fallback"
+        result["routing"] = trace
+        result["fallback_reason"] = "disabled" if not self.enabled else "provider_unavailable"
+        return result
+
+
 class AiGateway:
     """Central AI Gateway dispatching requests with in-memory caching and zero GPU/disk overhead."""
 
     def __init__(self) -> None:
-        self._provider: BaseLLMProvider = UniversalAutoProvider()
+        from app.core.config import settings
+        from app.intelligence.llm_client import llm_client
+        self._provider: BaseLLMProvider = ZeroResourceHeuristicProvider()
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._max_cache_size: int = 1000
         self._runtime_config: Dict[str, Any] = {
-            "provider": "auto",
-            "model": "nousresearch/hermes-3-llama-3.1-405b:free",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "",
-            "enabled": True,
+            "provider": settings.llm_provider,
+            "model": llm_client.model,
+            "base_url": llm_client.base_url,
+            "api_key": llm_client.api_key,
+            "enabled": settings.llm_enabled,
+            "routing_mode": llm_client.routing_mode,
         }
+        self._generation = 0
+        self.apply_config(self._runtime_config)
 
     @property
     def active_provider(self) -> BaseLLMProvider:
@@ -390,6 +440,7 @@ class AiGateway:
 
     def set_provider(self, provider: BaseLLMProvider) -> None:
         self._provider = provider
+        self._generation += 1
         self._cache.clear()
 
     def get_config(self) -> Dict[str, Any]:
@@ -405,72 +456,14 @@ class AiGateway:
 
     def apply_config(self, config: Dict[str, Any]) -> None:
         self._runtime_config.update(config)
-        provider_type = config.get("provider", "auto")
-        api_key = config.get("api_key", "")
-        model = config.get("model", "")
-        base_url = config.get("base_url", "")
-
-        if provider_type == "openrouter":
-            self.set_provider(OpenRouterLLMProvider(
-                api_key=api_key,
-                model=model or "nousresearch/hermes-3-llama-3.1-405b:free",
-                base_url=base_url or "https://openrouter.ai/api/v1",
-            ))
-        elif provider_type == "nine_router":
-            self.set_provider(OpenRouterLLMProvider(
-                api_key=api_key,
-                model=model or "hermes-3",
-                base_url=base_url or "https://api.ninerouter.com/v1",
-            ))
-        elif provider_type == "gemini":
-            self.set_provider(GeminiProvider(api_key=api_key, model=model or "gemini-1.5-flash"))
-        elif provider_type == "groq":
-            self.set_provider(GroqProvider(api_key=api_key, model=model or "llama-3.3-70b-versatile"))
-        elif provider_type == "custom":
-            self.set_provider(CustomRouterLLMProvider(base_url=base_url, api_key=api_key, model=model or "default"))
-        elif provider_type == "heuristic":
+        if self._runtime_config.get("provider") == "heuristic":
             self.set_provider(ZeroResourceHeuristicProvider())
         else:
-            self.set_provider(UniversalAutoProvider())
+            self.set_provider(ConfiguredLLMProvider(self._runtime_config))
 
     async def test_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Test connectivity and latency against candidate AI provider settings."""
-        provider_type = config.get("provider", "openrouter")
-        api_key = config.get("api_key", "")
-        model = config.get("model", "")
-        base_url = config.get("base_url", "")
-
-        test_provider: BaseLLMProvider
-        if provider_type == "openrouter" or provider_type == "nine_router":
-            test_provider = OpenRouterLLMProvider(
-                api_key=api_key,
-                model=model or "nousresearch/hermes-3-llama-3.1-405b:free",
-                base_url=base_url or ("https://api.ninerouter.com/v1" if provider_type == "nine_router" else "https://openrouter.ai/api/v1"),
-            )
-        elif provider_type == "gemini":
-            test_provider = GeminiProvider(api_key=api_key, model=model or "gemini-1.5-flash")
-        elif provider_type == "groq":
-            test_provider = GroqProvider(api_key=api_key, model=model or "llama-3.3-70b-versatile")
-        elif provider_type == "custom":
-            test_provider = CustomRouterLLMProvider(base_url=base_url, api_key=api_key, model=model or "default")
-        else:
-            test_provider = ZeroResourceHeuristicProvider()
-
-        import time
-        t0 = time.time()
-        res = await test_provider.complete(
-            prompt="Respond in 1 short sentence: Confirm you are active for automated cybersecurity vulnerability analysis.",
-            system="You are an expert security assistant.",
-            json_mode=False,
-        )
-        duration_ms = round((time.time() - t0) * 1000, 2)
-        return {
-            "status": "success" if res.get("status") == "success" else "fallback",
-            "provider": res.get("provider"),
-            "model": res.get("model"),
-            "response": res.get("content"),
-            "latency_ms": duration_ms,
-        }
+        from app.ai.configuration import AIConfigRequest, test_candidate
+        return await test_candidate(AIConfigRequest(**config))
 
     def _cache_key(self, prompt: str, system: Optional[str], json_mode: bool) -> str:
         raw = f"{system or ''}||{prompt}||{json_mode}"
@@ -481,8 +474,11 @@ class AiGateway:
         if use_cache and key in self._cache:
             return dict(self._cache[key])
 
+        generation = self._generation
         res = await self._provider.complete(prompt, system, json_mode)
-        if use_cache and res.get("status") in ("success", "heuristic_fallback"):
+        # A transient provider outage must not cache the fallback indefinitely
+        # and prevent later requests from observing provider recovery.
+        if use_cache and generation == self._generation and res.get("status") == "success":
             if len(self._cache) >= self._max_cache_size:
                 keys_to_remove = list(self._cache.keys())[:200]
                 for k in keys_to_remove:
@@ -497,4 +493,3 @@ ai_gateway = AiGateway()
 DisabledAIProvider = ZeroResourceHeuristicProvider
 LocalLLMProvider = ZeroResourceHeuristicProvider
 RemoteLLMProvider = GroqProvider
-

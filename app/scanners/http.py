@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.profiles import is_deep_profile
 from app.core.db import AsyncSessionLocal
 from app.core.sanitizer import sanitize_text
 from app.models.models import Asset, Certificate, Port, Service, Technology, URL
@@ -175,6 +176,30 @@ def extract_title(html: str) -> str | None:
     return None
 
 
+def build_http_candidate_urls(ctx: ScanContext, host: str) -> list[str]:
+    """Return ordered probes with the exact operator URL first."""
+    candidate_endpoints = [("https", 443), ("http", 80)]
+    if is_deep_profile(ctx.profile):
+        candidate_endpoints.extend([
+            ("https", 8443), ("http", 8080), ("http", 8000),
+            ("https", 2083), ("https", 2087), ("http", 8888),
+            ("http", 3000), ("http", 5000), ("https", 9443), ("https", 10443),
+        ])
+
+    candidate_urls: list[str] = []
+    requested_url = str(ctx.options.get("target_url") or "").strip()
+    try:
+        requested = urlparse(requested_url)
+        if requested.scheme in ("http", "https") and requested.hostname == host:
+            candidate_urls.append(requested_url)
+    except ValueError:
+        pass
+    for scheme, port_num in candidate_endpoints:
+        port_suffix = f":{port_num}" if port_num not in (80, 443) else ""
+        candidate_urls.append(f"{scheme}://{host}{port_suffix}/")
+    return list(dict.fromkeys(candidate_urls))
+
+
 async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_domain: str) -> None:
     """HTTP/HTTPS probe for an individual asset."""
     host = asset.hostname
@@ -189,18 +214,12 @@ async def probe_asset(ctx: ScanContext, db: AsyncSession, asset: Asset, root_dom
         )
         return
 
-    # Standard and Extended Web Endpoint Candidates
-    candidate_endpoints = [("https", 443), ("http", 80)]
-    if ctx.profile == "deep":
-        candidate_endpoints.extend([
-            ("https", 8443), ("http", 8080), ("http", 8000),
-            ("https", 2083), ("https", 2087), ("http", 8888),
-            ("http", 3000), ("http", 5000), ("https", 9443), ("https", 10443)
-        ])
-
-    for scheme, port_num in candidate_endpoints:
+    # Preserve a focused endpoint (including path/query/port) inside a full scan.
+    for url in build_http_candidate_urls(ctx, host):
+        parsed_candidate = urlparse(url)
+        scheme = parsed_candidate.scheme
+        port_num = parsed_candidate.port or (443 if scheme == "https" else 80)
         port_suffix = f":{port_num}" if port_num not in (80, 443) else ""
-        url = f"{scheme}://{host}{port_suffix}/"
         if not ctx.scope.url_allowed(url):
             continue
         await ctx.rate_limiter.wait()
@@ -444,8 +463,17 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         )
     )).scalars().all()
 
-    # Sort shallow depth first and cap to configured budget
-    assets = sorted(assets, key=lambda a: a.depth)[: settings.max_http_hosts]
+    # The explicitly requested host gets guaranteed parity between focused and
+    # recursive scans even when the latter discovers more assets than the cap.
+    target_host = str(ctx.options.get("target_host") or root_domain).lower()
+    assets = sorted(
+        assets,
+        key=lambda a: (
+            0 if (a.hostname or "").lower() == target_host else 1,
+            a.depth,
+            a.hostname or "",
+        ),
+    )[: settings.max_http_hosts]
     sem = asyncio.Semaphore(settings.max_concurrent_hosts)
 
     async def probe_with_sem(a: Asset):

@@ -370,11 +370,15 @@ class AttackPlanner:
         if not plan:
             return None
 
-        # Auto-approve if in draft
+        # Auto-approve only after structural validation. Runtime scope, action,
+        # and validation-level checks are still applied to every step below.
         if plan.status == PlanStatus.DRAFT:
-            self.approve_plan(plan_id)
+            if not self.approve_plan(plan_id):
+                plan.status = PlanStatus.ABORTED
+                return plan
 
-        self.start_plan(plan_id)
+        if not self.start_plan(plan_id):
+            return plan
         if ctx and hasattr(ctx, "emit"):
             await ctx.emit(
                 "ai.plan_executing",
@@ -386,6 +390,22 @@ class AttackPlanner:
 
         for step in plan.steps:
             if step.status != StepStatus.PENDING:
+                continue
+
+            policy_issue = self._runtime_policy_issue(step, plan.target, ctx)
+            if policy_issue:
+                step.status = StepStatus.SKIPPED
+                step.result = {"status": "blocked", "summary": policy_issue}
+                step.completed_at = time.time()
+                if ctx and hasattr(ctx, "emit"):
+                    await ctx.emit(
+                        "ai.step_blocked",
+                        f"AI tool proposal blocked: {policy_issue}",
+                        plan_id=plan.plan_id,
+                        step_id=step.step_id,
+                        tool=step.tool_name,
+                        severity="warn",
+                    )
                 continue
 
             step.status = StepStatus.RUNNING
@@ -415,7 +435,7 @@ class AttackPlanner:
                         )
                     except Exception:
                         pass
-                else:
+                elif succeeded and step_res.get("status") == "clean":
                     hyp = hypothesis_engine.get_hypothesis(plan.hypothesis_id)
                     if hyp:
                         hyp.observations.append(f"Verified with {step.tool_name}: clean response")
@@ -432,9 +452,43 @@ class AttackPlanner:
                     severity="info" if succeeded else "warn",
                 )
 
-        plan.status = PlanStatus.COMPLETED
+        plan.status = PlanStatus.FAILED if any(s.status in {StepStatus.FAILED, StepStatus.SKIPPED} for s in plan.steps) else PlanStatus.COMPLETED
         plan.completed_at = time.time()
         return plan
+
+    def _runtime_policy_issue(
+        self,
+        step: AttackStep,
+        target: str,
+        ctx: Optional[Any],
+    ) -> Optional[str]:
+        if ctx is None:
+            return None
+        if not getattr(ctx, "scope", None) or not ctx.scope.url_allowed(target):
+            return f"target is outside the recorded URL/port scope: {target}"
+        if hasattr(ctx, "module_allowed") and not ctx.module_allowed("validation"):
+            return "validation module is disabled by engagement policy"
+        if hasattr(ctx, "action_allowed") and not ctx.action_allowed(step.tool_name):
+            return f"technique '{step.tool_name}' is not allowed by engagement policy"
+
+        aliases = {
+            "nuclei": "sensitive_files_scanner",
+            "dalfox": "xss_validator",
+            "sqli": "sqli_validator",
+            "xss": "xss_validator",
+            "auth": "auth_bypass_validator",
+        }
+        lookup = aliases.get(step.tool_name.lower(), step.tool_name.lower())
+        tool = self.tool_registry.get(lookup) if self.tool_registry else None
+        risk = tool.risk_level if tool else ToolRiskLevel.MEDIUM
+        level = str(getattr(ctx, "options", {}).get("validation_level") or "L2_SAFE_ACTIVE")
+        if risk == ToolRiskLevel.CRITICAL and level != "L4_HIGH_RISK":
+            return f"critical-risk technique '{step.tool_name}' requires L4_HIGH_RISK"
+        if risk in (ToolRiskLevel.MEDIUM, ToolRiskLevel.HIGH) and level not in {
+            "L3_CONTROLLED", "L4_HIGH_RISK"
+        }:
+            return f"controlled technique '{step.tool_name}' requires L3_CONTROLLED or higher"
+        return None
 
     async def execute_all_pending_plans(
         self,
@@ -461,10 +515,18 @@ class AttackPlanner:
         """Dispatch a step to the appropriate security scanner or validation tool."""
         tool_name = (step.tool_name or "").lower().strip()
         try:
+            if any(name in tool_name for name in ("sqli", "xss", "dalfox", "auth")):
+                from app.validation.safety.legacy import executor_available
+                if not executor_available():
+                    if ctx and hasattr(ctx, "record_coverage_gap"):
+                        ctx.record_coverage_gap("ai_validation", f"{tool_name}: bounded executor unavailable")
+                    return {"status": "blocked", "vulnerable": False, "summary": "Authorized bounded executor unavailable; test not performed"}
             if "nuclei" in tool_name:
                 from app.adapters.tools.nuclei_adapter import NucleiAdapter
                 adapter = NucleiAdapter()
                 res = await adapter.execute({"target": target, "tags": "cve,misconfig,exposure"})
+                if res.get("status") in {"error", "timeout", "skipped", "unavailable"}:
+                    return {"status": "error", "vulnerable": False, "summary": "Nuclei did not complete", "details": res}
                 count = res.get("count", 0)
                 return {
                     "status": "vulnerable" if count > 0 else "clean",
@@ -501,20 +563,17 @@ class AttackPlanner:
                     "summary": "Authentication bypass vector found" if is_vuln else "Authentication boundary strictly enforced",
                 }
             else:
-                from app.scanners.http import fetch_http
-                resp = await fetch_http(target, timeout=8.0)
-                status_code = resp.get("status_code", 0) if isinstance(resp, dict) else getattr(resp, "status_code", 0)
                 return {
-                    "status": "clean",
+                    "status": "blocked",
                     "vulnerable": False,
-                    "summary": f"HTTP probe verified (status: {status_code})",
+                    "summary": f"No audited execution binding for {tool_name}; HTTP reachability cannot validate this technique",
                 }
         except Exception as exc:
             logger.debug("Step execution note (%s): %s", tool_name, exc)
             return {
-                "status": "clean",
+                "status": "error",
                 "vulnerable": False,
-                "summary": f"Step probe completed: {str(exc)[:60]}",
+                "summary": f"Step failed without a clean verdict: {str(exc)[:60]}",
             }
 
     # ---- Queries ----

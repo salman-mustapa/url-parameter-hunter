@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.profiles import is_deep_profile, is_passive_profile, supports_active_validation
 from app.core.db import AsyncSessionLocal
 from app.core.sanitizer import sanitize_text
 from app.evidence.package import EvidencePackageBuilder
@@ -192,6 +193,26 @@ async def _process_and_save_validated_finding(
     norm_res: NormalizedValidationResult,
 ) -> Optional[Finding]:
     """Evaluates result via ProofQualityGate, builds EvidencePackage, and persists finding."""
+    out_of_scope_types = {
+        str(item).lower().replace("-", "_").replace(" ", "_")
+        for item in ctx.options.get("out_of_scope_findings", [])
+    }
+    candidate_labels = {
+        str(norm_res.vulnerability_type or "").lower().replace("-", "_").replace(" ", "_"),
+        str(norm_res.title or "").lower().replace("-", "_").replace(" ", "_"),
+    }
+    if any(
+        excluded and any(excluded in label or label in excluded for label in candidate_labels if label)
+        for excluded in out_of_scope_types
+    ):
+        await ctx.emit(
+            "finding.program_excluded",
+            f"Finding type excluded by recorded program policy: {norm_res.title}",
+            finding_type=norm_res.vulnerability_type,
+            severity="info",
+        )
+        return None
+
     # 1. Local AI Semantic & Deep Triage Engine (V4 & V5)
     resp_meta = norm_res.response_metadata or {}
     ai_triage = LocalAiEngine.triage_finding(
@@ -226,9 +247,12 @@ async def _process_and_save_validated_finding(
                 raw_evidence=resp_meta,
             )
             if llm_eval and isinstance(llm_eval, dict):
-                if llm_eval.get("ai_decision") == "FALSE_POSITIVE" and float(llm_eval.get("ai_confidence_score", 0)) >= 90:
-                    logger.info("Finding rejected by NineRouter LLM Critic: %s", norm_res.title)
-                    return None
+                # An LLM verdict is advisory. It may flag a finding for review,
+                # but cannot discard evidence that passed deterministic gates.
+                ai_triage["llm_triage_decision"] = llm_eval.get("ai_decision", "INCONCLUSIVE")
+                ai_triage["llm_triage_confidence"] = llm_eval.get("ai_confidence_score")
+                if llm_eval.get("ai_decision") == "FALSE_POSITIVE":
+                    logger.info("NineRouter critic flagged finding for evidence review: %s", norm_res.title)
                 # Enrich with state-of-the-art LLM insights
                 if llm_eval.get("executive_explanation"):
                     ai_triage["executive_explanation"] = llm_eval["executive_explanation"]
@@ -357,6 +381,8 @@ async def _process_and_save_validated_finding(
             "checklist": checklist,
             "ai_confidence_score": ai_triage.get("ai_confidence_score", 90),
             "ai_triage_decision": ai_triage.get("ai_decision", "CONFIRMED"),
+            "llm_triage_decision": ai_triage.get("llm_triage_decision"),
+            "llm_triage_confidence": ai_triage.get("llm_triage_confidence"),
             "mitre_attack": ai_triage.get("mitre_attack", []),
             "exploitation_data": norm_res.exploitation_data or {},
         },
@@ -516,14 +542,27 @@ async def _process_and_save_validated_finding(
 
 async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     """Non-destructive Security Intelligence, Validation & Quality Gate Engine (§19-§44)."""
-    if ctx.profile == "passive":
+    if is_passive_profile(ctx.profile):
         return
+
+    from app.validation.safety.legacy import executor_available
+    if not executor_available():
+        ctx.record_coverage_gap(
+            "validation",
+            "Legacy active validators have no authorized bounded executor; their empty results are not negative findings. Remote pentest coverage is not complete.",
+        )
 
     await ctx.emit("scan.security", f"Starting deep security validation and evidence correlation for {root_domain}", severity="info")
 
     asset_ids_query = select(Asset.id).where(Asset.scan_id == ctx.scan_id)
     assets = (await db.execute(select(Asset).where(Asset.scan_id == ctx.scan_id))).scalars().all()
     asset_map = {a.id: a for a in assets}
+    # AsyncSession cannot be used concurrently by the asset audit workers.
+    asset_url_map: dict[str, list[str]] = {}
+    for asset_id, endpoint in (await db.execute(
+        select(URL.asset_id, URL.url).where(URL.asset_id.in_(asset_ids_query))
+    )).all():
+        asset_url_map.setdefault(asset_id, []).append(endpoint)
 
     # 1. Targeted Sensitive File Deep Probing with Strict Content Signature & Anti-Soft-404 (§40, §44)
     # Bounded Concurrency across all discovered assets to prevent scan timeouts
@@ -535,9 +574,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             return []
 
         async with asset_sem:
-            asset_url_rows = (await db.execute(
-                select(URL.url).where(URL.asset_id == asset_obj.id)
-            )).scalars().all()
+            asset_url_rows = asset_url_map.get(asset_obj.id, [])
             target_base_urls = list({urlparse(u).scheme + "://" + urlparse(u).netloc for u in asset_url_rows if urlparse(u).netloc})
             if not target_base_urls:
                 target_base_urls = [f"https://{target_host}", f"http://{target_host}"]
@@ -600,6 +637,9 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                                 continue
 
                             test_url = f"{base_url.rstrip('/')}{sample_path}"
+                            if not ctx.scope.url_allowed(test_url) or not ctx.action_allowed("sensitive_files_scanner"):
+                                continue
+                            await ctx.rate_limiter.wait()
                             resp = await fetch_http(test_url, timeout=min(6.0, settings.http_timeout_seconds))
                             if not resp or resp.status_code != 200 or not resp.text:
                                 continue
@@ -676,7 +716,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                             f"{base_url.rstrip('/')}/administrator",
                             f"{base_url.rstrip('/')}/#/login",
                         ]
-                        auth_cands = await auth_bypass_validator.validate(base_url, discovered_urls=auth_test_urls)
+                        auth_cands = await auth_bypass_validator.validate(base_url, discovered_urls=auth_test_urls) if ctx.options.get("auth_testing") and ctx.action_allowed("authentication_testing") else []
                         for cand in auth_cands:
                             is_sqli = cand.technique == "sqli_auth_bypass"
                             is_unauth = cand.technique == "unauthenticated_access"
@@ -797,7 +837,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                 )
                 asset_batch_results.extend(results)
             except asyncio.TimeoutError:
-                logger.warning("Sensitive file audit batch reached timeout budget, gracefully advancing...")
+                ctx.record_coverage_gap("validation", "Sensitive-file audit batch timed out (45s); pending checks were cancelled")
 
         for res_list in asset_batch_results:
             if isinstance(res_list, list):
@@ -988,7 +1028,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             await db.commit()
 
     # 3. Active Controlled Parameter Testing (§20-§22) with Bounded Async Concurrency
-    if ctx.profile in ("standard", "deep", "custom", "full", "pentest", "adversary_simulation") and urls:
+    if supports_active_validation(ctx.profile) and urls:
         all_url_ids = [u.id for u in urls]
         all_db_params = (await db.execute(
             select(Parameter).where(Parameter.url_id.in_(all_url_ids))
@@ -1001,6 +1041,15 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         def _score_url_priority(u: URL) -> int:
             score = 0
             u_str = (u.url or "").lower()
+            target_host = str(ctx.options.get("target_host") or root_domain).lower()
+            target_url = str(ctx.options.get("target_url") or "").lower().rstrip("/")
+            try:
+                if (urlparse(u_str).hostname or "").lower() == target_host:
+                    score += 100
+            except ValueError:
+                pass
+            if target_url and u_str.rstrip("/") == target_url:
+                score += 100
             # Prioritize endpoints with confirmed discovered parameters
             if u.id in params_by_url and len(params_by_url[u.id]) > 0:
                 score += 50 + min(len(params_by_url[u.id]) * 5, 30)
@@ -1017,8 +1066,10 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
             return score
 
         sorted_urls = sorted(urls, key=_score_url_priority, reverse=True)
-        max_fuzz_budget = 250 if ctx.profile in ("deep", "full", "pentest", "adversary_simulation") else 150
+        max_fuzz_budget = 250 if is_deep_profile(ctx.profile) else 150
         target_urls = sorted_urls[:max_fuzz_budget]
+        if len(target_urls) < len(sorted_urls):
+            ctx.record_coverage_gap("validation", f"URL validation budget selected {len(target_urls)}/{len(sorted_urls)} endpoints")
 
         # Synthesize parameter candidates if none extracted (e.g. SPAs, REST APIs, OWASP Juice Shop)
         for u in target_urls:
@@ -1127,7 +1178,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                 )
 
                 # 3a. XSS Validation
-                if xss_sqli_params:
+                if xss_sqli_params and ctx.action_allowed("xss_validator"):
                     try:
                         xss_cands = await xss_validator.validate_url(u.url, xss_sqli_params)
                         for cand in xss_cands:
@@ -1173,7 +1224,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         logger.debug("XSS validation error on %s: %s", u.url, exc)
 
                 # 3b. SQL Injection Deep Validation
-                if xss_sqli_params:
+                if xss_sqli_params and ctx.action_allowed("sqli_validator"):
                     try:
                         sqli_cands = await sqli_validator.validate_url(u.url, xss_sqli_params)
                         for cand in sqli_cands:
@@ -1205,7 +1256,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         logger.debug("SQLi validation error on %s: %s", u.url, exc)
 
                 # 3c. SSRF Probes
-                if ssrf_redirect_params:
+                if ssrf_redirect_params and ctx.action_allowed("ssrf_validator"):
                     try:
                         ssrf_cands = await ssrf_validator.validate_url(u.url, ssrf_redirect_params)
                         for cand in ssrf_cands:
@@ -1234,7 +1285,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         logger.debug("SSRF validation error on %s: %s", u.url, exc)
 
                 # 3d. Path Traversal / LFI Probes (Nuclei-grade)
-                if traversal_params:
+                if traversal_params and ctx.action_allowed("path_traversal_validator"):
                     try:
                         trav_cands = await path_traversal_validator.validate_url(u.url, traversal_params)
                         for cand in trav_cands:
@@ -1283,7 +1334,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         logger.debug("Path traversal validation error on %s: %s", u.url, exc)
 
                 # 3e. Open Redirect Probes
-                if ssrf_redirect_params:
+                if ssrf_redirect_params and ctx.action_allowed("open_redirect_validator"):
                     try:
                         redir_cands = await open_redirect_validator.validate_url(u.url, ssrf_redirect_params)
                         for cand in redir_cands:
@@ -1309,7 +1360,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         logger.debug("Open redirect validation error on %s: %s", u.url, exc)
 
                 # 3f. RCE / Command Injection Probes
-                if rce_params:
+                if rce_params and ctx.options.get("authorized_high_risk") and ctx.action_allowed("rce_validator"):
                     try:
                         rce_cands = await rce_validator.validate_url(u.url, rce_params)
                         for cand in rce_cands:
@@ -1339,7 +1390,7 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
                         logger.debug("RCE validation error on %s: %s", u.url, exc)
 
                 # 3g. IDOR / Broken Access Control
-                if idor_params:
+                if idor_params and ctx.action_allowed("idor_validator"):
                     try:
                         idor_cands = await idor_validator.validate_url(u.url, idor_params)
                         for cand in idor_cands:
@@ -1517,6 +1568,8 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
         await ctx.emit("scan.network", f"Testing {len(exploitable_ports)} discovered service(s) for default credentials and unauthenticated access...", stage="SERVICE_EXPLOIT")
 
     for p in exploitable_ports:
+        if not ctx.options.get("credential_audit") or not ctx.action_allowed("service_exploitation"):
+            continue
         asset_obj = asset_map.get(p.asset_id)
         target_host = asset_obj.hostname if asset_obj else root_domain
         service_hint = p.service or ""
@@ -1553,6 +1606,8 @@ async def run(ctx: ScanContext, db: AsyncSession, root_domain: str) -> None:
     try:
         all_url_strings = [u.url for u in urls if u.url]
         for asset_id_key, asset_obj in asset_map.items():
+            if not ctx.options.get("auth_testing") or not ctx.action_allowed("authentication_testing"):
+                continue
             target_host = asset_obj.hostname if asset_obj else root_domain
             base = f"https://{target_host}"
             await ctx.emit("scan.auth", f"Evaluating authentication bypass headers on {target_host}...", host=target_host, stage="AUTH_BYPASS")

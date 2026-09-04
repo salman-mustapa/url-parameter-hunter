@@ -14,7 +14,29 @@ class PocBuilder:
                          headers=None, payload=None, cwe_id=None, cve_id=None, cvss_score=None,
                          description=None, technical_details=None, evidence=None,
                          screenshot_id=None, screenshot_url=None, has_real_screenshot=False) -> dict:
-        evidence = evidence if isinstance(evidence, dict) else {}
+        evidence = dict(evidence) if isinstance(evidence, dict) else {}
+        structured = evidence.get("structured_validation")
+        if isinstance(structured, dict):
+            for key in ("actual_result", "expected_result", "preconditions", "reproduction_steps"):
+                if structured.get(key):
+                    evidence.setdefault(key, structured[key])
+            references = structured.get("evidence_ids") or []
+            captures = [item for item in structured.get("evidence", [])
+                        if isinstance(item, dict) and item.get("id") in references
+                        and isinstance(item.get("request"), dict) and item["request"].get("url")
+                        and (not target_url or item["request"]["url"] == target_url)
+                        and isinstance(item.get("response"), dict) and item["response"].get("status_code")]
+            if captures:
+                capture = captures[-1]
+                request = capture.get("request") or {}
+                response = capture.get("response") or {}
+                if isinstance(request, dict) and isinstance(response, dict):
+                    for key, value in {"method": request.get("method"), "request_headers": request.get("headers"),
+                                       "request_body": request.get("body"), "response_status": response.get("status_code"),
+                                       "response_headers": response.get("headers"), "response_body": response.get("body")}.items():
+                        if value is not None:
+                            evidence.setdefault(key, value)
+                    evidence.setdefault("selected_capture_id", capture.get("id"))
         headers = headers or evidence.get("request_headers") or evidence.get("headers") or {}
         headers = headers if isinstance(headers, dict) else {}
         headers = {str(k): str(v) for k, v in headers.items()
@@ -55,6 +77,10 @@ class PocBuilder:
                   "    print(response.text[:2000])\n"
                   "    print('Compare with the recorded baseline; validation is not automatic.')\n")
         raw_request = evidence.get("raw_http_request") or evidence.get("request_dump")
+        if not raw_request and evidence.get("selected_capture_id"):
+            raw_request = "Recorded request fields (not a complete raw HTTP capture):\n" + json.dumps(
+                {"capture_id": evidence["selected_capture_id"], "method": method,
+                 "url": url, "headers": headers, "body": body}, ensure_ascii=False)
         if not raw_request:
             raw_request = "Request not captured. See the explicitly labelled replay template."
         raw_response = evidence.get("raw_http_response") or evidence.get("response_dump")
@@ -92,7 +118,7 @@ class PocBuilder:
                 "provenance": {"python_poc": "generated_replay_template",
                                "curl_command": "recorded" if recorded_curl else "generated_replay_template",
                                "reproduction_steps": "recorded" if recorded_steps else "review_checklist",
-                               "raw_http_request": "recorded" if evidence.get("raw_http_request") or evidence.get("request_dump") else "missing",
+                               "raw_http_request": "recorded" if evidence.get("raw_http_request") or evidence.get("request_dump") else "recorded_fields" if evidence.get("selected_capture_id") else "missing",
                                "raw_http_response": "recorded_fields" if status is not None or response_headers or response_body is not None or evidence.get("raw_http_response") or evidence.get("response_dump") else "missing"},
                 "screenshot": {"has_screenshot": bool(has_real_screenshot and (screenshot_url or screenshot_id)),
                                "image_url": screenshot_url or (f"/api/screenshots/{screenshot_id}/image" if screenshot_id else None),

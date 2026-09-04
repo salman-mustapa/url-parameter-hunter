@@ -3,6 +3,7 @@ import html
 import io
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,7 +22,9 @@ class ReportEngine:
     def _prepare_findings(cls, findings, perspective="customer"):
         result = []
         for original in findings:
-            f = dict(original)
+            # Sanitize structured headers before converting them into strings
+            # for replay commands or response excerpts.
+            f = RedactionEngine.redact_dict(dict(original)) if perspective == "customer" else dict(original)
             evidence = dict(f.get("evidence") or {})
             for key in ("actual_result", "expected_result", "reproduction_steps", "preconditions"):
                 if f.get(key):
@@ -68,11 +71,47 @@ class ReportEngine:
             f"- **Exclusions:** {value(', '.join(rules.get('excluded_hosts') or []))}",
             f"- **Allowed Ports:** {value(', '.join(str(port) for port in rules.get('allowed_ports') or []))}",
             f"- **Requested HTTP RPS Cap:** {value(rules.get('max_rps'))} (per-tool enforcement must be reviewed)",
+            f"- **Platform:** {value(rules.get('platform'))}",
+            f"- **Program Policy URL:** {value(rules.get('program_url'))}",
+            f"- **Allowed Techniques:** {value(', '.join(rules.get('allowed_techniques') or []))}",
+            f"- **Prohibited Techniques:** {value(', '.join(rules.get('prohibited_techniques') or []))}",
+            f"- **Out-of-Scope Finding Types:** {value(', '.join(rules.get('out_of_scope_findings') or []))}",
             f"- **Profile / Level:** {value(context.get('profile'))} / {value(context.get('validation_level'))}",
             f"- **Program Notes:** {value(rules.get('notes'))}",
             f"- **Business Context:** {value(profile.get('executive_context'))}",
             "", "Recorded scope and authorization are operator-supplied; they are not independent evidence of permission.", "",
         ]
+
+    @staticmethod
+    def _ai_analysis_lines(stats):
+        analysis = ((stats.get("report_context") or {}).get("ai_analysis") or {}).get("post_tools") or {}
+        if not analysis:
+            return []
+
+        def clean(value):
+            return str(value or "Not recorded").replace("\r", " ").replace("\n", " ").replace("`", "'")
+
+        lines = [
+            "## AI Evidence Review & Recommended Next Actions",
+            "",
+            "AI output is advisory. Scope policy and collected evidence remain authoritative.",
+            "",
+            f"**Evidence-bound summary:** {clean(analysis.get('executive_summary'))}",
+            "",
+        ]
+        for label, key in (
+            ("Coverage gaps", "coverage_gaps"),
+            ("Recommended next tests", "recommended_next_tests"),
+            ("Recommended techniques", "recommended_techniques"),
+            ("Submission/review notes", "report_notes"),
+        ):
+            values = analysis.get(key) or []
+            lines.append(f"### {label}")
+            lines.extend(f"- {clean(item)}" for item in values)
+            if not values:
+                lines.append("- None recorded; manual review is still required.")
+            lines.append("")
+        return lines
 
     @staticmethod
     def _technology_candidates(technologies):
@@ -540,6 +579,10 @@ class ReportEngine:
         lines[insert:insert] = cls._engagement_lines(stats)
         insert = lines.index("## 3. Attack Surface & Technology Inventory")
         lines[insert:insert] = summary + [""]
+        ai_lines = cls._ai_analysis_lines(stats)
+        if ai_lines:
+            insert = lines.index("## 5. Methodology & Safety Statement")
+            lines[insert:insert] = ai_lines + ["---", ""]
         candidates = cls._technology_candidates(technologies)
         if candidates:
             lines.extend(["", "## Appendix: CVE Research Candidates", "",
@@ -608,7 +651,7 @@ class ReportEngine:
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%d %B %Y, %H:%M:%S UTC")
         redacted_findings = cls._prepare_findings(findings)
         profile = (stats.get("report_context") or {}).get("report") or {}
-        identity_html = "<section>" + "".join(f"<p>{html.escape(line.lstrip('# ').removeprefix('- ').replace('**', ''))}</p>" for line in cls._engagement_lines(stats) if line) + "</section>"
+        identity_html = "<section>" + "".join(f"<p>{html.escape(line.lstrip('# ').removeprefix('- ').replace('**', ''))}</p>" for line in (cls._engagement_lines(stats) + cls._ai_analysis_lines(stats)) if line) + "</section>"
         logo = profile.get("logo_data_url") or ""
         logo_html = f'<img alt="Organization logo supplied by operator" src="{html.escape(logo)}" style="max-width:220px;max-height:90px;object-fit:contain">' if logo.startswith("data:image/png;base64,") else ""
 
@@ -1156,8 +1199,111 @@ class ReportEngine:
 
     @classmethod
     def generate_bug_bounty_markdown(cls, finding: Dict[str, Any], target: str) -> str:
-        return cls.generate_markdown(finding.get("scan_id") or "Not recorded", target, {},
-                                     [finding], [], [], [])
+        prepared = cls._prepare_findings([finding], "customer")[0]
+        quality = prepared["report_quality"]
+        dossier = prepared.get("poc_dossier") or {}
+        evidence = prepared.get("evidence") or {}
+        context = prepared.get("report_context") or {}
+        rules = context.get("rules") or {}
+        profile = context.get("report") or {}
+
+        def text(value, fallback="Not recorded"):
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False, default=str)
+            return str(value if value not in (None, "") else fallback).strip().replace("\r", " ")
+
+        def code(value, language="text"):
+            content = text(value)
+            # Preserve evidence as data even if a response contains Markdown fences.
+            fence = "`" * max(3, max((len(run) for run in re.findall(r"`+", content)), default=0) + 1)
+            return f"{fence}{language}\n{content}\n{fence}"
+
+        steps = prepared.get("reproduction_steps") or evidence.get("reproduction_steps") or []
+        if not isinstance(steps, list):
+            steps = [steps] if steps else []
+        reproduction = [f"{index}. {text(step)}" for index, step in enumerate(steps, 1)]
+        if not reproduction:
+            reproduction = ["Reproduction steps were not captured. Do not treat the generated review checklist as a reproduced PoC."]
+        structured = evidence.get("structured_validation") or {}
+        captures = structured.get("evidence") or [] if isinstance(structured, dict) else []
+        ids = structured.get("evidence_ids") or [] if isinstance(structured, dict) else []
+        captures = [item for item in captures if isinstance(item, dict) and item.get("id") in ids]
+        missing = list(quality.get("missing") or [])
+        for name, value in {
+            "authorization_and_scope": context.get("authorization_reference") and rules.get("authorization_acknowledged") and rules.get("scope_hosts"),
+            "expected_secure_behavior": prepared.get("expected_result") or evidence.get("expected_result"),
+            "preconditions": prepared.get("preconditions") or evidence.get("preconditions"),
+        }.items():
+            if not value:
+                missing.append(name)
+        status = "READY_FOR_HUMAN_REVIEW" if not missing and quality.get("confirmed_with_evidence") else "NEEDS_REVIEW"
+        title = prepared.get("title") or "Security finding requires review"
+        if "[REDACTED" in title:
+            # A redacted title is not useful as a submission heading. Derive a
+            # neutral label from stored classification without restoring secrets.
+            title = f"{text(prepared.get('finding_type'), 'Security').replace('_', ' ').title()} finding on {RedactionEngine.redact_text(target)}"
+        lines = [
+            f"# {text(title)}", "",
+            f"**Submission readiness:** `{status}`  ",
+            f"**Evidence readiness:** `{quality.get('status', 'NEEDS_REVIEW')}`  ",
+            f"**Finding ID:** `{text(prepared.get('finding_code') or prepared.get('id'))}`  ",
+            f"**Platform / engagement:** {text(rules.get('platform'), 'Unspecified')} / {text(profile.get('program'))}  ",
+            f"**Asset:** `{text(target)}`  ",
+            f"**Endpoint:** `{text(prepared.get('location') or prepared.get('url') or evidence.get('url'))}`  ",
+            f"**Method / parameter:** {text(dossier.get('method'))} / {text(dossier.get('parameter'))}  ",
+            f"**Severity / weakness:** {text(prepared.get('severity'), 'UNRATED')} / {text(prepared.get('cwe_id'))}  ",
+            f"**CVSS score / vector:** {text(prepared.get('cvss_score'))} / {text(prepared.get('cvss_vector'))} (recorded, not independently calculated)  ",
+            f"**Evidence level / validation:** {text(prepared.get('evidence_level'), 'E0')} / {text(prepared.get('validation_status') or prepared.get('confidence'))}  ",
+            f"**First / last observation:** {text(prepared.get('first_seen'))} / {text(prepared.get('last_seen'))}", "",
+            "## Summary", "", text(prepared.get("executive_explanation") or prepared.get("description") or prepared.get("actual_result") or evidence.get("actual_result")), "",
+            "## Authorization & Scope", "",
+            f"- Authorization reference: {text(context.get('authorization_reference'))}",
+            f"- In-scope hosts: {text(rules.get('scope_hosts'))}",
+            f"- Excluded hosts: {text(rules.get('excluded_hosts'))}",
+            f"- Allowed / prohibited techniques: {text(rules.get('allowed_techniques'))} / {text(rules.get('prohibited_techniques'))}",
+            f"- Requested limit: {text(rules.get('max_rps'))} requests/second; verify tool-specific enforcement.",
+            f"- Authorized window: {text(rules.get('starts_at'))} to {text(rules.get('ends_at'))}",
+            "These are operator-supplied records, not independent proof of permission. Private research requires owner authorization even without a bounty program.", "",
+            "## Description", "", text(prepared.get("description") or prepared.get("technical_details")), "",
+            "## Preconditions & Test Identities", "", text(prepared.get("preconditions") or evidence.get("preconditions")), "",
+            "## Steps To Reproduce", "", *reproduction, "",
+            "## Expected vs Actual Result", "",
+            "**Expected secure behavior:** " + text(prepared.get("expected_result") or evidence.get("expected_result")), "",
+            "**Observed actual behavior:** " + text(prepared.get("actual_result") or evidence.get("actual_result")), "",
+            "## Proof of Concept / Supporting Material", "",
+            "**Replay provenance:** " + text((dossier.get("provenance") or {}).get("curl_command")),
+            code(dossier.get("curl_command"), "bash"),
+            "Replay examples require review and replacement of redacted values. They are not evidence that an exploit succeeded.", "",
+            "### Recorded request", "", code(dossier.get("raw_http_request")), "",
+            "### Recorded response", "", code(dossier.get("raw_http_response")), "",
+            "### Evidence manifest", "", f"Referenced capture IDs: {text(ids)}. Captures below are sanitized recorded fields, not reconstructed raw HTTP.",
+        ]
+        for capture in captures[:20]:
+            lines.extend(["", code(capture if len(text(capture)) <= 12000 else {
+                "id": capture.get("id"), "preview": text(capture)[:12000],
+                "note": "Preview shortened. Review the complete evidence package in the application."
+            }, "json")])
+        if len(captures) > 20:
+            lines.append(f"Showing 20 of {len(captures)} captures; see the complete evidence package.")
+        lines.extend([
+            "", "## Impact", "", text(prepared.get("business_impact") or prepared.get("impact")),
+            "Limit this claim to the security boundary and data access demonstrated above; hypothetical impact requires separate validation.", "",
+            "## Root Cause", "", text(prepared.get("root_cause")), "",
+            "## Remediation", "", text(prepared.get("remediation")), "",
+            "## Coverage & Limitations", "",
+            f"- Scan status: {text(context.get('scan_status'))}",
+            f"- Coverage completion recorded: {text(context.get('coverage_complete'), 'Unknown')}",
+            "- Known skipped/failed checks: " + text(context.get("coverage_failures"), "Not recorded"),
+            "- A finding-level PoC does not establish full target coverage or absence of other vulnerabilities.", "",
+            "## Researcher Review Checklist", "",
+            f"- Missing evidence/context: {', '.join(missing) or 'None detected; human review remains required'}",
+            "- Reproduce under the current scope and permitted techniques; verify baseline/control comparisons.",
+            "- Check impact, affected versions, duplicate reports and program-specific exclusions.",
+            "- Remove unnecessary secrets and personal data from every attachment before sharing.",
+            "- Confirm disclosure/contact rules for HackerOne, other platforms, or the private asset owner.",
+            "- AI wording is advisory. No automatic submission or acceptance is implied.",
+        ])
+        return RedactionEngine.redact_text("\n".join(lines))
 
     @classmethod
     def generate_cve_research_markdown(cls, finding: Dict[str, Any], target: str, researcher=None) -> str:

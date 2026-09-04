@@ -133,6 +133,14 @@ PROFILES = {
     },
 }
 
+# Product profile names share the same test-depth semantics used by scanners.
+# Recursive versus focused is a scope-breadth option, not a weaker test plan.
+PROFILES["bug_hunt"] = PROFILES["standard"]
+PROFILES["deep_bug_hunt"] = PROFILES["deep"]
+PROFILES["pentest"] = PROFILES["deep"]
+PROFILES["adversary_simulation"] = PROFILES["deep"]
+PROFILES["full"] = PROFILES["deep"]
+
 
 @dataclass
 class TestPlan:

@@ -10,7 +10,8 @@ function runtime({blockedStorage = false} = {}) {
   let timerId = 0;
   function element() {
     return {
-      children: [], textContent: '', checked: true, dataset: {}, scrollHeight: 0,
+      children: [], value: '', textContent: '', checked: true, dataset: {}, scrollHeight: 0,
+      get options() { return this.children; },
       classList: {contains: () => false},
       set innerHTML(value) { this.markup = value; this.children = []; },
       get innerHTML() { return this.markup || ''; },
@@ -34,6 +35,28 @@ test('restricted storage does not prevent app initialization', () => {
   const app = runtime({blockedStorage: true});
   assert.match(app.run('getDeviceFingerprint()'), /^device_/);
   assert.equal(app.run('state.authToken'), null);
+});
+
+test('stale SSE connections and replayed events cannot mutate the current scan', () => {
+  const app = runtime();
+  const connections = [];
+  app.context.EventSource = class { constructor() { connections.push(this); } close() { this.closed = true; } };
+  app.context.addEventToStream = () => {};
+  app.load('scan.js');
+  app.run('updateCounterDisplays=()=>{}; state.activeScanId="first"; connectEventSource("first");');
+  const first = connections[0];
+  first.onmessage({data:JSON.stringify({event_id:'1',scan_id:'first',event_type:'port.open'})});
+  first.onmessage({data:JSON.stringify({event_id:'1',scan_id:'first',event_type:'port.open'})});
+  assert.equal(app.run('state.counters.ports'), 1);
+  app.run('state.activeScanId="second"; connectEventSource("second");');
+  first.onmessage({data:JSON.stringify({event_id:'2',scan_id:'first',event_type:'port.open'})});
+  first.onerror();
+  assert.equal(app.run('state.counters.ports'), 1);
+  assert.equal(connections[1].closed, undefined);
+  connections[1].onmessage({data:JSON.stringify({event_id:'3',scan_id:'first',event_type:'port.open'})});
+  assert.equal(app.run('state.counters.ports'), 1);
+  connections[1].onmessage({data:JSON.stringify({event_id:'4',scan_id:'second',event_type:'port.open'})});
+  assert.equal(app.run('state.counters.ports'), 2);
 });
 
 test('inline handler arguments preserve hostile quotes as data', () => {
@@ -149,4 +172,109 @@ test('report header does not use record creation time as execution time', () => 
   app.nodes.wsStartTime = {textContent:''};
   app.run('renderWorkspace({overview:{id:"queued", status:"queued", created_at:"2026-08-28T01:00:00Z"}})');
   assert.equal(app.nodes.wsStartTime.textContent, 'Tidak tercatat');
+});
+
+function aiRuntime() {
+  const app = runtime();
+  for (const id of ['aiModel','aiModelManual','aiProvider','aiBaseUrl','aiApiKey','aiRoutingMode','aiLlmEnabled','aiConnStatus','aiTestDetails','aiConfigSyncStatus','aiRoutingHelp','aiModelCatalogStatus']) app.nodes[id] = app.context.document.createElement('div');
+  app.nodes.aiProvider.value = 'ninerouter';
+  app.nodes.aiBaseUrl.value = 'http://localhost:1/v1';
+  app.nodes.aiRoutingMode.value = 'single';
+  app.nodes.aiModel.value = 'provider/original';
+  app.load('admin.js');
+  return app;
+}
+
+test('late model catalog cannot overwrite a newer provider or form edit', async () => {
+  const app = aiRuntime();
+  let resolve;
+  const body = new Promise(r => {resolve=r;});
+  app.context.fakeFetch = async () => ({ok:true, json:() => body});
+  app.run('authFetch=fakeFetch');
+  const pending = app.run('fetchAndPopulateModels()');
+  await Promise.resolve();
+  app.nodes.aiBaseUrl.value = 'http://localhost:2/v1';
+  app.run('markAiConfigDirty()');
+  resolve({status:'success', entries:[{id:'old-model',kind:'model'}]});
+  await pending;
+  assert.equal(app.nodes.aiModel.value, 'provider/original');
+  assert.equal(app.run('aiCatalog.length'), 0);
+});
+
+test('combo and model catalog options are separated without silent selection', () => {
+  const app = aiRuntime();
+  app.run('aiCatalog=[{id:"security",kind:"combo"},{id:"provider/original",kind:"model"}]; aiCatalogEndpoint=aiEndpointFingerprint(); renderAiModelChoices();');
+  assert.deepEqual(app.nodes.aiModel.options.map(row=>row.value), ['', 'provider/original']);
+  app.nodes.aiRoutingMode.value = 'router_combo';
+  app.run('renderAiModelChoices()');
+  assert.deepEqual(app.nodes.aiModel.options.map(row=>row.value), ['', 'security']);
+  assert.equal(app.nodes.aiModel.value, '');
+});
+
+test('failed model fetch preserves selection and does not invent fallback IDs', async () => {
+  const app = aiRuntime();
+  app.context.fakeFetch = async () => ({ok:true,json:async()=>({status:'unavailable',message:'offline'})});
+  app.run('authFetch=fakeFetch');
+  await app.run('fetchAndPopulateModels()');
+  assert.equal(app.nodes.aiModel.value, 'provider/original');
+  assert.deepEqual(app.nodes.aiModel.options.map(row=>row.value), ['', 'provider/original']);
+  assert.match(app.nodes.aiModelCatalogStatus.textContent, /offline/);
+});
+
+test('inference test sends selected mode and ignores success for an old draft', async () => {
+  const app = aiRuntime();
+  let resolve, sent;
+  const body = new Promise(r=>{resolve=r;});
+  app.context.fakeFetch = async (url, options) => { sent=JSON.parse(options.body); return {ok:true,json:()=>body}; };
+  app.run('authFetch=fakeFetch');
+  const pending=app.run('testAiConnection()');
+  await Promise.resolve();
+  assert.equal(sent.model, 'provider/original');
+  assert.equal(sent.routing_mode, 'single');
+  app.run('markAiConfigDirty()');
+  resolve({status:'success',latency_ms:10});
+  await pending;
+  assert.doesNotMatch(app.nodes.aiConnStatus.textContent, /Inference OK/);
+});
+
+test('backend polling preserves unsaved edits and reports revision conflicts', async () => {
+  const app=aiRuntime();
+  app.run('aiSavedConfig={revision:1}; markAiConfigDirty()');
+  app.context.fakeFetch=async()=>({ok:true,json:async()=>({revision:2, model:'server-changed'})});
+  app.run('authFetch=fakeFetch');
+  await app.run('loadAiConfig()');
+  assert.equal(app.nodes.aiModel.value,'provider/original');
+  assert.match(app.nodes.aiConfigSyncStatus.textContent,/sesi lain/);
+});
+
+test('terminal findings refresh during an in-flight fetch is replayed once', async () => {
+  const app = runtime();
+  app.load('findings.js');
+  let resolve, calls=0;
+  app.context.fakeFetch = async()=>{ calls++; return {ok:true,json:()=>calls===1 ? new Promise(r=>{resolve=r;}) : Promise.resolve([{id:'final'}])}; };
+  app.run('authFetch=fakeFetch; state.activeScanId="scan";');
+  const pending=app.run('loadFindings()');
+  await Promise.resolve();
+  await app.run('loadFindings()');
+  resolve([]);
+  await pending;
+  await new Promise(setImmediate);
+  assert.equal(calls,2);
+  assert.equal(app.run('state.allFindings[0].id'),'final');
+});
+
+test('late historical data cannot replace another active scan', async () => {
+  const app = runtime();
+  app.load('history.js');
+  let resolve;
+  const oldBody = new Promise(r=>{resolve=r;});
+  app.context.fakeFetch=async url=>({ok:true,json:()=>url.includes('/events/')?Promise.resolve([]):oldBody});
+  app.run('authFetch=fakeFetch; switchViewTab=()=>{}; state.activeScanId="old";');
+  const pending=app.run('openHistoricalScan("old")');
+  await Promise.resolve();
+  app.run('state.activeScanId="new"; state.activeTarget="new.example.invalid"');
+  resolve({root_domain:'old.example.invalid',status:'completed',progress:{findings:999}});
+  await pending;
+  assert.equal(app.run('state.activeTarget'),'new.example.invalid');
+  assert.notEqual(app.run('state.counters.findings'),999);
 });

@@ -17,6 +17,7 @@ from app.core.events import event_bus
 from app.core.engagement import EngagementRules
 from app.core.kill_switch import kill_switch_manager
 from app.core.rate_limit import RateLimiter
+from app.core.profiles import normalize_profile
 from app.core.scope_engine import ScopeEngine, normalize_target
 from app.core.session_context import SessionContext, SessionIdentity
 from app.discovery.parameter_classifier import parameter_classifier
@@ -60,7 +61,7 @@ class ScanManager:
     async def _create_scan(
         self,
         target: str,
-        profile: str = "adversary_simulation",
+        profile: str = "deep_bug_hunt",
         include_subdomains: bool = True,
         validation_level: Optional[str] = None,
         user_id: Optional[str] = None,
@@ -72,16 +73,16 @@ class ScanManager:
         engagement: Optional[dict] = None,
     ) -> dict:
         host, root_domain = normalize_target(target)
-        prof = profile or AssessmentProfile.ADVERSARY_SIMULATION
-        val_level = validation_level or ValidationLevel.L4_HIGH_RISK
+        prof = normalize_profile(profile)
+        val_level = validation_level or ValidationLevel.L2_SAFE_ACTIVE
         if val_level not in ValidationLevel.ALL_LEVELS:
-            val_level = ValidationLevel.L4_HIGH_RISK
-        if not authorization_reference or not authorization_reference.strip():
-            authorization_reference = f"AUTHORIZED-L4-{host.replace('.', '_')[:30]}-AUDIT"
-        high_risk = val_level in {ValidationLevel.L3_CONTROLLED, ValidationLevel.L4_HIGH_RISK}
+            val_level = ValidationLevel.L2_SAFE_ACTIVE
         rules = EngagementRules.model_validate(engagement) if engagement else None
         if rules:
             rules.assert_active()
+            if not rules.scope_hosts:
+                raise ValueError("Explicit in-scope hosts are required for program and private engagements")
+            authorization_reference = rules.authorization_reference
             scope_check = ScopeEngine(root_domain, scope_hosts=rules.scope_hosts, excluded_hosts=rules.excluded_hosts, allowed_ports=rules.allowed_ports)
             if not scope_check.host_allowed(host):
                 raise ValueError("Target is outside the program scope or explicitly excluded")
@@ -92,6 +93,28 @@ class ScanManager:
                 raise ValueError("Target port is invalid") from error
             if ("://" in target or explicit_port is not None) and not scope_check.url_allowed(target_url):
                 raise ValueError("Target URL or port is outside the program scope")
+        controlled = val_level in {ValidationLevel.L3_CONTROLLED, ValidationLevel.L4_HIGH_RISK}
+        if controlled and not rules:
+            raise ValueError(
+                "Controlled/high-risk validation requires explicit engagement rules and authorization acknowledgement"
+            )
+        if not authorization_reference or not authorization_reference.strip():
+            authorization_reference = None
+
+        requested_modules = list(dict.fromkeys(allowed_modules or ["*"]))
+        requested_actions = list(dict.fromkeys(
+            allowed_actions
+            or (list(rules.allowed_techniques) if rules and rules.allowed_techniques else [])
+            or ["safe_probe", "validation"]
+        ))
+        prohibited_actions = list(rules.prohibited_techniques) if rules else []
+        if rules and any(not rules.action_allowed(action) for action in requested_actions):
+            raise ValueError("Requested actions exceed the program's allowed techniques")
+        credential_allowed = bool(
+            controlled
+            and rules
+            and any(rules.action_allowed(name) for name in ("credential_audit", "default_credentials"))
+        )
 
         options: Dict[str, Any] = {
             "target": target,
@@ -99,18 +122,22 @@ class ScanManager:
             "target_url": target if "://" in target else f"http://{target}",
             "include_subdomains": include_subdomains,
             "validation_level": val_level,
-            "allowed_modules": allowed_modules or ["*"],
-            "allowed_actions": allowed_actions or ["*"],
-            "authorized_high_risk": True,
+            "scope_mode": "recursive" if include_subdomains else "focused",
+            "allowed_modules": requested_modules,
+            "allowed_actions": requested_actions,
+            "prohibited_actions": prohibited_actions,
+            "out_of_scope_findings": list(rules.out_of_scope_findings) if rules else [],
+            "authorized_high_risk": controlled and bool(rules),
             "security_checks": True,
-            "deep_parameter_fuzzing": True,
+            "deep_parameter_fuzzing": controlled and bool(rules),
             "js_analysis": True,
-            "nmap_vuln": True,
-            "nmap_vuln_scan": True,
-            "credential_audit": True,
-            "service_validation": True,
-            "auth_testing": True,
-            "artifact_extraction": True,
+            "nmap_vuln": controlled and bool(rules),
+            "nmap_vuln_scan": controlled and bool(rules),
+            "credential_audit": credential_allowed,
+            "service_validation": controlled and bool(rules),
+            "auth_testing": controlled and bool(rules) and rules.action_allowed("authentication_testing"),
+            "artifact_extraction": bool(rules and rules.action_allowed("artifact_analysis")),
+            "rate_limit_rps": rules.max_rps if rules else min(5, settings.rate_limit_rps),
             "authorization_reference": authorization_reference,
             "campaign_id": campaign_id,
             "engagement": rules.model_dump(mode="json") if rules else None,
@@ -127,6 +154,11 @@ class ScanManager:
                 validation_level=val_level,
                 options=options,
                 progress={"assets": 0, "ports": 0, "urls": 0, "parameters": 0, "findings": 0},
+                authorization_id=authorization_id,
+                authorization_reference=authorization_reference,
+                allowed_modules=requested_modules,
+                allowed_actions=requested_actions,
+                expires_at=rules.ends_at if rules else None,
             )
             db.add(scan)
             await db.commit()
@@ -196,6 +228,15 @@ class ScanManager:
         target_lock = self._target_slots.setdefault(root_domain, asyncio.Lock())
         async with target_lock:
             async with self._scan_slots:
+                if self._stop_flags.get(scan_id):
+                    return
+                if rules:
+                    try:
+                        EngagementRules.model_validate(rules).assert_active()
+                    except ValueError as error:
+                        await self._finish_status(scan_id, "stopped")
+                        await event_bus.publish(result_service.make_event(scan_id, "scan.scope_expired", str(error), severity="warn"))
+                        return
                 self._active.add(scan_id)
                 try:
                     await self._execute_with_timeout(scan_id, root_domain, profile, options)
@@ -213,19 +254,16 @@ class ScanManager:
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
-            logger.info("Scan %s reached runtime budget of %.0f seconds. Gracefully completing scan and preserving all findings...", scan_id, timeout_seconds)
+            logger.warning("Scan %s exhausted its %.0fs runtime budget; coverage is incomplete", scan_id, timeout_seconds)
             try:
                 from app.core.security_engine import security_engine
                 security_engine.complete_scan(scan_id)
             except Exception:
                 pass
-            await self._finish_status(scan_id, "completed")
-            await event_bus.publish(result_service.make_event(
-                scan_id,
-                "scan.completed",
-                f"Scan reached the {timeout_seconds:.0f}s adaptive runtime budget. All discovered assets, endpoints, and confirmed findings successfully finalized.",
-                severity="info",
-            ))
+            await self._complete(
+                scan_id, root_domain, status="degraded",
+                coverage_failures=[{"phase": "runtime", "error": f"Runtime/authorization budget exhausted after {timeout_seconds:.0f}s; pending checks were cancelled. Stored evidence is preserved, coverage is incomplete."}],
+            )
 
     async def resume_pending_scans(self, max_scans: Optional[int] = None) -> None:
         """Startup handler to rehydrate and resume running/queued scans."""
@@ -241,6 +279,8 @@ class ScanManager:
 
     async def pause(self, scan_id: str) -> None:
         ev = self._pause_events.get(scan_id)
+        if not ev or scan_id not in self._running:
+            raise ValueError("Only a live scan can be paused")
         if ev:
             ev.clear()
         async with AsyncSessionLocal() as db:
@@ -253,6 +293,8 @@ class ScanManager:
 
     async def resume(self, scan_id: str) -> None:
         ev = self._pause_events.get(scan_id)
+        if not ev or scan_id not in self._running:
+            raise ValueError("No live runner exists; start a new scan instead of resuming a terminal scan")
         if ev:
             ev.set()
         async with AsyncSessionLocal() as db:
@@ -293,7 +335,13 @@ class ScanManager:
         target_host = options.get("target_host") or root_domain
         include_subdomains = options.get("include_subdomains", True)
         rules = options.get("engagement") or {}
-        program_scope = dict(scope_hosts=rules.get("scope_hosts"), excluded_hosts=rules.get("excluded_hosts"), allowed_ports=rules.get("allowed_ports"), expires_at=rules.get("ends_at"))
+        program_scope = dict(
+            scope_hosts=rules.get("scope_hosts"),
+            excluded_hosts=rules.get("excluded_hosts"),
+            allowed_ports=rules.get("allowed_ports"),
+            allowed_modules=options.get("allowed_modules"),
+            expires_at=rules.get("ends_at"),
+        )
 
         if not include_subdomains:
             scope = ScopeEngine(
@@ -318,7 +366,7 @@ class ScanManager:
         ctx.opportunity_bus = opportunity_bus
 
         start_time = time.time()
-        phase_failures: list[dict[str, str]] = []
+        phase_failures = ctx.coverage_failures
         session_ctx: Optional[SessionContext] = None
         val_stop_event: Optional[asyncio.Event] = None
         val_worker_task: Optional[asyncio.Task] = None
@@ -360,6 +408,30 @@ class ScanManager:
             await event_bus.publish(result_service.make_event(
                 scan_id, "scan.running", f"Pipeline running for {root_domain}", severity="info"))
 
+            # AI is the first analytical stage. Its suggestions are constrained
+            # by the immutable scope/policy and cannot remove baseline coverage.
+            try:
+                from app.ai.scan_loop import scan_ai_controller
+
+                preflight = await scan_ai_controller.preflight(
+                    target=target_label,
+                    profile=profile,
+                    scope_mode=options.get("scope_mode", "recursive"),
+                    validation_level=options.get("validation_level", ValidationLevel.L2_SAFE_ACTIVE),
+                    engagement=rules,
+                    ctx=ctx,
+                )
+                await self._store_ai_analysis(scan_id, "preflight", preflight)
+                await ctx.emit(
+                    "ai.preflight_completed",
+                    f"AI preflight completed in {preflight.get('mode')} mode; deterministic coverage remains enabled.",
+                    recommended_tools=preflight.get("recommended_tools", []),
+                    policy_summary=preflight.get("policy_summary", []),
+                    severity="info",
+                )
+            except Exception as ai_preflight_err:
+                logger.info("AI preflight fallback for %s: %s", scan_id, ai_preflight_err)
+
             # Initialize stateful session context & continuous validation loop
             session_ctx = SessionContext(base_url=f"http://{root_domain}", rate_limiter=ctx.rate_limiter)
             val_stop_event = asyncio.Event()
@@ -369,7 +441,7 @@ class ScanManager:
                 )
 
             # ---- Phase A: Discovery (subdomains / focused target) ----
-            if not kill_switch_manager.is_stopped(scan_id, "discovery"):
+            if ctx.module_allowed("discovery") and not kill_switch_manager.is_stopped(scan_id, "discovery"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -392,7 +464,7 @@ class ScanManager:
                 logger.debug("SecurityEngine complete_discovery: %s", se_err)
 
             # ---- Phase B: DNS resolution (all assets) ----
-            if not kill_switch_manager.is_stopped(scan_id, "dns"):
+            if ctx.module_allowed("dns") and not kill_switch_manager.is_stopped(scan_id, "dns"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -419,7 +491,7 @@ class ScanManager:
                 severity="info",
             )
             async def run_port():
-                if options.get("port_scan", True) and not kill_switch_manager.is_stopped(scan_id, "network"):
+                if ctx.module_allowed("network") and options.get("port_scan", True) and not kill_switch_manager.is_stopped(scan_id, "network"):
                     try:
                         async with async_session_scope() as db:
                             await self._checkpoint(ctx, db, root_domain, start_time)
@@ -429,7 +501,7 @@ class ScanManager:
                         phase_failures.append({"phase": "network", "error": str(phase_err)[:300]})
 
             async def run_http():
-                if not kill_switch_manager.is_stopped(scan_id, "web"):
+                if ctx.module_allowed("web") and not kill_switch_manager.is_stopped(scan_id, "web"):
                     try:
                         async with async_session_scope() as db:
                             await self._checkpoint(ctx, db, root_domain, start_time)
@@ -505,10 +577,13 @@ class ScanManager:
                 res = security_engine.run_reasoning_cycle(scan_id)
                 if res and res.hypotheses_generated:
                     for hyp in res.hypotheses_generated[:6]:
+                        plan_target = hyp.target_endpoint or options.get("target_url") or f"https://{root_domain}"
+                        if "://" not in plan_target:
+                            plan_target = f"https://{plan_target}"
                         plan = security_engine.create_attack_plan(
                             scan_id=scan_id,
                             title=f"Attack Verification Plan for {hyp.statement[:40]}",
-                            target=hyp.target_endpoint or root_domain,
+                            target=plan_target,
                             tool_sequence=[hyp.next_test or "nuclei", "dalfox"]
                         )
                         if plan:
@@ -549,7 +624,9 @@ class ScanManager:
                         for lh in llm_hyps:
                             if isinstance(lh, dict) and lh.get("statement"):
                                 stmt = lh.get("statement", "")
-                                tgt = lh.get("target_endpoint") or root_domain
+                                tgt = lh.get("target_endpoint") or options.get("target_url") or f"https://{root_domain}"
+                                if "://" not in tgt:
+                                    tgt = f"https://{tgt}"
                                 tool_seq = lh.get("tool_sequence") or [lh.get("next_test") or "nuclei", "dalfox"]
                                 reasoning.hypothesis_engine.create_hypothesis(
                                     statement=f"[AI Neural] {stmt}",
@@ -579,12 +656,10 @@ class ScanManager:
                         # Live execution of attack plans
                         planner = security_engine.get_planner(scan_id)
                         if planner:
-                            asyncio.create_task(
-                                planner.execute_all_pending_plans(
-                                    scan_id=scan_id,
-                                    ctx=ctx,
-                                    hypothesis_engine=reasoning.hypothesis_engine,
-                                )
+                            await planner.execute_all_pending_plans(
+                                scan_id=scan_id,
+                                ctx=ctx,
+                                hypothesis_engine=reasoning.hypothesis_engine,
                             )
                     except Exception as llm_err:
                         logger.debug("In-flight AI reasoning note: %s", llm_err)
@@ -592,7 +667,7 @@ class ScanManager:
                 logger.debug("SecurityEngine start_testing: %s", se_err)
 
             # ---- Phase D: URL/endpoint discovery + params (web) ----
-            if options.get("web_discovery", True) and not kill_switch_manager.is_stopped(scan_id, "crawler"):
+            if ctx.module_allowed("web") and options.get("web_discovery", True) and not kill_switch_manager.is_stopped(scan_id, "crawler"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -633,27 +708,28 @@ class ScanManager:
                             res = security_engine.run_reasoning_cycle(scan_id)
                             if res and res.hypotheses_generated:
                                 for hyp in res.hypotheses_generated[:5]:
+                                    plan_target = hyp.target_endpoint or options.get("target_url") or f"https://{root_domain}"
+                                    if "://" not in plan_target:
+                                        plan_target = f"https://{plan_target}"
                                     security_engine.create_attack_plan(
                                         scan_id=scan_id,
                                         title=f"Attack Plan for {hyp.statement[:40]}",
-                                        target=hyp.target_endpoint or root_domain,
+                                        target=plan_target,
                                         tool_sequence=[hyp.next_test or "nuclei", "dalfox"]
                                     )
                             planner = security_engine.get_planner(scan_id)
                             if planner:
-                                asyncio.create_task(
-                                    planner.execute_all_pending_plans(
-                                        scan_id=scan_id,
-                                        ctx=ctx,
-                                        hypothesis_engine=reasoning.hypothesis_engine,
-                                    )
+                                await planner.execute_all_pending_plans(
+                                    scan_id=scan_id,
+                                    ctx=ctx,
+                                    hypothesis_engine=reasoning.hypothesis_engine,
                                 )
                 except Exception as phase_err:
                     logger.warning("Web discovery phase warning on %s: %s", scan_id, phase_err)
                     phase_failures.append({"phase": "web_discovery", "error": str(phase_err)[:300]})
 
             # ---- Phase E: Security intelligence & deep validation ----
-            if options.get("security_checks", True) and not kill_switch_manager.is_stopped(scan_id, "validation"):
+            if ctx.module_allowed("validation") and options.get("security_checks", True) and not kill_switch_manager.is_stopped(scan_id, "validation"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -675,9 +751,34 @@ class ScanManager:
             try:
                 if val_worker_task:
                     await asyncio.wait_for(val_worker_task, timeout=15.0)
-            except Exception:
-                pass
+            except Exception as worker_error:
+                ctx.record_coverage_gap("validation", f"Validation worker did not drain: {type(worker_error).__name__}")
             await session_ctx.close()
+
+            # Analyze the evidence/results again after deterministic tools have
+            # finished. This output is advisory and feeds reports/next actions;
+            # finding confirmation still belongs to the proof quality gate.
+            try:
+                from app.ai.scan_loop import scan_ai_controller
+
+                snapshot = await self._collect_ai_snapshot(scan_id, phase_failures)
+                post_analysis = await scan_ai_controller.post_tools(
+                    target=target_label,
+                    profile=profile,
+                    engagement=rules,
+                    snapshot=snapshot,
+                    ctx=ctx,
+                )
+                await self._store_ai_analysis(scan_id, "post_tools", post_analysis)
+                await ctx.emit(
+                    "ai.post_analysis_completed",
+                    "AI reviewed tool results and prepared evidence-bound next-test/report recommendations.",
+                    recommended_next_tests=post_analysis.get("recommended_next_tests", []),
+                    coverage_gaps=post_analysis.get("coverage_gaps", []),
+                    severity="info",
+                )
+            except Exception as ai_post_err:
+                logger.info("AI post-tool analysis fallback for %s: %s", scan_id, ai_post_err)
 
             try:
                 security_engine.start_validation(scan_id)
@@ -685,7 +786,7 @@ class ScanManager:
                 logger.debug("SecurityEngine start_validation: %s", se_err)
 
             # ---- Phase F: Automated Visual Evidence & Screenshot Worker (V4 §10) ----
-            if not kill_switch_manager.is_stopped(scan_id, "browser"):
+            if ctx.module_allowed("evidence") and not kill_switch_manager.is_stopped(scan_id, "browser"):
                 try:
                     await ctx.emit(
                         "pipeline.stage",
@@ -715,9 +816,9 @@ class ScanManager:
                 db_urls = (await db.execute(select(func.count(URL.id)).join(Asset, URL.asset_id == Asset.id).where(Asset.scan_id == scan_id))).scalar() or 0
                 db_findings = (await db.execute(select(func.count(Finding.id)).where(Finding.scan_id == scan_id))).scalar() or 0
 
-            # Scan is only degraded if critical core discovery produced 0 assets or unhandled fatal failure aborted execution
-            is_fatal_failure = any(f.get("fatal", False) for f in phase_failures)
-            is_degraded = is_fatal_failure or (db_assets == 0 and any(f.get("phase") == "discovery" for f in phase_failures))
+            # A failed validation/evidence phase is incomplete even when asset
+            # discovery succeeded. Never conflate "no findings" with "all tested".
+            is_degraded = bool(phase_failures)
             completion_status = "degraded" if is_degraded else "completed"
 
             await ctx.emit(
@@ -725,7 +826,7 @@ class ScanManager:
                 (
                     f"Assessment completed for {root_domain}. Security report compiled ({db_assets} active assets, {db_urls} endpoints, {db_findings} findings)."
                     if not is_degraded
-                    else f"Assessment finished in DEGRADED state for {root_domain}; critical reconnaissance phases were incomplete."
+                    else f"Assessment finished in DEGRADED state for {root_domain}; review the recorded coverage gaps before interpreting results."
                 ),
                 stage="REPORT",
                 tool="dossier_builder",
@@ -773,6 +874,85 @@ class ScanManager:
             self._running.pop(scan_id, None)
             self._pause_events.pop(scan_id, None)
             self._stop_flags.pop(scan_id, None)
+
+    async def _store_ai_analysis(self, scan_id: str, stage: str, payload: Dict[str, Any]) -> None:
+        async with async_session_scope() as db:
+            scan = await db.get(Scan, scan_id)
+            if not scan:
+                return
+            options = dict(scan.options or {})
+            analysis = dict(options.get("ai_analysis") or {})
+            analysis[stage] = payload
+            options["ai_analysis"] = analysis
+            scan.options = options
+            await db.commit()
+
+    async def _collect_ai_snapshot(
+        self,
+        scan_id: str,
+        phase_failures: list[dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Build a bounded, redacted observation summary for post-tool reasoning."""
+        async with async_session_scope() as db:
+            assets = (await db.execute(
+                select(Asset).where(Asset.scan_id == scan_id).limit(60)
+            )).scalars().all()
+            urls = (await db.execute(
+                select(URL).join(Asset, URL.asset_id == Asset.id)
+                .where(Asset.scan_id == scan_id).limit(120)
+            )).scalars().all()
+            ports = (await db.execute(
+                select(Port).join(Asset, Port.asset_id == Asset.id)
+                .where(Asset.scan_id == scan_id).limit(80)
+            )).scalars().all()
+            technologies = (await db.execute(
+                select(Technology).join(Asset, Technology.asset_id == Asset.id)
+                .where(Asset.scan_id == scan_id).limit(80)
+            )).scalars().all()
+            findings = (await db.execute(
+                select(Finding).where(Finding.scan_id == scan_id).limit(80)
+            )).scalars().all()
+
+        asset_host = {asset.id: asset.hostname or asset.fqdn or asset.ip for asset in assets}
+        return {
+            "counts": {
+                "assets_sampled": len(assets),
+                "urls_sampled": len(urls),
+                "ports_sampled": len(ports),
+                "technologies_sampled": len(technologies),
+                "findings_sampled": len(findings),
+            },
+            "assets": [asset_host.get(asset.id) for asset in assets if asset_host.get(asset.id)],
+            "endpoints": [
+                {"url": item.url.split("?", 1)[0].split("#", 1)[0], "status": item.status_code, "content_type": item.content_type}
+                for item in urls
+            ],
+            "ports": [
+                {"host": asset_host.get(item.asset_id), "port": item.port, "service": item.service}
+                for item in ports
+            ],
+            "technologies": [
+                {"host": asset_host.get(item.asset_id), "name": item.name, "version": item.version}
+                for item in technologies
+            ],
+            "findings": [
+                {
+                    "id": item.finding_code or item.id,
+                    "title": item.title,
+                    "type": item.finding_type,
+                    "severity": item.severity,
+                    "confidence": item.confidence,
+                    "evidence_level": item.evidence_level,
+                    "validation_status": item.validation_status,
+                    "host": asset_host.get(item.asset_id),
+                }
+                for item in findings
+            ],
+            "coverage_failures": [
+                f"{item.get('phase', 'unknown')}: {item.get('error', 'unspecified error')}"
+                for item in phase_failures
+            ],
+        }
 
     async def _checkpoint(self, ctx: Any, db, root_domain: str, start_time: float) -> None:
         if kill_switch_manager.is_stopped(ctx.scan_id):
